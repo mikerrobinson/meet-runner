@@ -36,14 +36,28 @@ function toMs(minutes: number, seconds: number, frac?: string): number {
 }
 
 /**
+ * Read the whole-seconds part of a decimal entry. One or two digits is a plain
+ * seconds count ("30.45"); three or more puts the last two in the seconds
+ * place, the way a scoreboard reads it ("101.45" is 1:01.45).
+ */
+function fromWholeSeconds(whole: string, frac?: string): number | null {
+  if (whole.length <= 2) return toMs(0, parseInt(whole, 10), frac);
+  const seconds = parseInt(whole.slice(-2), 10);
+  if (seconds > 59) return null;
+  return toMs(parseInt(whole.slice(0, -2), 10), seconds, frac);
+}
+
+/**
  * Parse a hand-entered time.
  *
- * Accepts an explicit "1:23.45", and — because the numeric keypad has no colon
- * — the colon-free form a scoreboard uses, where the digits left of the decimal
- * run minutes-then-seconds: "101.45" is 1:01.45, "214.88" is 2:14.88.
+ * The keypad has neither a colon nor much patience, so the main form is bare
+ * digits with no separator at all: the last two are always hundredths, the two
+ * before them seconds, and anything left over is minutes. "3045" is 30.45 and
+ * "11127" is 1:11.27.
  *
- * One or two digits stay a plain seconds count, so "45.67" and "83.45" still
- * mean what they always did.
+ * A decimal point or a colon still works if you'd rather type one, and gives
+ * the same answer — "3045", "30.45" all mean the same thing, as do "11127",
+ * "111.27" and "1:11.27".
  *
  * Returns null if it can't be read as a time.
  */
@@ -57,17 +71,26 @@ export function parseTime(input: string): number | null {
     return toMs(parseInt(min, 10), parseInt(sec, 10), frac);
   }
 
-  const plain = /^(\d{1,5})(?:\.(\d{1,3}))?$/.exec(text);
-  if (!plain) return null;
-  const [, digits, frac] = plain;
-
-  if (digits.length <= 2) {
-    return toMs(0, parseInt(digits, 10), frac);
+  const withPoint = /^(\d{1,5})\.(\d{1,3})$/.exec(text);
+  if (withPoint) {
+    const [, whole, frac] = withPoint;
+    return fromWholeSeconds(whole, frac);
   }
 
-  // Three or more digits can't be a seconds count, so the last two are the
-  // seconds and whatever precedes them is minutes.
-  const seconds = parseInt(digits.slice(-2), 10);
-  if (seconds > 59) return null;
-  return toMs(parseInt(digits.slice(0, -2), 10), seconds, frac);
+  if (!/^\d{1,7}$/.test(text)) return null;
+
+  // Pad so a short entry still lands in the hundredths place: "45" is 0.45,
+  // "5" is 0.05.
+  const padded = text.padStart(2, "0");
+  const hundredths = padded.slice(-2);
+  const rest = padded.slice(0, -2);
+  const secondsPart = rest.slice(-2);
+  const minutesPart = rest.slice(0, -2);
+
+  const seconds = secondsPart ? parseInt(secondsPart, 10) : 0;
+  // Seconds can run past 59 only when no minutes were typed ("9945" is
+  // 99.45); "16045" would be 1:60.45, which isn't a time.
+  if (minutesPart && seconds > 59) return null;
+
+  return toMs(minutesPart ? parseInt(minutesPart, 10) : 0, seconds, hundredths);
 }

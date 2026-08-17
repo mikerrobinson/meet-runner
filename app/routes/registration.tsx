@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router";
+import { Link, useParams } from "react-router";
 import type { Route } from "./+types/registration";
 import { SwimmerSheet } from "~/components/SwimmerSheet";
 import { Button, EmptyState, TextInput } from "~/components/ui";
-import { useMeet } from "~/state/meet-store";
+import { activeSwimmers, useAppStore } from "~/state/app-store";
 import { eventName, isEligible, shortName, type Swimmer } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
@@ -23,44 +23,64 @@ const NAME_COL = "9rem";
 const MIN_EVENT_COL = "3.5rem";
 
 export default function Registration() {
-  const { meet, toggleEntry, addSwimmers } = useMeet();
+  const { team, meets, toggleEntry, addSwimmers } = useAppStore();
+  const { meetId } = useParams();
   const [search, setSearch] = useState("");
   const [adding, setAdding] = useState(false);
 
+  const meet = meets.find((m) => m.id === meetId);
+
   const swimmers = useMemo(() => {
     const query = search.trim().toLowerCase();
-    const roster = meet.swimmers.filter((s) => s.active);
+    const roster = activeSwimmers(team);
     if (!query) return roster;
     return roster.filter((s) =>
       `${s.firstName} ${s.lastName}`.toLowerCase().includes(query),
     );
-  }, [meet.swimmers, search]);
+  }, [team, search]);
 
   /** Registration lookup as a set of "eventId|swimmerId" keys. */
   const registered = useMemo(() => {
     const keys = new Set<string>();
-    for (const [eventId, ids] of Object.entries(meet.entries)) {
+    for (const [eventId, ids] of Object.entries(meet?.entries ?? {})) {
       for (const id of ids) keys.add(`${eventId}|${id}`);
     }
     return keys;
-  }, [meet.entries]);
+  }, [meet?.entries]);
 
   const perSwimmer = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const ids of Object.values(meet.entries)) {
+    for (const ids of Object.values(meet?.entries ?? {})) {
       for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
     }
     return counts;
-  }, [meet.entries]);
+  }, [meet?.entries]);
 
-  if (meet.events.length === 0 || meet.swimmers.length === 0) {
+  if (!meet) return null;
+
+  if (meet.events.length === 0 || swimmers.length === 0) {
     return (
-      <EmptyState title="Setup isn't finished">
-        Add {meet.swimmers.length === 0 ? "swimmers" : "events"} first.{" "}
-        <Link to="/setup" className="font-semibold text-blue-600 underline">
-          Go to setup
-        </Link>
-        .
+      <EmptyState title="Nothing to register yet">
+        {swimmers.length === 0 ? (
+          <>
+            The team roster is empty.{" "}
+            <Link to="/team" className="font-semibold text-blue-600 underline">
+              Add swimmers
+            </Link>
+            .
+          </>
+        ) : (
+          <>
+            This meet has no events.{" "}
+            <Link
+              to={`/meets/${meet.id}/setup`}
+              className="font-semibold text-blue-600 underline"
+            >
+              Set them up
+            </Link>
+            .
+          </>
+        )}
       </EmptyState>
     );
   }
@@ -176,7 +196,7 @@ export default function Registration() {
                         disabled={!eligible}
                         aria-pressed={isIn}
                         aria-label={`${shortName(swimmer)} in ${eventName(event)}`}
-                        onClick={() => toggleEntry(event.id, swimmer.id)}
+                        onClick={() => toggleEntry(meet.id, event.id, swimmer.id)}
                         className={`flex h-12 w-full touch-manipulation items-center justify-center text-xl font-bold transition-colors ${
                           !eligible
                             ? "cursor-not-allowed bg-slate-100 text-slate-300 dark:bg-slate-800/60 dark:text-slate-700"

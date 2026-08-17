@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
+import { useParams } from "react-router";
 import type { Route } from "./+types/results";
 import { Button, Card, EmptyState, SectionTitle } from "~/components/ui";
 import { downloadFile, resultsToCsv } from "~/lib/csv";
 import { formatTime } from "~/lib/time";
-import { useMeet } from "~/state/meet-store";
+import { useAppStore } from "~/state/app-store";
 import { eventName, swimmerName, type Result } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
@@ -11,17 +12,21 @@ export function meta({}: Route.MetaArgs) {
 }
 
 export default function Results() {
-  const { meet } = useMeet();
+  const { team, meets } = useAppStore();
+  const { meetId } = useParams();
   const [openEvent, setOpenEvent] = useState<string | null>(null);
 
+  const meet = meets.find((m) => m.id === meetId);
+
+  // Names come from the roster, so a spelling fixed later shows up here too.
   const swimmers = useMemo(
-    () => new Map(meet.swimmers.map((s) => [s.id, s] as const)),
-    [meet.swimmers],
+    () => new Map(team.swimmers.map((s) => [s.id, s] as const)),
+    [team.swimmers],
   );
 
   const byEvent = useMemo(() => {
     const map = new Map<string, Result[]>();
-    for (const result of meet.results) {
+    for (const result of meet?.results ?? []) {
       const list = map.get(result.eventId) ?? [];
       list.push(result);
       map.set(result.eventId, list);
@@ -34,7 +39,9 @@ export default function Results() {
       });
     }
     return map;
-  }, [meet.results]);
+  }, [meet?.results]);
+
+  if (!meet) return null;
 
   const slug = `${meet.name.replace(/[^\w-]+/g, "-").toLowerCase()}-${meet.date}`;
 
@@ -55,7 +62,11 @@ export default function Results() {
             variant="primary"
             size="lg"
             onClick={() =>
-              downloadFile(`${slug}-results.csv`, resultsToCsv(meet), "text/csv")
+              downloadFile(
+                `${slug}-results.csv`,
+                resultsToCsv(meet, team.swimmers),
+                "text/csv",
+              )
             }
           >
             Results CSV
@@ -70,7 +81,7 @@ export default function Results() {
               )
             }
           >
-            Full backup
+            Meet JSON
           </Button>
         </div>
         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">

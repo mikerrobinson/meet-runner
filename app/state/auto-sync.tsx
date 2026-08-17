@@ -9,8 +9,8 @@ import {
   type ReactNode,
 } from "react";
 import { loadAutoSync, saveAutoSync } from "~/lib/storage";
-import { SyncRequestError, pushMeet, syncStatus } from "~/lib/sync";
-import { useMeetStore } from "~/state/meet-store";
+import { SyncRequestError, pushMeet, pushTeam, syncStatus } from "~/lib/sync";
+import { useAppStore } from "~/state/app-store";
 
 /**
  * Pushes the meet to the server on its own, shortly after things go quiet.
@@ -33,6 +33,8 @@ export type SyncPhase =
 
 export interface SyncStatus {
   phase: SyncPhase;
+  /** How many documents are waiting to go up. */
+  pendingCount: number;
   /** Device preference: does this device push on its own? */
   enabled: boolean;
   setEnabled: (enabled: boolean) => void;
@@ -53,7 +55,7 @@ const BACKOFF_MS = [4000, 10_000, 30_000, 60_000];
 const SyncStatusContext = createContext<SyncStatus | null>(null);
 
 export function AutoSyncProvider({ children }: { children: ReactNode }) {
-  const { meet, markSynced } = useMeetStore();
+  const { team, meets, markTeamSynced, markMeetSynced } = useAppStore();
 
   const [phase, setPhase] = useState<SyncPhase>("idle");
   // Defaults on; the stored preference is read once the client mounts.
@@ -63,10 +65,10 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
 
   // Live handles to things the timer callback needs, so the scheduling effect
   // doesn't have to re-run (and reset the debounce) on every edit.
-  const docRef = useRef(meet);
-  docRef.current = meet;
-  const markSyncedRef = useRef(markSynced);
-  markSyncedRef.current = markSynced;
+  const docsRef = useRef({ team, meets });
+  docsRef.current = { team, meets };
+  const markRef = useRef({ markTeamSynced, markMeetSynced });
+  markRef.current = { markTeamSynced, markMeetSynced };
 
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
@@ -76,7 +78,12 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   const failuresRef = useRef(0);
   const stoppedRef = useRef(false);
 
-  const pending = meet !== null && meet.syncedAt !== meet.updatedAt;
+  // The roster and every meet are separate documents, so "pending" means any
+  // one of them is behind — and only the ones behind get pushed.
+  const pendingCount =
+    (team.syncedAt !== team.updatedAt ? 1 : 0) +
+    meets.filter((m) => m.syncedAt !== m.updatedAt).length;
+  const pending = pendingCount > 0;
 
   // Declared up front so `schedule` can reach the latest pump without the two
   // callbacks depending on each other.
@@ -92,21 +99,32 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const pump = useCallback(async () => {
-    const doc = docRef.current;
-    if (!doc || stoppedRef.current) return;
-    // One request at a time; whatever lands mid-flight is picked up after.
-    if (inFlightRef.current) return;
-    if (doc.syncedAt === doc.updatedAt) return;
+    if (stoppedRef.current || inFlightRef.current) return;
+
+    const { team: currentTeam, meets: currentMeets } = docsRef.current;
+    const staleTeam =
+      currentTeam.syncedAt !== currentTeam.updatedAt ? currentTeam : null;
+    const staleMeets = currentMeets.filter((m) => m.syncedAt !== m.updatedAt);
+    if (!staleTeam && staleMeets.length === 0) return;
 
     inFlightRef.current = true;
-    // Remember what we're sending: edits made during the flight must stay
-    // pending rather than being marked as synced.
-    const sentAt = doc.updatedAt;
     setPhase("syncing");
 
     try {
-      await pushMeet(doc);
-      markSyncedRef.current(sentAt);
+      // Roster first: a meet's swimmer ids are meaningless to another device
+      // until the roster they point into has landed.
+      if (staleTeam) {
+        const sentAt = staleTeam.updatedAt;
+        await pushTeam(staleTeam);
+        markRef.current.markTeamSynced(sentAt);
+      }
+      for (const meet of staleMeets) {
+        // Remember what we're sending: edits made during the flight must stay
+        // pending rather than being marked as synced.
+        const sentAt = meet.updatedAt;
+        await pushMeet(meet);
+        markRef.current.markMeetSynced(meet.id, sentAt);
+      }
       failuresRef.current = 0;
       setPhase("idle");
       setMessage(undefined);
@@ -128,9 +146,12 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
       inFlightRef.current = false;
     }
 
-    const now = docRef.current;
-    if (!now || stoppedRef.current) return;
-    if (now.syncedAt !== now.updatedAt) {
+    const now = docsRef.current;
+    if (stoppedRef.current) return;
+    const stillPending =
+      now.team.syncedAt !== now.team.updatedAt ||
+      now.meets.some((m) => m.syncedAt !== m.updatedAt);
+    if (stillPending) {
       const failures = failuresRef.current;
       schedule(
         failures === 0
@@ -179,7 +200,7 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
         ? DEBOUNCE_MS
         : BACKOFF_MS[Math.min(failuresRef.current - 1, BACKOFF_MS.length - 1)],
     );
-  }, [pending, meet?.updatedAt, schedule]);
+  }, [pending, pendingCount, team.updatedAt, schedule]);
 
   // Coming back from a dead zone, or back to the tab, is the moment most
   // worth retrying — waiting out the backoff would be silly.
@@ -236,8 +257,17 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   }, [schedule]);
 
   const value = useMemo<SyncStatus>(
-    () => ({ phase, enabled, setEnabled, message, lastSyncAt, pending, syncNow }),
-    [phase, enabled, setEnabled, message, lastSyncAt, pending, syncNow],
+    () => ({
+      phase,
+      pendingCount,
+      enabled,
+      setEnabled,
+      message,
+      lastSyncAt,
+      pending,
+      syncNow,
+    }),
+    [phase, pendingCount, enabled, setEnabled, message, lastSyncAt, pending, syncNow],
   );
 
   return (

@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { Sheet, TextInput } from "./ui";
-import { useMeet } from "~/state/meet-store";
 import {
   eventName,
   isEligible,
   swimmerName,
   type Heat,
+  type MeetDoc,
   type Swimmer,
 } from "~/types/meet";
 
@@ -23,15 +23,21 @@ interface Candidate {
  * swim while walking up behind the blocks.
  */
 export function LaneAssignSheet({
+  meet,
+  roster,
   heat,
   lane,
+  onAssign,
   onClose,
 }: {
+  meet: MeetDoc;
+  /** Active roster — archived swimmers can't be entered in new races. */
+  roster: Swimmer[];
   heat: Heat;
   lane: number;
+  onAssign: (swimmerId: string) => void;
   onClose: () => void;
 }) {
-  const { meet, assignToLane } = useMeet();
   const [search, setSearch] = useState("");
 
   const event = meet.events.find((e) => e.id === heat.eventId);
@@ -56,8 +62,7 @@ export function LaneAssignSheet({
 
     const query = search.trim().toLowerCase();
 
-    return meet.swimmers
-      .filter((s) => s.active)
+    return roster
       .filter((s) => !event || isEligible(s, event))
       .filter((s) => !query || swimmerName(s).toLowerCase().includes(query))
       .map((s) => ({
@@ -73,7 +78,7 @@ export function LaneAssignSheet({
         if (aFree !== bFree) return aFree - bFree;
         return swimmerName(a.swimmer).localeCompare(swimmerName(b.swimmer));
       });
-  }, [meet.swimmers, meet.heats, meet.results, heat.eventId, event, search]);
+  }, [roster, meet.heats, meet.results, heat.eventId, event, search]);
 
   return (
     <Sheet open title={`Lane ${lane} · who's swimming?`} onClose={onClose}>
@@ -102,7 +107,7 @@ export function LaneAssignSheet({
                 type="button"
                 disabled={swum}
                 onClick={() => {
-                  assignToLane(heat.id, lane, swimmer.id);
+                  onAssign(swimmer.id);
                   onClose();
                 }}
                 className="flex min-h-14 w-full touch-manipulation items-center justify-between gap-3 px-1 py-2 text-left disabled:opacity-40"

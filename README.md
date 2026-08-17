@@ -1,23 +1,40 @@
 # Meet Runner
 
-A phone/iPad app for running an inter-squad dual swim meet: build the roster,
-enter swimmers in events, then work through the meet heat by heat with a
-multi-lane stopwatch. Individual events only — no relays.
+A phone/iPad app for managing a high-school swim team through a season: one
+roster that carries across the year, a schedule of meets, and a multi-lane
+stopwatch for running each one. Individual events only — no relays.
 
 Local-first. Everything lives on the device, so the app keeps working on a pool
 deck with no signal. It backs itself up to the server in the background as you
 go, and catches up on its own once signal returns.
 
-## The three modes
+## How it's organised
 
-**Setup** — three tabs.
+Two long-lived things: **the team** (the roster, which lasts the season) and
+**meets** (one document per meet, each with its own events, entries and times).
+Meets reference swimmers by id, so the roster is the single source of truth —
+fixing a spelling in March fixes January's results too, and removing someone
+*archives* them rather than deleting, since live results still point at their id.
 
-- _Roster_: import a CSV, or add swimmers one at a time. The header row can be
-  `First Name, Last Name, Gender, Year` plus an optional `Squad`, or a single
-  `Name` column (`Last, First` or `First Last`). Column names are matched
-  loosely (`sex`, `grade`, `team`, … all work). Rows that can't be read are
-  reported rather than dropped silently. The green check scratches a swimmer
-  without deleting them.
+The bottom bar changes with where you are. At the top level it's **Team /
+Meets / Settings**; open a meet and it becomes that meet's modes with a way
+back out, so Run stays one thumb tap away while a heat is in the water.
+
+## Team
+
+The roster: import a CSV, add swimmers by hand, or tap through to a swimmer for
+their details and every time they've swum, grouped by event with a best-time
+marker and a link to each meet. Archiving is the only way off the roster.
+
+## Meets
+
+The season's schedule, newest first, each showing its type and opponent plus a
+count of events, entries and recorded times. A new meet can start from the
+standard 8-event order rather than an empty lineup. Opening one gives four
+modes:
+
+**Setup** — two tabs.
+
 - _Events_: reorder with the arrows, set each event to Open / Girls / Boys, or
   load a standard 8- or 16-event dual meet order.
 - _Options_: 4, 6, or 8 lanes, and how the stopwatch arranges its buttons —
@@ -27,16 +44,15 @@ go, and catches up on its own once signal returns.
   the arrangement as you pick. Eight lanes as a list is tall — it fits an iPad
   or an installed phone app, but may scroll slightly in mobile Safari.
 
-**Registration** — swimmers down the side, events across the top, tap a cell to
+**Registration** — the team roster down the side, events across the top, tap a cell to
 enter or scratch. The whole screen is grid: the name column and the header row
 stay pinned however you scroll, and event columns divide the window evenly,
 falling back to sideways scrolling once there are more events than will fit at a
 tappable width. Cells grey out where a swimmer isn't eligible for a gendered
 event. Counts update live: entries per event in the header, events per swimmer
-in the row. Swimmers who turn up on the day get added under Setup → Roster — the
-in-grid search box and `+ Swimmer` button are hidden behind
-`SHOW_ROSTER_CONTROLS` in `app/routes/registration.tsx`, so flip that to `true`
-to bring them back.
+in the row. Swimmers who turn up on the day get added under Team — the in-grid
+search box and `+ Swimmer` button are hidden behind `SHOW_ROSTER_CONTROLS` in
+`app/routes/registration.tsx`, so flip that to `true` to bring them back.
 
 **Run Meet** — one heat on screen at a time.
 
@@ -63,8 +79,9 @@ to bring them back.
   `STOP` buttons.
 - Tap a lane that's already stopped to type a time in, mark a DQ or no-show, or
   clear it — one missed stop button shouldn't cost the whole heat. Times are
-  typed the way a scoreboard reads them, no colon required: `101.45` is 1:01.45
-  and `28.91` is 28.91. The sheet shows what it will save as you type.
+  typed as bare digits, no separator needed: the last two are always hundredths,
+  so `3045` is 30.45 and `11127` is 1:11.27. A decimal or a colon still works
+  and gives the same answer. The sheet shows what it will save as you type.
 - The event arrows are locked while a heat is still in the water, so a stray tap
   can't throw away a running race. They unlock once every lane is in.
 
@@ -111,13 +128,21 @@ version that keeps its content inside the middle 80%.
 React Router 7 (framework mode) on a Cloudflare Worker, Tailwind 4, served under
 `/projects/meet-runner/`.
 
-- `app/types/meet.ts` — the whole meet is one JSON document (`MeetDoc`): plain
-  JSON only, no `Map`/`Set`/`Date`, so the same value round-trips through
-  localStorage and the server unchanged.
-- `app/state/meet-store.tsx` — context store. Every mutation goes through
-  `update()`, which stamps `updatedAt`; a `useEffect` writes to localStorage on
-  change. Routes render nothing until the store has read localStorage, which
-  keeps SSR and the client in agreement.
+- `app/types/meet.ts` — `TeamDoc` and `MeetDoc`, both plain JSON (no
+  `Map`/`Set`/`Date`) so the same value round-trips through IndexedDB and the
+  server unchanged. `MeetDoc` holds swimmer *ids* only.
+- `app/lib/documents.ts` — defaults and version migrations, deliberately pure so
+  the worker can share them without pulling in browser storage code.
+- `app/lib/db.ts` — IndexedDB. A season outgrows localStorage (~150KB a meet
+  against a ~5MB ceiling, and Safari's failure mode is a thrown quota error
+  mid-write, which on a deck means losing times). Also carries the one-time
+  migration that splits an old single-meet localStorage save into a team plus
+  meet #1.
+- `app/state/app-store.tsx` — context store holding the team and every meet in
+  memory. Mutations go through `editTeam`/`editMeet`, which stamp `updatedAt`;
+  an effect writes back only the documents whose identity changed, so editing
+  one meet doesn't rewrite the season. Routes render nothing until the read
+  finishes, which keeps SSR and the client in agreement.
 - `app/lib/heats.ts` — seeding. Heats are filled so the short heat comes first
   and the last heat is full, and lanes fill from the middle of the pool outward
   (6 lanes: 3, 4, 2, 5, 1, 6).
@@ -133,8 +158,12 @@ Times are stored as integer milliseconds and only formatted for display.
 
 Whole-document push/pull against D1, resolved by `updatedAt` — a push older than
 what the server holds is rejected rather than applied, so a stale tab on another
-device can't clobber the live copy. The table is created on first use; there's
-no migration step.
+device can't clobber the live copy. Tables are created on first use; there's no
+migration step.
+
+The team and each meet are separate documents, and only the ones actually behind
+get pushed. The roster always goes first: a meet's swimmer ids mean nothing to
+another device until the roster they point into has landed.
 
 `app/state/auto-sync.tsx` pushes on its own, and is built to stay off the render
 path:
@@ -168,6 +197,7 @@ you leave the app open on a second device.
 | Route | Purpose |
 | --- | --- |
 | `GET /api/sync-status` | Whether a D1 binding exists |
+| `GET` / `PUT /api/team` | Fetch or push the roster and team settings |
 | `GET /api/meets` | List meets on the server |
 | `GET /api/meets/:id` | Fetch one meet |
 | `PUT /api/meets/:id` | Push a meet |

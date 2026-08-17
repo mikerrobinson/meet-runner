@@ -1,8 +1,8 @@
+import { migrateMeet, migrateTeam } from "./documents";
 import { loadSyncToken } from "./storage";
-import { migrate } from "./storage";
-import type { MeetDoc } from "~/types/meet";
+import type { MeetDoc, TeamDoc } from "~/types/meet";
 
-export interface MeetSummary {
+export interface RemoteMeetSummary {
   id: string;
   name: string;
   date: string;
@@ -75,12 +75,24 @@ export async function pushMeet(
 /** Fetch a meet by id. Returns null if the server doesn't have it. */
 export async function pullMeet(id: string): Promise<MeetDoc | null> {
   const body = await request<{ meet: unknown | null }>(`/api/meets/${id}`);
-  return body.meet ? migrate(body.meet) : null;
+  return body.meet ? migrateMeet(body.meet) : null;
 }
 
-export async function listMeets(): Promise<MeetSummary[]> {
-  const body = await request<{ meets: MeetSummary[] }>("/api/meets");
+export async function listMeets(): Promise<RemoteMeetSummary[]> {
+  const body = await request<{ meets: RemoteMeetSummary[] }>("/api/meets");
   return body.meets;
+}
+
+/** Push the season roster and team settings. */
+export async function pushTeam(
+  team: TeamDoc,
+): Promise<{ updatedAt: number; applied: boolean }> {
+  return request("/api/team", { method: "PUT", body: JSON.stringify(team) });
+}
+
+export async function pullTeam(): Promise<TeamDoc | null> {
+  const body = await request<{ team: unknown | null }>("/api/team");
+  return body.team ? migrateTeam(body.team) : null;
 }
 
 /** Whether the server has sync configured at all (i.e. a D1 binding exists). */

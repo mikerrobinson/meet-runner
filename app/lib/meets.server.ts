@@ -4,8 +4,8 @@
  * means the client and server never disagree about shape.
  */
 
-import { migrate } from "./storage";
-import type { MeetDoc } from "~/types/meet";
+import { migrateMeet, migrateTeam } from "./documents";
+import type { MeetDoc, TeamDoc } from "~/types/meet";
 
 export interface SyncEnv {
   DB?: D1Database;
@@ -73,6 +73,28 @@ async function ensureSchema(db: D1Database): Promise<void> {
        )`,
     )
     .run();
+
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS teams (
+         id TEXT PRIMARY KEY,
+         name TEXT NOT NULL,
+         season TEXT NOT NULL,
+         updated_at INTEGER NOT NULL,
+         data TEXT NOT NULL
+       )`,
+    )
+    .run();
+
+  // Added after the meets table shipped, so it has to be applied separately.
+  // Deployments that already have the column throw here; that's the success
+  // case on a second run, not a failure.
+  try {
+    await db.prepare("ALTER TABLE meets ADD COLUMN team_id TEXT").run();
+  } catch {
+    /* column already present */
+  }
+
   schemaReady = true;
 }
 
@@ -109,7 +131,7 @@ export async function getMeet(
     .first<{ data: string }>();
   if (!row) return null;
   try {
-    return migrate(JSON.parse(row.data));
+    return migrateMeet(JSON.parse(row.data));
   } catch {
     throw new SyncError("Stored meet is corrupt", 500);
   }
@@ -136,11 +158,12 @@ export async function putMeet(
 
   await db
     .prepare(
-      `INSERT INTO meets (id, name, date, updated_at, data)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO meets (id, name, date, team_id, updated_at, data)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name,
          date = excluded.date,
+         team_id = excluded.team_id,
          updated_at = excluded.updated_at,
          data = excluded.data`,
     )
@@ -148,6 +171,7 @@ export async function putMeet(
       incoming.id,
       incoming.name,
       incoming.date,
+      incoming.teamId,
       incoming.updatedAt,
       JSON.stringify(incoming),
     )
@@ -156,14 +180,76 @@ export async function putMeet(
   return { updatedAt: incoming.updatedAt, applied: true };
 }
 
-export async function parseMeetBody(request: Request): Promise<MeetDoc> {
-  let body: unknown;
+async function readJson(request: Request): Promise<unknown> {
   try {
-    body = await request.json();
+    return await request.json();
   } catch {
     throw new SyncError("Request body wasn't valid JSON", 400);
   }
-  const meet = migrate(body);
+}
+
+export async function parseMeetBody(request: Request): Promise<MeetDoc> {
+  const meet = migrateMeet(await readJson(request));
   if (!meet) throw new SyncError("Request body isn't a meet document", 400);
   return meet;
+}
+
+export async function parseTeamBody(request: Request): Promise<TeamDoc> {
+  const team = migrateTeam(await readJson(request));
+  if (!team) throw new SyncError("Request body isn't a team document", 400);
+  return team;
+}
+
+/* -------------------------------------------------------------------- team */
+
+export async function getTeam(db: D1Database): Promise<TeamDoc | null> {
+  await ensureSchema(db);
+  // One team per install for now, so the newest row is the team.
+  const row = await db
+    .prepare("SELECT data FROM teams ORDER BY updated_at DESC LIMIT 1")
+    .first<{ data: string }>();
+  if (!row) return null;
+  try {
+    return migrateTeam(JSON.parse(row.data));
+  } catch {
+    throw new SyncError("Stored team is corrupt", 500);
+  }
+}
+
+/** Same last-write-wins rule as meets: a stale push is rejected, not applied. */
+export async function putTeam(
+  db: D1Database,
+  incoming: TeamDoc,
+): Promise<{ updatedAt: number; applied: boolean }> {
+  await ensureSchema(db);
+
+  const existing = await db
+    .prepare("SELECT updated_at FROM teams WHERE id = ?")
+    .bind(incoming.id)
+    .first<{ updated_at: number }>();
+
+  if (existing && existing.updated_at > incoming.updatedAt) {
+    return { updatedAt: existing.updated_at, applied: false };
+  }
+
+  await db
+    .prepare(
+      `INSERT INTO teams (id, name, season, updated_at, data)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name,
+         season = excluded.season,
+         updated_at = excluded.updated_at,
+         data = excluded.data`,
+    )
+    .bind(
+      incoming.id,
+      incoming.name,
+      incoming.season,
+      incoming.updatedAt,
+      JSON.stringify(incoming),
+    )
+    .run();
+
+  return { updatedAt: incoming.updatedAt, applied: true };
 }

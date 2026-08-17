@@ -1,4 +1,5 @@
-import { useMemo, useRef, useState } from "react";
+import { useState } from "react";
+import { useParams } from "react-router";
 import type { Route } from "./+types/setup";
 import {
   Banner,
@@ -9,46 +10,40 @@ import {
   SectionTitle,
   Segmented,
   Select,
-  TextInput,
 } from "~/components/ui";
-import { SwimmerSheet } from "~/components/SwimmerSheet";
-import { downloadFile, parseRosterCsv, toCsv } from "~/lib/csv";
 import { COMMON_DISTANCES, defaultEvents, makeEvent } from "~/lib/events";
-import { useMeet } from "~/state/meet-store";
+import { useAppStore } from "~/state/app-store";
 import {
   LANE_COUNTS,
   STROKES,
   eventName,
   orderedLanes,
-  swimmerName,
   type EventGender,
   type LaneCount,
   type LaneLayout,
+  type MeetDoc,
   type Stroke,
-  type Swimmer,
 } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Setup · Meet Runner" }];
 }
 
-type Tab = "roster" | "events" | "options";
-
-const TEMPLATE = toCsv([
-  ["First Name", "Last Name", "Gender", "Year", "Squad"],
-  ["Avery", "Nguyen", "F", "10", "Blue"],
-  ["Marcus", "Hill", "M", "12", "Gold"],
-]);
+type Tab = "events" | "options";
 
 export default function Setup() {
-  const [tab, setTab] = useState<Tab>("roster");
+  const { meets } = useAppStore();
+  const { meetId } = useParams();
+  const [tab, setTab] = useState<Tab>("events");
+
+  const meet = meets.find((m) => m.id === meetId);
+  if (!meet) return null;
 
   return (
     <div className="space-y-4">
       <div className="flex gap-1 rounded-xl bg-slate-200 p-1 dark:bg-slate-800">
         {(
           [
-            ["roster", "Roster"],
             ["events", "Events"],
             ["options", "Options"],
           ] as Array<[Tab, string]>
@@ -68,231 +63,17 @@ export default function Setup() {
         ))}
       </div>
 
-      {tab === "roster" && <RosterTab />}
-      {tab === "events" && <EventsTab />}
-      {tab === "options" && <OptionsTab />}
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ roster */
-
-function RosterTab() {
-  const { meet, addSwimmers, updateSwimmer, removeSwimmer } = useMeet();
-  const [warnings, setWarnings] = useState<string[]>([]);
-  const [pending, setPending] = useState<Swimmer[] | null>(null);
-  const [search, setSearch] = useState("");
-  const [editing, setEditing] = useState<Swimmer | null>(null);
-  const [adding, setAdding] = useState(false);
-  const fileInput = useRef<HTMLInputElement>(null);
-
-  const handleFile = async (file: File) => {
-    const { swimmers, warnings: issues } = parseRosterCsv(await file.text());
-    setWarnings(issues);
-    if (swimmers.length === 0) return;
-    if (meet.swimmers.length === 0) {
-      addSwimmers(swimmers, "replace");
-    } else {
-      setPending(swimmers);
-    }
-  };
-
-  const visible = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return meet.swimmers;
-    return meet.swimmers.filter((s) =>
-      swimmerName(s).toLowerCase().includes(query),
-    );
-  }, [meet.swimmers, search]);
-
-  return (
-    <div className="space-y-4">
-      <Card>
-        <SectionTitle>Import roster</SectionTitle>
-        <p className="mb-3 text-sm text-slate-600 dark:text-slate-300">
-          CSV with a header row. Columns can be{" "}
-          <strong>First Name, Last Name, Gender, Year</strong> — plus an optional{" "}
-          <strong>Squad</strong> for inter-squad sides. A single{" "}
-          <strong>Name</strong> column works too.
-        </p>
-        <div className="grid grid-cols-2 gap-2">
-          <Button variant="primary" onClick={() => fileInput.current?.click()}>
-            Choose CSV
-          </Button>
-          <Button
-            onClick={() =>
-              downloadFile("roster-template.csv", TEMPLATE, "text/csv")
-            }
-          >
-            Template
-          </Button>
-        </div>
-        <input
-          ref={fileInput}
-          type="file"
-          accept=".csv,text/csv"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) handleFile(file);
-            e.target.value = "";
-          }}
-        />
-
-        {pending && (
-          <div className="mt-3 space-y-2">
-            <Banner tone="warn">
-              You already have {meet.swimmers.length} swimmers. Add the{" "}
-              {pending.length} from this file, or replace the roster? Replacing
-              also clears entries and recorded times.
-            </Banner>
-            <div className="grid grid-cols-3 gap-2">
-              <Button
-                variant="primary"
-                onClick={() => {
-                  addSwimmers(pending, "append");
-                  setPending(null);
-                }}
-              >
-                Add
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => {
-                  addSwimmers(pending, "replace");
-                  setPending(null);
-                }}
-              >
-                Replace
-              </Button>
-              <Button onClick={() => setPending(null)}>Cancel</Button>
-            </div>
-          </div>
-        )}
-
-        {warnings.length > 0 && (
-          <div className="mt-3">
-            <Banner tone="warn">
-              <p className="font-semibold">Import notes</p>
-              <ul className="mt-1 list-disc pl-4">
-                {warnings.slice(0, 8).map((warning, i) => (
-                  <li key={i}>{warning}</li>
-                ))}
-                {warnings.length > 8 && (
-                  <li>…and {warnings.length - 8} more.</li>
-                )}
-              </ul>
-            </Banner>
-          </div>
-        )}
-      </Card>
-
-      <Card>
-        <SectionTitle
-          action={
-            <Button variant="primary" size="sm" onClick={() => setAdding(true)}>
-              + Swimmer
-            </Button>
-          }
-        >
-          Roster ({meet.swimmers.filter((s) => s.active).length})
-        </SectionTitle>
-
-        {meet.swimmers.length === 0 ? (
-          <EmptyState title="No swimmers yet">
-            Import a CSV above, or add swimmers one at a time.
-          </EmptyState>
-        ) : (
-          <>
-            <TextInput
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search swimmers"
-              className="mb-2"
-            />
-            <ul className="divide-y divide-slate-200 dark:divide-slate-800">
-              {visible.map((swimmer) => (
-                <li key={swimmer.id} className="flex items-center gap-2 py-1">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      updateSwimmer(swimmer.id, { active: !swimmer.active })
-                    }
-                    aria-label={
-                      swimmer.active
-                        ? `Scratch ${swimmerName(swimmer)}`
-                        : `Reinstate ${swimmerName(swimmer)}`
-                    }
-                    className={`h-9 w-9 shrink-0 touch-manipulation rounded-lg border-2 text-lg font-bold ${
-                      swimmer.active
-                        ? "border-emerald-500 bg-emerald-500 text-white"
-                        : "border-slate-300 text-transparent dark:border-slate-600"
-                    }`}
-                  >
-                    ✓
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setEditing(swimmer)}
-                    className="min-w-0 flex-1 py-2 text-left"
-                  >
-                    <span
-                      className={`block truncate font-semibold ${
-                        swimmer.active ? "" : "text-slate-400 line-through"
-                      }`}
-                    >
-                      {swimmerName(swimmer)}
-                    </span>
-                    <span className="block text-xs text-slate-500 dark:text-slate-400">
-                      {swimmer.gender}
-                      {swimmer.year && ` · ${swimmer.year}`}
-                      {swimmer.squad && ` · ${swimmer.squad}`}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-      </Card>
-
-      {/* Mounted only while open so the form starts blank each time. */}
-      {adding && (
-        <SwimmerSheet
-          title="Add swimmer"
-          onClose={() => setAdding(false)}
-          onSave={(swimmer) => {
-            addSwimmers([swimmer], "append");
-            setAdding(false);
-          }}
-        />
-      )}
-
-      {editing && (
-        <SwimmerSheet
-          key={editing.id}
-          title="Edit swimmer"
-          swimmer={editing}
-          onClose={() => setEditing(null)}
-          onSave={(swimmer) => {
-            updateSwimmer(editing.id, swimmer);
-            setEditing(null);
-          }}
-          onDelete={() => {
-            removeSwimmer(editing.id);
-            setEditing(null);
-          }}
-        />
-      )}
+      {tab === "events" && <EventsTab meet={meet} />}
+      {tab === "options" && <OptionsTab meet={meet} />}
     </div>
   );
 }
 
 /* ------------------------------------------------------------------ events */
 
-function EventsTab() {
-  const { meet, addEvent, updateEvent, removeEvent, moveEvent, setEvents } =
-    useMeet();
+function EventsTab({ meet }: { meet: MeetDoc }) {
+  const { addEvent, updateEvent, removeEvent, moveEvent, setEvents } =
+    useAppStore();
   const [distance, setDistance] = useState(50);
   const [stroke, setStroke] = useState<Stroke>("Free");
   const [gender, setGender] = useState<EventGender>("Open");
@@ -324,7 +105,7 @@ function EventsTab() {
                   aria-label={`Gender for ${eventName(event)}`}
                   value={event.gender}
                   onChange={(e) =>
-                    updateEvent(event.id, {
+                    updateEvent(meet.id, event.id, {
                       gender: e.target.value as EventGender,
                     })
                   }
@@ -339,7 +120,7 @@ function EventsTab() {
                     type="button"
                     aria-label="Move up"
                     disabled={index === 0}
-                    onClick={() => moveEvent(event.id, -1)}
+                    onClick={() => moveEvent(meet.id, event.id, -1)}
                     className="h-7 w-9 touch-manipulation rounded-t-lg bg-slate-200 text-xs disabled:opacity-30 dark:bg-slate-800"
                   >
                     ▲
@@ -348,7 +129,7 @@ function EventsTab() {
                     type="button"
                     aria-label="Move down"
                     disabled={index === meet.events.length - 1}
-                    onClick={() => moveEvent(event.id, 1)}
+                    onClick={() => moveEvent(meet.id, event.id, 1)}
                     className="h-7 w-9 touch-manipulation rounded-b-lg bg-slate-200 text-xs disabled:opacity-30 dark:bg-slate-800"
                   >
                     ▼
@@ -357,7 +138,7 @@ function EventsTab() {
                 <button
                   type="button"
                   aria-label={`Remove ${eventName(event)}`}
-                  onClick={() => removeEvent(event.id)}
+                  onClick={() => removeEvent(meet.id, event.id)}
                   className="h-11 w-9 shrink-0 touch-manipulation rounded-lg text-lg text-red-600"
                 >
                   ✕
@@ -411,7 +192,7 @@ function EventsTab() {
           variant="primary"
           size="lg"
           full
-          onClick={() => addEvent(makeEvent(distance, stroke, gender))}
+          onClick={() => addEvent(meet.id, makeEvent(distance, stroke, gender))}
         >
           Add {distance} {stroke}
         </Button>
@@ -427,10 +208,10 @@ function EventsTab() {
           </div>
         )}
         <div className="grid grid-cols-2 gap-2">
-          <Button onClick={() => setEvents(defaultEvents("open"))}>
+          <Button onClick={() => setEvents(meet.id, defaultEvents("open"))}>
             8 open events
           </Button>
-          <Button onClick={() => setEvents(defaultEvents("split"))}>
+          <Button onClick={() => setEvents(meet.id, defaultEvents("split"))}>
             16 girls/boys
           </Button>
         </div>
@@ -445,8 +226,8 @@ function EventsTab() {
 
 /* ----------------------------------------------------------------- options */
 
-function OptionsTab() {
-  const { meet, setLaneCount, setLaneLayout } = useMeet();
+function OptionsTab({ meet }: { meet: MeetDoc }) {
+  const { setLaneCount, setLaneLayout } = useAppStore();
   const { laneCount, laneLayout } = meet.options;
 
   return (
@@ -459,7 +240,7 @@ function OptionsTab() {
         >
           <Segmented
             value={laneCount}
-            onChange={(value) => setLaneCount(value as LaneCount)}
+            onChange={(value) => setLaneCount(meet.id, value as LaneCount)}
             options={LANE_COUNTS.map((n) => ({ value: n, label: String(n) }))}
           />
         </Field>
@@ -477,7 +258,7 @@ function OptionsTab() {
         >
           <Segmented
             value={laneLayout}
-            onChange={(value) => setLaneLayout(value as LaneLayout)}
+            onChange={(value) => setLaneLayout(meet.id, value as LaneLayout)}
             options={[
               { value: "grid" as LaneLayout, label: "Grid" },
               { value: "list-asc" as LaneLayout, label: `1 → ${laneCount}` },

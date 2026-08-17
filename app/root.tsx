@@ -9,7 +9,7 @@ import {
 
 import type { Route } from "./+types/root";
 import { AutoSyncProvider } from "./state/auto-sync";
-import { MeetStoreProvider } from "./state/meet-store";
+import { AppStoreProvider } from "./state/app-store";
 import "./app.css";
 
 /**
@@ -69,11 +69,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <MeetStoreProvider>
+    <AppStoreProvider>
       <AutoSyncProvider>
         <Outlet />
       </AutoSyncProvider>
-    </MeetStoreProvider>
+    </AppStoreProvider>
   );
 }
 

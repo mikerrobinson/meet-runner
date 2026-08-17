@@ -13,12 +13,14 @@ export function SwimmerSheet({
   onClose,
   onSave,
   onDelete,
+  deleteLabel = "Remove from roster",
 }: {
   title: string;
   swimmer?: Swimmer;
   onClose: () => void;
   onSave: (swimmer: Swimmer) => void;
   onDelete?: () => void;
+  deleteLabel?: string;
 }) {
   const [firstName, setFirstName] = useState(swimmer?.firstName ?? "");
   const [lastName, setLastName] = useState(swimmer?.lastName ?? "");
@@ -37,7 +39,7 @@ export function SwimmerSheet({
       gender,
       year: year.trim(),
       squad: squad.trim() || undefined,
-      active: swimmer?.active ?? true,
+      archived: swimmer?.archived ?? false,
     });
   };
 
@@ -90,7 +92,7 @@ export function SwimmerSheet({
         </Button>
         {onDelete && (
           <Button variant="ghost" full onClick={onDelete}>
-            Remove from roster
+            {deleteLabel}
           </Button>
         )}
       </div>

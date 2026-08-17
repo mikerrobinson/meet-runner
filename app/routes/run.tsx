@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router";
+import { Link, useParams } from "react-router";
 import type { Route } from "./+types/run";
 import { LaneAssignSheet } from "~/components/LaneAssignSheet";
 import { LaneTile } from "~/components/LaneTile";
@@ -7,13 +7,16 @@ import { Banner, Button, EmptyState, Field, Sheet, TextInput } from "~/component
 import { useElapsed, useWakeLock } from "~/hooks/use-stopwatch";
 import { heatsForEvent } from "~/lib/heats";
 import { formatClock, formatTime, parseTime } from "~/lib/time";
-import { useMeet } from "~/state/meet-store";
+import { activeSwimmers, useAppStore } from "~/state/app-store";
 import {
   eventName,
+  findSwimmer,
   orderedLanes,
   swimmerName,
   type Heat,
+  type MeetDoc,
   type Result,
+  type Swimmer,
 } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
@@ -21,52 +24,46 @@ export function meta({}: Route.MetaArgs) {
 }
 
 export default function RunMeet() {
-  const {
-    meet,
-    ensureHeats,
-    rebuildHeats,
-    setProgress,
-    startTimer,
-    stopLane,
-    resetHeat,
-    recordManualTime,
-    setResultStatus,
-    removeResult,
-    clearLane,
-  } = useMeet();
+  const store = useAppStore();
+  const { meetId } = useParams();
+  const meet = store.meets.find((m) => m.id === meetId);
+  const roster = store.team.swimmers;
 
   const [editingLane, setEditingLane] = useState<number | null>(null);
   const [assigningLane, setAssigningLane] = useState<number | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
 
-  const eventIndex = Math.min(meet.progress.eventIndex, meet.events.length - 1);
-  const event = meet.events[eventIndex];
+  const eventIndex = Math.min(
+    meet?.progress.eventIndex ?? 0,
+    Math.max(0, (meet?.events.length ?? 1) - 1),
+  );
+  const event = meet?.events[eventIndex];
   const heats = useMemo(
-    () => (event ? heatsForEvent(meet, event.id) : []),
+    () => (meet && event ? heatsForEvent(meet, event.id) : []),
     [meet, event],
   );
   const heatIndex = Math.min(
-    meet.progress.heatIndex,
+    meet?.progress.heatIndex ?? 0,
     Math.max(0, heats.length - 1),
   );
   const heat: Heat | undefined = heats[heatIndex];
 
   // Seed heats the first time we land on an event.
   useEffect(() => {
-    if (event) ensureHeats(event.id);
-  }, [event, ensureHeats]);
+    if (meet && event) store.ensureHeats(meet.id, event.id);
+  }, [meet, event, store]);
 
-  const layout = meet.options.laneLayout;
-  const running = heat != null && meet.timer?.heatId === heat.id;
+  const layout = meet?.options.laneLayout ?? "grid";
+  const running = meet != null && heat != null && meet.timer?.heatId === heat.id;
 
   const resultsByLane = useMemo(() => {
     const map = new Map<number, Result>();
     if (!heat) return map;
-    for (const result of meet.results) {
+    for (const result of meet?.results ?? []) {
       if (result.heatId === heat.id) map.set(result.lane, result);
     }
     return map;
-  }, [meet.results, heat]);
+  }, [meet?.results, heat]);
 
   const occupiedLanes = heat
     ? heat.lanes.map((id, i) => (id ? i + 1 : null)).filter((n): n is number => n !== null)
@@ -93,7 +90,8 @@ export default function RunMeet() {
   }, [heatComplete]);
 
   const goToHeat = (nextEvent: number, nextHeat: number) => {
-    setProgress(nextEvent, nextHeat);
+    if (!meet) return;
+    store.setProgress(meet.id, nextEvent, nextHeat);
     setEditingLane(null);
     setAssigningLane(null);
   };
@@ -101,7 +99,7 @@ export default function RunMeet() {
   const nextHeat = () => {
     if (heatIndex + 1 < heats.length) {
       goToHeat(eventIndex, heatIndex + 1);
-    } else if (eventIndex + 1 < meet.events.length) {
+    } else if (meet && eventIndex + 1 < meet.events.length) {
       goToHeat(eventIndex + 1, 0);
     }
   };
@@ -111,10 +109,15 @@ export default function RunMeet() {
     else if (eventIndex > 0) goToHeat(eventIndex - 1, 0);
   };
 
+  if (!meet) return null;
+
   if (!event) {
     return (
       <EmptyState title="No events yet">
-        <Link to="/setup" className="font-semibold text-blue-600 underline">
+        <Link
+          to={`/meets/${meet.id}/setup`}
+          className="font-semibold text-blue-600 underline"
+        >
           Add events in setup
         </Link>{" "}
         before running the meet.
@@ -159,7 +162,7 @@ export default function RunMeet() {
       {heats.length === 0 || !heat ? (
         <EmptyState title="Nobody is entered in this event">
           <Link
-            to="/registration"
+            to={`/meets/${meet.id}/registration`}
             className="font-semibold text-blue-600 underline"
           >
             Enter swimmers
@@ -178,16 +181,14 @@ export default function RunMeet() {
               <LaneTile
                 key={lane}
                 lane={lane}
-                swimmer={meet.swimmers.find(
-                  (s) => s.id === heat.lanes[lane - 1],
-                )}
+                swimmer={findSwimmer(roster, heat.lanes[lane - 1])}
                 result={resultsByLane.get(lane)}
                 running={running}
                 clockRunning={clockRunning}
                 layout={layout}
                 laneCount={heat.lanes.length}
                 onStop={() =>
-                  stopLane(heat, lane, Date.now() - meet.timer!.startedAt)
+                  store.stopLane(meet.id, heat, lane, Date.now() - meet.timer!.startedAt)
                 }
                 onEdit={() => setEditingLane(lane)}
                 onAssign={() => setAssigningLane(lane)}
@@ -220,7 +221,7 @@ export default function RunMeet() {
                 size="xl"
                 className="!min-h-24 !text-xl"
                 onClick={() => {
-                  resetHeat(heat.id);
+                  store.resetHeat(meet.id, heat.id);
                   setConfirmReset(false);
                 }}
               >
@@ -253,7 +254,7 @@ export default function RunMeet() {
               size="xl"
               full
               className="!min-h-24 !text-4xl"
-              onClick={() => startTimer(heat.id)}
+              onClick={() => store.startTimer(meet.id, heat.id)}
             >
               START
             </Button>
@@ -267,7 +268,7 @@ export default function RunMeet() {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => rebuildHeats(event.id, { shuffle: true })}
+                onClick={() => store.rebuildHeats(meet.id, event.id, { shuffle: true })}
               >
                 Reseed lanes
               </Button>
@@ -288,8 +289,13 @@ export default function RunMeet() {
 
       {heat && assigningLane !== null && (
         <LaneAssignSheet
+          meet={meet}
+          roster={activeSwimmers(store.team)}
           heat={heat}
           lane={assigningLane}
+          onAssign={(swimmerId) =>
+            store.assignToLane(meet.id, heat.id, assigningLane, swimmerId)
+          }
           onClose={() => setAssigningLane(null)}
         />
       )}
@@ -301,28 +307,26 @@ export default function RunMeet() {
           onClose={() => setEditingLane(null)}
           result={resultsByLane.get(editingLane)}
           swimmerLabel={(() => {
-            const s = meet.swimmers.find(
-              (x) => x.id === heat.lanes[editingLane - 1],
-            );
+            const s = findSwimmer(roster, heat.lanes[editingLane - 1]);
             return s ? swimmerName(s) : `Lane ${editingLane}`;
           })()}
           onSaveTime={(timeMs) => {
             const swimmerId = heat.lanes[editingLane - 1];
-            if (swimmerId) recordManualTime(heat, editingLane, swimmerId, timeMs);
+            if (swimmerId) store.recordManualTime(meet.id, heat, editingLane, swimmerId, timeMs);
             setEditingLane(null);
           }}
           onStatus={(status) => {
             const existing = resultsByLane.get(editingLane);
-            if (existing) setResultStatus(existing.id, status);
+            if (existing) store.setResultStatus(meet.id, existing.id, status);
             setEditingLane(null);
           }}
           onClear={() => {
             const existing = resultsByLane.get(editingLane);
-            if (existing) removeResult(existing.id);
+            if (existing) store.removeResult(meet.id, existing.id);
             setEditingLane(null);
           }}
           onRemoveFromLane={() => {
-            clearLane(heat.id, editingLane);
+            store.clearLane(meet.id, heat.id, editingLane);
             setEditingLane(null);
           }}
         />
@@ -374,13 +378,13 @@ function LaneSheet({
         <div className="space-y-3">
           <Field
             label="Time"
-            hint={'No colon needed \u2014 "101.45" saves as 1:01.45.'}
+            hint={'Just digits \u2014 "3045" is 30.45, "11127" is 1:11.27.'}
           >
             <TextInput
               value={value}
               onChange={(e) => setValue(e.target.value)}
               inputMode="decimal"
-              placeholder="101.45"
+              placeholder="11127"
               autoFocus
             />
           </Field>
@@ -395,8 +399,8 @@ function LaneSheet({
               </p>
             ) : (
               <p className="text-sm font-semibold text-red-600 dark:text-red-400">
-                Can&rsquo;t read that as a time. Try 28.91, or 101.45 for
-                1:01.45.
+                Can&rsquo;t read that as a time. Try 3045 for 30.45, or 11127
+                for 1:11.27.
               </p>
             ))}
 

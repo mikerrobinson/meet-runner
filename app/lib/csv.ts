@@ -165,7 +165,7 @@ export function parseRosterCsv(text: string): RosterImport {
       gender: gender ?? "F",
       year: cell(row, "year"),
       squad: cell(row, "squad") || undefined,
-      active: true,
+      archived: false,
     });
   });
 
@@ -185,8 +185,8 @@ export function toCsv(rows: Array<Array<string | number>>): string {
  * Results export: one row per recorded swim, ordered by event, then heat, then
  * finish place.
  */
-export function resultsToCsv(meet: MeetDoc): string {
-  const swimmers = new Map(meet.swimmers.map((s) => [s.id, s] as const));
+export function resultsToCsv(meet: MeetDoc, roster: Swimmer[]): string {
+  const swimmers = new Map(roster.map((s) => [s.id, s] as const));
   const heats = new Map(meet.heats.map((h) => [h.id, h] as const));
 
   const rows: Array<Array<string | number>> = [

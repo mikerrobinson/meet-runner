@@ -1,5 +1,5 @@
 import { generateId } from "./id";
-import type { Heat, LaneCount, MeetDoc, Swimmer } from "~/types/meet";
+import type { Heat, LaneCount, MeetDoc } from "~/types/meet";
 
 /**
  * Lane assignment order, fastest lane first. Standard practice puts the top
@@ -63,28 +63,8 @@ export function shuffle<T>(items: T[]): T[] {
   return copy;
 }
 
-/**
- * Registered, non-scratched swimmers for an event, in roster order.
- */
-export function eligibleEntrants(meet: MeetDoc, eventId: string): string[] {
-  const byId = new Map(meet.swimmers.map((s) => [s.id, s] as const));
-  const registered = new Set(meet.entries[eventId] ?? []);
-  return meet.swimmers
-    .filter((s) => s.active && registered.has(s.id))
-    .map((s) => s.id)
-    .filter((id) => byId.has(id));
-}
-
 export function heatsForEvent(meet: MeetDoc, eventId: string): Heat[] {
   return meet.heats
     .filter((h) => h.eventId === eventId)
     .sort((a, b) => a.index - b.index);
-}
-
-export function swimmerById(
-  meet: MeetDoc,
-  id: string | null,
-): Swimmer | undefined {
-  if (!id) return undefined;
-  return meet.swimmers.find((s) => s.id === id);
 }

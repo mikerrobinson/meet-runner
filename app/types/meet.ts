@@ -1,9 +1,14 @@
 /**
- * Core data model for an inter-squad dual meet.
+ * Core data model.
  *
- * The entire meet is a single JSON document. It lives in localStorage on the
- * device and is pushed/pulled verbatim to the server (D1) when syncing, so
- * every type here must be plain JSON — no Map, Set, or Date instances.
+ * Two kinds of document. The **team** is season-long and owns the roster; a
+ * **meet** is one day's racing and refers to swimmers by id only. The roster is
+ * the single source of truth for who someone is, so fixing a spelling in March
+ * fixes January's results too — and removing someone archives them rather than
+ * deleting, since live results still point at their id.
+ *
+ * Everything here is plain JSON — no Map, Set, or Date — so the same value
+ * round-trips through IndexedDB and the server unchanged.
  */
 
 export type Gender = "M" | "F";
@@ -30,13 +35,12 @@ export type LaneLayout = "grid" | "list-asc" | "list-desc";
 export const LANE_LAYOUTS: LaneLayout[] = ["grid", "list-asc", "list-desc"];
 
 /** Lane numbers in the order they should be drawn for a layout. */
-export function orderedLanes(
-  laneCount: number,
-  layout: LaneLayout,
-): number[] {
+export function orderedLanes(laneCount: number, layout: LaneLayout): number[] {
   const lanes = Array.from({ length: laneCount }, (_, i) => i + 1);
   return layout === "list-desc" ? lanes.reverse() : lanes;
 }
+
+/* -------------------------------------------------------------------- team */
 
 export interface Swimmer {
   id: string;
@@ -47,8 +51,41 @@ export interface Swimmer {
   year: string;
   /** Optional squad/side for an inter-squad meet (e.g. "Blue" / "Gold"). */
   squad?: string;
-  /** Scratched swimmers stay in the roster but drop out of heats. */
-  active: boolean;
+  /**
+   * Off the roster, but kept so past results can still resolve their name.
+   * Archived swimmers are hidden from registration and lane pickers.
+   */
+  archived: boolean;
+}
+
+/** The season-long document: who's on the team, and what the team is called. */
+export interface TeamDoc {
+  version: number;
+  id: string;
+  name: string;
+  /** Free-text season label, e.g. "2026-27". */
+  season: string;
+  swimmers: Swimmer[];
+  updatedAt: number;
+  syncedAt: number | null;
+}
+
+export const TEAM_DOC_VERSION = 1;
+
+/* -------------------------------------------------------------------- meet */
+
+export type MeetType = "intersquad" | "dual" | "tri" | "invitational" | "time-trial";
+
+export const MEET_TYPES: Array<{ value: MeetType; label: string }> = [
+  { value: "intersquad", label: "Inter-squad" },
+  { value: "dual", label: "Dual" },
+  { value: "tri", label: "Tri" },
+  { value: "invitational", label: "Invitational" },
+  { value: "time-trial", label: "Time trial" },
+];
+
+export function meetTypeLabel(type: MeetType): string {
+  return MEET_TYPES.find((t) => t.value === type)?.label ?? "Meet";
 }
 
 export interface MeetEvent {
@@ -110,14 +147,17 @@ export interface Progress {
 }
 
 export interface MeetDoc {
-  /** Bumped when the shape changes so `migrate` can upgrade old saves. */
   version: number;
   id: string;
+  /** The team whose roster this meet's swimmer ids belong to. */
+  teamId: string;
   name: string;
   /** ISO date (yyyy-mm-dd). */
   date: string;
+  type: MeetType;
+  /** Who they're swimming, when that applies. */
+  opponent?: string;
   options: MeetOptions;
-  swimmers: Swimmer[];
   /** Order of this array is the order events are swum. */
   events: MeetEvent[];
   entries: Entries;
@@ -131,7 +171,19 @@ export interface MeetDoc {
   syncedAt: number | null;
 }
 
-export const MEET_DOC_VERSION = 1;
+export const MEET_DOC_VERSION = 2;
+
+/** Enough of a meet to render the schedule without loading the whole thing. */
+export interface MeetSummary {
+  id: string;
+  name: string;
+  date: string;
+  type: MeetType;
+  opponent?: string;
+  updatedAt: number;
+}
+
+/* ------------------------------------------------------------------ naming */
 
 export function swimmerName(s: Swimmer): string {
   return `${s.firstName} ${s.lastName}`.trim();
@@ -149,7 +201,31 @@ export function eventName(e: MeetEvent): string {
   return `${prefix}${e.distance} ${e.stroke}`;
 }
 
+/** "Dual vs Central" / "Inter-squad" — the subtitle in the meet list. */
+export function meetSubtitle(meet: Pick<MeetDoc, "type" | "opponent">): string {
+  const label = meetTypeLabel(meet.type);
+  return meet.opponent ? `${label} vs ${meet.opponent}` : label;
+}
+
 /** Whether a swimmer is eligible for an event, given its gender restriction. */
 export function isEligible(swimmer: Swimmer, event: MeetEvent): boolean {
   return event.gender === "Open" || event.gender === swimmer.gender;
+}
+
+/**
+ * Resolve a swimmer id against the roster. Results from past meets can point
+ * at archived swimmers, so this deliberately looks through the whole roster
+ * rather than just the active part.
+ */
+export function findSwimmer(
+  swimmers: Swimmer[],
+  id: string | null | undefined,
+): Swimmer | undefined {
+  if (!id) return undefined;
+  return swimmers.find((s) => s.id === id);
+}
+
+/** A placeholder for a swimmer id no longer in the roster at all. */
+export function missingSwimmerLabel(id: string): string {
+  return `(removed ${id.slice(0, 4)})`;
 }
