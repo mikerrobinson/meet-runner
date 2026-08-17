@@ -165,6 +165,22 @@ The team and each meet are separate documents, and only the ones actually behind
 get pushed. The roster always goes first: a meet's swimmer ids mean nothing to
 another device until the roster they point into has landed.
 
+**A device with no local data adopts the season rather than starting one.** On
+first run it asks the server for the team (and its meets) before creating
+anything, falling back to a fresh local team only if the server has none or
+can't be reached within a few seconds. Without that, opening the app on a second
+device would mint an empty team, push it, and shadow the real roster — the
+second device would look empty while cheerfully reporting "Synced".
+
+For the same reason auto-sync stays parked until the store has finished reading
+storage: before that, the in-memory team is a throwaway placeholder, and pushing
+it would put an empty roster on the server ahead of the real one.
+
+If a database somehow ends up with more than one team row, `getTeam` doesn't
+just take the newest — the newest is typically the empty one that caused the
+problem. It prefers the team the meets actually belong to, then the one with a
+roster, and only then recency.
+
 `app/state/auto-sync.tsx` pushes on its own, and is built to stay off the render
 path:
 

@@ -55,7 +55,7 @@ const BACKOFF_MS = [4000, 10_000, 30_000, 60_000];
 const SyncStatusContext = createContext<SyncStatus | null>(null);
 
 export function AutoSyncProvider({ children }: { children: ReactNode }) {
-  const { team, meets, markTeamSynced, markMeetSynced } = useAppStore();
+  const { ready, team, meets, markTeamSynced, markMeetSynced } = useAppStore();
 
   const [phase, setPhase] = useState<SyncPhase>("idle");
   // Defaults on; the stored preference is read once the client mounts.
@@ -65,8 +65,11 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
 
   // Live handles to things the timer callback needs, so the scheduling effect
   // doesn't have to re-run (and reset the debounce) on every edit.
-  const docsRef = useRef({ team, meets });
-  docsRef.current = { team, meets };
+  // `ready` matters as much as the documents: before the store has read
+  // storage, `team` is a throwaway placeholder, and pushing that would put an
+  // empty roster on the server ahead of the real one.
+  const docsRef = useRef({ ready, team, meets });
+  docsRef.current = { ready, team, meets };
   const markRef = useRef({ markTeamSynced, markMeetSynced });
   markRef.current = { markTeamSynced, markMeetSynced };
 
@@ -101,7 +104,12 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   const pump = useCallback(async () => {
     if (stoppedRef.current || inFlightRef.current) return;
 
-    const { team: currentTeam, meets: currentMeets } = docsRef.current;
+    const {
+      ready: isReady,
+      team: currentTeam,
+      meets: currentMeets,
+    } = docsRef.current;
+    if (!isReady) return;
     const staleTeam =
       currentTeam.syncedAt !== currentTeam.updatedAt ? currentTeam : null;
     const staleMeets = currentMeets.filter((m) => m.syncedAt !== m.updatedAt);
@@ -147,7 +155,7 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
     }
 
     const now = docsRef.current;
-    if (stoppedRef.current) return;
+    if (stoppedRef.current || !now.ready) return;
     const stillPending =
       now.team.syncedAt !== now.team.updatedAt ||
       now.meets.some((m) => m.syncedAt !== m.updatedAt);
@@ -194,19 +202,20 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   // The debounce itself: every edit restarts the clock, so a burst of taps
   // produces one push rather than one per tap.
   useEffect(() => {
-    if (!pending || !enabledRef.current) return;
+    if (!ready || !pending || !enabledRef.current) return;
     schedule(
       failuresRef.current === 0
         ? DEBOUNCE_MS
         : BACKOFF_MS[Math.min(failuresRef.current - 1, BACKOFF_MS.length - 1)],
     );
-  }, [pending, pendingCount, team.updatedAt, schedule]);
+  }, [ready, pending, pendingCount, team.updatedAt, schedule]);
 
   // Coming back from a dead zone, or back to the tab, is the moment most
   // worth retrying — waiting out the backoff would be silly.
   useEffect(() => {
     const retry = () => {
       if (stoppedRef.current || !enabledRef.current) return;
+      if (!docsRef.current.ready) return;
       failuresRef.current = 0;
       schedule(0);
     };

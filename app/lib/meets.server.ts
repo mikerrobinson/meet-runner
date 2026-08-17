@@ -202,18 +202,59 @@ export async function parseTeamBody(request: Request): Promise<TeamDoc> {
 
 /* -------------------------------------------------------------------- team */
 
-export async function getTeam(db: D1Database): Promise<TeamDoc | null> {
-  await ensureSchema(db);
-  // One team per install for now, so the newest row is the team.
-  const row = await db
-    .prepare("SELECT data FROM teams ORDER BY updated_at DESC LIMIT 1")
-    .first<{ data: string }>();
-  if (!row) return null;
+function parseTeamRow(data: string): TeamDoc | null {
   try {
-    return migrateTeam(JSON.parse(row.data));
+    return migrateTeam(JSON.parse(data));
   } catch {
     throw new SyncError("Stored team is corrupt", 500);
   }
+}
+
+/**
+ * The season's team.
+ *
+ * There should only ever be one row. More than one means some device minted
+ * its own team instead of adopting the season already here — in which case the
+ * newest row is usually the *empty* one it just created, so recency is exactly
+ * the wrong tiebreak. Decide by what the data says instead: whichever team the
+ * meets actually belong to, then whichever has a roster at all, and only then
+ * the most recently touched.
+ */
+export async function getTeam(db: D1Database): Promise<TeamDoc | null> {
+  await ensureSchema(db);
+
+  const { results } = await db
+    .prepare("SELECT id, updated_at, data FROM teams")
+    .all<{ id: string; updated_at: number; data: string }>();
+
+  if (results.length === 0) return null;
+  if (results.length === 1) return parseTeamRow(results[0].data);
+
+  const { results: meetCounts } = await db
+    .prepare(
+      "SELECT team_id, COUNT(*) AS n FROM meets WHERE team_id IS NOT NULL GROUP BY team_id",
+    )
+    .all<{ team_id: string; n: number }>();
+  const byTeam = new Map(meetCounts.map((row) => [row.team_id, row.n] as const));
+
+  const ranked = results
+    .map((row) => {
+      const team = parseTeamRow(row.data);
+      return {
+        team,
+        meets: byTeam.get(row.id) ?? 0,
+        swimmers: team?.swimmers.length ?? 0,
+        updatedAt: row.updated_at,
+      };
+    })
+    .sort(
+      (a, b) =>
+        b.meets - a.meets ||
+        b.swimmers - a.swimmers ||
+        b.updatedAt - a.updatedAt,
+    );
+
+  return ranked[0].team;
 }
 
 /** Same last-write-wins rule as meets: a stale push is rejected, not applied. */

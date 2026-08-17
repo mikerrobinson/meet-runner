@@ -17,6 +17,7 @@ import {
   writeTeam,
 } from "~/lib/db";
 import { createMeetDoc, createTeam } from "~/lib/documents";
+import { listMeets, pullMeet, pullTeam } from "~/lib/sync";
 import { buildHeats, shuffle } from "~/lib/heats";
 import { generateId } from "~/lib/id";
 import { isEligible } from "~/types/meet";
@@ -100,6 +101,51 @@ interface AppStore {
 
 const AppStoreContext = createContext<AppStore | null>(null);
 
+/** How long a brand-new device waits on the server before setting up alone. */
+const ADOPT_TIMEOUT_MS = 6000;
+
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    work,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error("timed out")), ms),
+    ),
+  ]);
+}
+
+/**
+ * Pull the season onto a device that has none. Returns null when the server
+ * has no team or can't be reached, in which case the caller starts fresh.
+ */
+async function adoptSeasonFromServer(): Promise<{
+  team: TeamDoc;
+  meets: MeetDoc[];
+} | null> {
+  let team: TeamDoc | null;
+  try {
+    team = await withTimeout(pullTeam(), ADOPT_TIMEOUT_MS);
+  } catch {
+    return null;
+  }
+  if (!team) return null;
+
+  const meets: MeetDoc[] = [];
+  try {
+    const summaries = await withTimeout(listMeets(), ADOPT_TIMEOUT_MS);
+    for (const summary of summaries) {
+      const meet = await pullMeet(summary.id);
+      // Only this team's meets: the table can hold others from a past season.
+      if (meet && meet.teamId === team.id) {
+        meets.push({ ...meet, syncedAt: meet.updatedAt });
+      }
+    }
+  } catch {
+    // The roster is the part that matters; meets can arrive on the next sync.
+  }
+
+  return { team: { ...team, syncedAt: team.updatedAt }, meets };
+}
+
 export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [team, setTeam] = useState<TeamDoc>(() => createTeam());
@@ -116,13 +162,32 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         const migrated = await migrateFromLocalStorage();
-        const loadedTeam = migrated?.team ?? (await readTeam());
-        const loadedMeets = migrated?.meets ?? (await readMeets());
+        let loadedTeam = migrated?.team ?? (await readTeam());
+        let loadedMeets = migrated?.meets ?? (await readMeets());
+
+        // A device with nothing on it must not invent a team. The season very
+        // likely already exists on the server, and minting a second one would
+        // both hide the real roster and leave this device looking empty but
+        // "synced". Ask the server first; only fall back to a fresh team if it
+        // genuinely has none (or can't be reached).
+        if (!loadedTeam) {
+          const fromServer = await adoptSeasonFromServer();
+          if (fromServer && !cancelled) {
+            loadedTeam = fromServer.team;
+            loadedMeets = fromServer.meets;
+            await writeTeam(loadedTeam);
+            await Promise.all(loadedMeets.map((m) => writeMeet(m)));
+          }
+        }
+
         if (cancelled) return;
 
         const nextTeam = loadedTeam ?? createTeam();
         setTeam(nextTeam);
         setMeets(loadedMeets);
+        // A team we adopted, migrated, or read back is already on disk; only a
+        // freshly created one still needs its first write. Meets are on disk in
+        // every one of those paths.
         persistedTeam.current = loadedTeam ? nextTeam : null;
         persistedMeets.current = new Map(loadedMeets.map((m) => [m.id, m]));
       } catch (error) {
