@@ -1,11 +1,14 @@
 import { useMemo, useState } from "react";
 import { Sheet, TextInput } from "./ui";
 import {
+  bySwimmer,
+  displayName,
   eventName,
   isEligible,
   swimmerName,
   type Heat,
   type MeetDoc,
+  type NameOrder,
   type Swimmer,
 } from "~/types/meet";
 
@@ -25,6 +28,7 @@ interface Candidate {
 export function LaneAssignSheet({
   meet,
   roster,
+  nameOrder,
   heat,
   lane,
   onAssign,
@@ -33,6 +37,7 @@ export function LaneAssignSheet({
   meet: MeetDoc;
   /** Active roster — archived swimmers can't be entered in new races. */
   roster: Swimmer[];
+  nameOrder: NameOrder;
   heat: Heat;
   lane: number;
   onAssign: (swimmerId: string) => void;
@@ -76,9 +81,9 @@ export function LaneAssignSheet({
         const aFree = a.seatedAt ? 1 : 0;
         const bFree = b.seatedAt ? 1 : 0;
         if (aFree !== bFree) return aFree - bFree;
-        return swimmerName(a.swimmer).localeCompare(swimmerName(b.swimmer));
+        return bySwimmer(nameOrder)(a.swimmer, b.swimmer);
       });
-  }, [roster, meet.heats, meet.results, heat.eventId, event, search]);
+  }, [roster, nameOrder, meet.heats, meet.results, heat.eventId, event, search]);
 
   return (
     <Sheet open title={`Lane ${lane} · who's swimming?`} onClose={onClose}>
@@ -114,7 +119,7 @@ export function LaneAssignSheet({
               >
                 <span className="min-w-0">
                   <span className="block truncate font-semibold">
-                    {swimmerName(swimmer)}
+                    {displayName(swimmer, nameOrder)}
                   </span>
                   <span className="block text-xs text-slate-500 dark:text-slate-400">
                     {swimmer.gender}

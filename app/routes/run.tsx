@@ -9,10 +9,10 @@ import { heatsForEvent } from "~/lib/heats";
 import { formatClock, formatTime, parseTime } from "~/lib/time";
 import { activeSwimmers, useAppStore } from "~/state/app-store";
 import {
+  displayName,
   eventName,
   findSwimmer,
   orderedLanes,
-  swimmerName,
   type Heat,
   type MeetDoc,
   type Result,
@@ -187,6 +187,7 @@ export default function RunMeet() {
                 clockRunning={clockRunning}
                 layout={layout}
                 laneCount={heat.lanes.length}
+                nameOrder={store.team.nameOrder}
                 onStop={() =>
                   store.stopLane(meet.id, heat, lane, Date.now() - meet.timer!.startedAt)
                 }
@@ -291,6 +292,7 @@ export default function RunMeet() {
         <LaneAssignSheet
           meet={meet}
           roster={activeSwimmers(store.team)}
+          nameOrder={store.team.nameOrder}
           heat={heat}
           lane={assigningLane}
           onAssign={(swimmerId) =>
@@ -308,7 +310,7 @@ export default function RunMeet() {
           result={resultsByLane.get(editingLane)}
           swimmerLabel={(() => {
             const s = findSwimmer(roster, heat.lanes[editingLane - 1]);
-            return s ? swimmerName(s) : `Lane ${editingLane}`;
+            return s ? displayName(s, store.team.nameOrder) : `Lane ${editingLane}`;
           })()}
           onSaveTime={(timeMs) => {
             const swimmerId = heat.lanes[editingLane - 1];

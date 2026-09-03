@@ -23,6 +23,7 @@ export function createTeam(name = "My Team"): TeamDoc {
     id: generateId(),
     name,
     season: String(new Date().getFullYear()),
+    nameOrder: "last",
     swimmers: [],
     updatedAt: Date.now(),
     syncedAt: null,
@@ -40,7 +41,7 @@ export function createMeetDoc(
     name: "New Meet",
     date: new Date().toISOString().slice(0, 10),
     type: "dual",
-    options: { laneCount: 6, laneLayout: "grid" },
+    options: { laneCount: 6, laneLayout: "grid", leadGender: "F" },
     events: [],
     entries: {},
     heats: [],
@@ -76,6 +77,7 @@ export function migrateTeam(input: unknown): TeamDoc | null {
     id: doc.id,
     name: doc.name ?? "My Team",
     season: doc.season ?? String(new Date().getFullYear()),
+    nameOrder: doc.nameOrder === "first" ? "first" : "last",
     swimmers: doc.swimmers.map(normalizeSwimmer),
     updatedAt: doc.updatedAt ?? Date.now(),
     syncedAt: doc.syncedAt ?? null,
@@ -97,6 +99,7 @@ export function migrateMeet(input: unknown, teamId?: string): MeetDoc | null {
 
   const laneCount = doc.options?.laneCount;
   const laneLayout = doc.options?.laneLayout as LaneLayout | undefined;
+  const leadGender = doc.options?.leadGender;
 
   return {
     version: MEET_DOC_VERSION,
@@ -112,6 +115,7 @@ export function migrateMeet(input: unknown, teamId?: string): MeetDoc | null {
         laneLayout === "list-asc" || laneLayout === "list-desc"
           ? laneLayout
           : "grid",
+      leadGender: leadGender === "M" ? "M" : "F",
     },
     events: doc.events,
     entries: doc.entries ?? {},

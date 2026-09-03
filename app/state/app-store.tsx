@@ -18,10 +18,12 @@ import {
 } from "~/lib/db";
 import { createMeetDoc, createTeam } from "~/lib/documents";
 import { listMeets, pullMeet, pullTeam } from "~/lib/sync";
+import { orderByLeadGender } from "~/lib/events";
 import { buildHeats, shuffle } from "~/lib/heats";
 import { generateId } from "~/lib/id";
 import { isEligible } from "~/types/meet";
 import type {
+  Gender,
   Heat,
   LaneCount,
   LaneLayout,
@@ -43,7 +45,9 @@ interface AppStore {
   meets: MeetDoc[];
 
   /* Team */
-  setTeamInfo: (patch: Partial<Pick<TeamDoc, "name" | "season">>) => void;
+  setTeamInfo: (
+    patch: Partial<Pick<TeamDoc, "name" | "season" | "nameOrder">>,
+  ) => void;
   addSwimmers: (swimmers: Swimmer[], mode: "replace" | "append") => void;
   updateSwimmer: (id: string, patch: Partial<Swimmer>) => void;
   setArchived: (id: string, archived: boolean) => void;
@@ -65,6 +69,7 @@ interface AppStore {
   ) => void;
   setLaneCount: (id: string, laneCount: LaneCount) => void;
   setLaneLayout: (id: string, laneLayout: LaneLayout) => void;
+  setLeadGender: (id: string, leadGender: Gender) => void;
   setEvents: (id: string, events: MeetEvent[]) => void;
   addEvent: (id: string, event: MeetEvent) => void;
   updateEvent: (id: string, eventId: string, patch: Partial<MeetEvent>) => void;
@@ -360,6 +365,14 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
       setLaneLayout: (id, laneLayout) =>
         editMeet(id, (m) => ({ ...m, options: { ...m.options, laneLayout } })),
+
+      // Reorders rather than regenerates, so entries and times survive a flip.
+      setLeadGender: (id, leadGender) =>
+        editMeet(id, (m) => ({
+          ...m,
+          options: { ...m.options, leadGender },
+          events: orderByLeadGender(m.events, leadGender),
+        })),
 
       setEvents: (id, events) => editMeet(id, (m) => ({ ...m, events })),
 

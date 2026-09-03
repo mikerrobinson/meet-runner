@@ -7,12 +7,13 @@ import {
   Card,
   Field,
   SectionTitle,
+  Segmented,
   TextInput,
 } from "~/components/ui";
 import { downloadFile } from "~/lib/csv";
 import { migrateMeet, migrateTeam } from "~/lib/documents";
 import { useAppStore } from "~/state/app-store";
-import type { MeetDoc, TeamDoc } from "~/types/meet";
+import { displayName, type MeetDoc, type NameOrder, type TeamDoc } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Settings · Meet Runner" }];
@@ -29,6 +30,21 @@ interface Backup {
 export default function Settings() {
   const { team, meets, setTeamInfo, replaceTeam, replaceMeet } = useAppStore();
   const [error, setError] = useState<string | null>(null);
+  // Show the setting against a real name where there is one.
+  const sample = team.swimmers.find((sw) => !sw.archived);
+  const example = sample
+    ? displayName(sample, team.nameOrder)
+    : displayName(
+        {
+          id: "",
+          firstName: "Avery",
+          lastName: "Aaronson",
+          gender: "F",
+          year: "",
+          archived: false,
+        },
+        team.nameOrder,
+      );
   const [message, setMessage] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -88,6 +104,19 @@ export default function Settings() {
               value={team.season}
               onChange={(e) => setTeamInfo({ season: e.target.value })}
               placeholder="2026-27"
+            />
+          </Field>
+          <Field
+            label="Name order"
+            hint={`Sorts and writes names this way on the roster, registration and run screens. The other name breaks ties, so siblings always come out in the same order. Example: ${example}.`}
+          >
+            <Segmented
+              value={team.nameOrder}
+              onChange={(value) => setTeamInfo({ nameOrder: value as NameOrder })}
+              options={[
+                { value: "last" as NameOrder, label: "Last, First" },
+                { value: "first" as NameOrder, label: "First Last" },
+              ]}
             />
           </Field>
         </div>

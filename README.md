@@ -26,6 +26,9 @@ The roster: import a CSV, add swimmers by hand, or tap through to a swimmer for
 their details and every time they've swum, grouped by event with a best-time
 marker and a link to each meet. Archiving is the only way off the roster.
 
+Names are ordered and written per **Settings → Name order**, which applies to
+the roster, registration, the lane buttons and the lane picker.
+
 ## Meets
 
 The season's schedule, newest first, each showing its type and opponent plus a
@@ -36,7 +39,10 @@ modes:
 **Setup** — two tabs.
 
 - _Events_: reorder with the arrows, set each event to Open / Girls / Boys, or
-  load the standard dual-meet order (11 events, or 22 split girls/boys).
+  load the standard dual-meet order — 22 events split girls/boys by default, or
+  11 "open" ones for an inter-squad meet. **First in each pair** flips the whole
+  lineup between girls-first and boys-first in one tap; it reorders the existing
+  events rather than rebuilding them, so entries and recorded times survive.
   Relays are just events — see below.
 - _Options_: 4, 6, or 8 lanes, and how the stopwatch arranges its buttons —
   a two-column grid, or a single column running low-to-high or high-to-low. The
@@ -45,13 +51,36 @@ modes:
   the arrangement as you pick. Eight lanes as a list is tall — it fits an iPad
   or an installed phone app, but may scroll slightly in mobile Safari.
 
-**Registration** — the team roster down the side, events across the top, tap a cell to
-enter or scratch. The whole screen is grid: the name column and the header row
-stay pinned however you scroll, and event columns divide the window evenly,
-falling back to sideways scrolling once there are more events than will fit at a
-tappable width. Cells grey out where a swimmer isn't eligible for a gendered
-event. Counts update live: entries per event in the header, events per swimmer
-in the row. Swimmers who turn up on the day get added under Team — the in-grid
+**Registration** — the team roster down the side, races across the top, tap a
+cell to enter or scratch.
+
+**One column per race, not per event.** A split lineup swims each race twice,
+but there's no reason to make you tap through twice as many columns when the
+swimmer's gender already says which of the two they belong in — tapping a girl's
+cell in "200 Free" enters her in the girls' 200 Free, and a boy's in the boys'.
+The header shows the distance, the stroke and both counts (`2/1`); the
+underlying event numbers are in its tooltip rather than taking a line. A race
+with no version for a swimmer greys out.
+
+**Girls / Boys** toggles in the header filter the roster. They sit inline with
+the sync chip so they cost no vertical space, and ride on a search param, so the
+grid never has to share state with the chrome. Showing everyone is the default
+and there's no "All" button — tapping the active toggle clears it, tapping the
+other swaps. With a filter on, the header counts switch to just that gender's.
+
+Rows are sorted and written per **Settings → Name order**: `Last, First` sorts
+by surname and writes it that way, `First Last` does the reverse — so the part
+you're scanning always comes first. Whichever name isn't sorted on breaks ties,
+so siblings never shuffle between renders. Names are always written in full, and
+rows carry subtle zebra striping to make a wide row easier to follow across.
+
+Sorting is display-only: the stored roster keeps its import order, so it never
+churns the document or the sync.
+
+The whole screen is grid: the name column and the header row stay pinned however
+you scroll, and columns divide the window evenly, falling back to sideways
+scrolling once there are more races than fit at a tappable width. Counts update
+live, including events-per-swimmer in each row. Swimmers who turn up on the day get added under Team — the in-grid
 search box and `+ Swimmer` button are hidden behind `SHOW_ROSTER_CONTROLS` in
 `app/routes/registration.tsx`, so flip that to `true` to bring them back.
 

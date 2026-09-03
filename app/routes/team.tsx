@@ -12,7 +12,12 @@ import {
 } from "~/components/ui";
 import { downloadFile, parseRosterCsv, toCsv } from "~/lib/csv";
 import { useAppStore } from "~/state/app-store";
-import { swimmerName, type Swimmer } from "~/types/meet";
+import {
+  bySwimmer,
+  displayName,
+  swimmerName,
+  type Swimmer,
+} from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Team · Meet Runner" }];
@@ -59,11 +64,11 @@ export default function Team() {
   const archived = team.swimmers.filter((s) => s.archived);
 
   const visible = useMemo(() => {
-    const list = showArchived ? team.swimmers : active;
     const query = search.trim().toLowerCase();
-    if (!query) return list;
-    return list.filter((s) => swimmerName(s).toLowerCase().includes(query));
-  }, [team.swimmers, active, showArchived, search]);
+    return (showArchived ? team.swimmers : active)
+      .filter((s) => !query || swimmerName(s).toLowerCase().includes(query))
+      .sort(bySwimmer(team.nameOrder));
+  }, [team.swimmers, active, showArchived, search, team.nameOrder]);
 
   return (
     <div className="space-y-4">
@@ -106,7 +111,7 @@ export default function Team() {
                             swimmer.archived ? "text-slate-400" : ""
                           }`}
                         >
-                          {swimmerName(swimmer)}
+                          {displayName(swimmer, team.nameOrder)}
                           {swimmer.archived && (
                             <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                               archived

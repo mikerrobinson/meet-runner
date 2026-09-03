@@ -13,7 +13,7 @@ import {
 } from "~/components/ui";
 import {
   COMMON_DISTANCES,
-  DUAL_MEET_EVENT_COUNT,
+  DUAL_MEET_RACE_COUNT,
   RELAY_DISTANCES,
   defaultEvents,
   makeEvent,
@@ -26,6 +26,7 @@ import {
   isRelay,
   orderedLanes,
   type EventGender,
+  type Gender,
   type LaneCount,
   type LaneLayout,
   type MeetDoc,
@@ -79,7 +80,7 @@ export default function Setup() {
 /* ------------------------------------------------------------------ events */
 
 function EventsTab({ meet }: { meet: MeetDoc }) {
-  const { addEvent, updateEvent, removeEvent, moveEvent, setEvents } =
+  const { addEvent, updateEvent, removeEvent, moveEvent, setEvents, setLeadGender } =
     useAppStore();
   const [distance, setDistance] = useState(50);
   const [stroke, setStroke] = useState<Stroke>("Free");
@@ -227,6 +228,23 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
       </Card>
 
       <Card>
+        <SectionTitle>Running order</SectionTitle>
+        <Field
+          label="First in each pair"
+          hint="Flips the whole lineup at once. Events keep their entries and times — it's a reorder, not a rebuild."
+        >
+          <Segmented
+            value={meet.options.leadGender}
+            onChange={(value) => setLeadGender(meet.id, value as Gender)}
+            options={[
+              { value: "F" as Gender, label: "Girls first" },
+              { value: "M" as Gender, label: "Boys first" },
+            ]}
+          />
+        </Field>
+      </Card>
+
+      <Card>
         <SectionTitle>Standard orders</SectionTitle>
         {hasResults && (
           <div className="mb-3">
@@ -236,17 +254,26 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
           </div>
         )}
         <div className="grid grid-cols-2 gap-2">
-          <Button onClick={() => setEvents(meet.id, defaultEvents("open"))}>
-            {DUAL_MEET_EVENT_COUNT} open events
+          <Button
+            variant="primary"
+            onClick={() =>
+              setEvents(
+                meet.id,
+                defaultEvents("split", meet.options.leadGender),
+              )
+            }
+          >
+            Girls &amp; boys ({DUAL_MEET_RACE_COUNT * 2})
           </Button>
-          <Button onClick={() => setEvents(meet.id, defaultEvents("split"))}>
-            {DUAL_MEET_EVENT_COUNT * 2} girls/boys
+          <Button onClick={() => setEvents(meet.id, defaultEvents("open"))}>
+            Open ({DUAL_MEET_RACE_COUNT})
           </Button>
         </div>
         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
           The usual dual-meet order: 200 Medley Relay, 200 Free, 200 IM, 50
           Free, 100 Fly, 100 Free, 500 Free, 200 Free Relay, 100 Back, 100
-          Breast, 400 Free Relay.
+          Breast, 400 Free Relay. &ldquo;Open&rdquo; swims each once, for an
+          inter-squad meet or a time trial.
         </p>
       </Card>
     </div>

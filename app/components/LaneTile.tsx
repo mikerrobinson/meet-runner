@@ -1,5 +1,11 @@
 import { formatTime } from "~/lib/time";
-import { shortName, type LaneLayout, type Result, type Swimmer } from "~/types/meet";
+import {
+  displayName,
+  type LaneLayout,
+  type NameOrder,
+  type Result,
+  type Swimmer,
+} from "~/types/meet";
 
 /**
  * Grid tiles stack their content; list rows run it left to right so the lane
@@ -43,6 +49,7 @@ export function LaneTile({
   clockRunning,
   layout,
   laneCount,
+  nameOrder,
   onStop,
   onEdit,
   onAssign,
@@ -54,6 +61,7 @@ export function LaneTile({
   clockRunning: boolean;
   layout: LaneLayout;
   laneCount: number;
+  nameOrder: NameOrder;
   onStop: () => void;
   onEdit: () => void;
   onAssign: () => void;
@@ -102,7 +110,7 @@ export function LaneTile({
           Lane {lane}
         </span>
         <span className="min-w-0 flex-1 truncate text-lg font-bold leading-tight">
-          {shortName(swimmer)}
+          {displayName(swimmer, nameOrder)}
         </span>
         <span className="shrink-0 text-2xl font-bold tabular-nums">{value}</span>
       </button>
@@ -117,7 +125,7 @@ export function LaneTile({
     >
       <span className="text-xs font-bold opacity-70">Lane {lane}</span>
       <span className="w-full truncate text-base font-bold leading-tight">
-        {shortName(swimmer)}
+        {displayName(swimmer, nameOrder)}
       </span>
       <span className="mt-0.5 text-2xl font-bold leading-none tabular-nums">
         {value}

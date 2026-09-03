@@ -11,7 +11,7 @@ import {
   Sheet,
   TextInput,
 } from "~/components/ui";
-import { DUAL_MEET_EVENT_COUNT, defaultEvents } from "~/lib/events";
+import { DUAL_MEET_RACE_COUNT, defaultEvents } from "~/lib/events";
 import { useAppStore } from "~/state/app-store";
 import {
   MEET_TYPES,
@@ -135,7 +135,7 @@ function NewMeetSheet({
       opponent: opponent.trim() || undefined,
       // Most meets swim the same lineup, so start from the standard order
       // rather than an empty setup screen.
-      events: withDefaults ? defaultEvents("open") : [],
+      events: withDefaults ? defaultEvents("split") : [],
     });
     onClose();
     navigate(`/meets/${meet.id}/setup`);
@@ -192,7 +192,8 @@ function NewMeetSheet({
             className="h-6 w-6 rounded border-slate-300"
           />
           <span className="text-sm font-semibold">
-            Start with the standard {DUAL_MEET_EVENT_COUNT}-event order
+            Start with the standard girls/boys order (
+            {DUAL_MEET_RACE_COUNT * 2} events)
           </span>
         </label>
 

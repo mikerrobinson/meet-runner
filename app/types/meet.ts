@@ -89,6 +89,14 @@ export interface Swimmer {
   archived: boolean;
 }
 
+/**
+ * How names are ordered and written. "last" gives "Aaronson, Avery" sorted by
+ * surname; "first" gives "Avery Aaronson" sorted by given name. A coach's
+ * preference rather than a device's, so it lives on the team and follows them
+ * between devices.
+ */
+export type NameOrder = "first" | "last";
+
 /** The season-long document: who's on the team, and what the team is called. */
 export interface TeamDoc {
   version: number;
@@ -96,6 +104,7 @@ export interface TeamDoc {
   name: string;
   /** Free-text season label, e.g. "2026-27". */
   season: string;
+  nameOrder: NameOrder;
   swimmers: Swimmer[];
   updatedAt: number;
   syncedAt: number | null;
@@ -160,6 +169,12 @@ export interface Result {
 export interface MeetOptions {
   laneCount: LaneCount;
   laneLayout: LaneLayout;
+  /**
+   * Which gender swims first in each pair of a split lineup. Flipping it
+   * reorders the existing events rather than rebuilding them, so entries and
+   * recorded times survive.
+   */
+  leadGender: Gender;
 }
 
 /**
@@ -220,10 +235,32 @@ export function swimmerName(s: Swimmer): string {
   return `${s.firstName} ${s.lastName}`.trim();
 }
 
-/** "Smith, J." — fits in a lane button without wrapping. */
-export function shortName(s: Swimmer): string {
-  const initial = s.firstName ? `${s.firstName[0]}.` : "";
-  return `${s.lastName}${initial ? `, ${initial}` : ""}`;
+/**
+ * Roster order. Whichever name isn't being sorted on breaks the tie, so
+ * siblings — same surname, different given name — always land in the same
+ * order rather than shuffling between renders.
+ *
+ * Display-only: the stored roster keeps its import order, so sorting never
+ * churns the document or the sync.
+ */
+export function bySwimmer(order: NameOrder = "last") {
+  return (a: Swimmer, b: Swimmer): number =>
+    order === "first"
+      ? a.firstName.localeCompare(b.firstName) ||
+        a.lastName.localeCompare(b.lastName)
+      : a.lastName.localeCompare(b.lastName) ||
+        a.firstName.localeCompare(b.firstName);
+}
+
+/**
+ * A name written the way the list is sorted, so the part you're scanning comes
+ * first: "Aaronson, Avery" under a surname sort, "Avery Aaronson" under a
+ * given-name one. Always both names in full — no initials.
+ */
+export function displayName(s: Swimmer, order: NameOrder = "last"): string {
+  if (order === "first") return `${s.firstName} ${s.lastName}`.trim();
+  const first = s.firstName.trim();
+  return first ? `${s.lastName}, ${first}` : s.lastName;
 }
 
 export function eventName(e: MeetEvent): string {
@@ -236,6 +273,15 @@ export function eventName(e: MeetEvent): string {
 export function meetSubtitle(meet: Pick<MeetDoc, "type" | "opponent">): string {
   const label = meetTypeLabel(meet.type);
   return meet.opponent ? `${label} vs ${meet.opponent}` : label;
+}
+
+/**
+ * Girls' and boys' versions of the same race share a key. Registration shows
+ * one column per race and picks the right event from the swimmer's gender, so
+ * a split lineup doesn't double the width of the grid.
+ */
+export function raceKey(event: Pick<MeetEvent, "distance" | "stroke">): string {
+  return `${event.distance}|${event.stroke}`;
 }
 
 /** Whether a swimmer is eligible for an event, given its gender restriction. */
