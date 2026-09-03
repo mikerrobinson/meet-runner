@@ -2,7 +2,7 @@
 
 A phone/iPad app for managing a high-school swim team through a season: one
 roster that carries across the year, a schedule of meets, and a multi-lane
-stopwatch for running each one. Individual events only — no relays.
+stopwatch for running each one.
 
 Local-first. Everything lives on the device, so the app keeps working on a pool
 deck with no signal. It backs itself up to the server in the background as you
@@ -36,7 +36,8 @@ modes:
 **Setup** — two tabs.
 
 - _Events_: reorder with the arrows, set each event to Open / Girls / Boys, or
-  load a standard 8- or 16-event dual meet order.
+  load the standard dual-meet order (11 events, or 22 split girls/boys).
+  Relays are just events — see below.
 - _Options_: 4, 6, or 8 lanes, and how the stopwatch arranges its buttons —
   a two-column grid, or a single column running low-to-high or high-to-low. The
   list layouts let someone watching from the side map a finish straight onto a
@@ -87,6 +88,23 @@ search box and `+ Swimmer` button are hidden behind `SHOW_ROSTER_CONTROLS` in
 
 **Results** shows each event ranked across all its heats, and exports a results
 CSV or a full JSON backup.
+
+## Relays
+
+A relay is timed like any other event: one lane, one clock, one time. The app
+deliberately doesn't model the four legs. A relay lane is held by a **single
+swimmer standing in for the squad** — usually whoever leads off — so register
+one swimmer per relay team, or leave the event empty and assign lanes at the
+blocks with `+ Add swimmer`.
+
+That keeps seeding, the stopwatch, results, export and swimmer history working
+unchanged, at the cost of one simplification worth knowing: the relay time is
+credited to that one swimmer, so it shows up under their name in results and on
+their swimmer page. Splits and per-leg credit would need a real relay model.
+
+`Free Relay` and `Medley Relay` are strokes like any other, and the standard
+dual-meet order now includes them where they actually fall — 200 Medley Relay
+opens, 400 Free Relay closes.
 
 ## Adding it to a home screen
 

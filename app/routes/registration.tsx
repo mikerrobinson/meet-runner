@@ -4,7 +4,13 @@ import type { Route } from "./+types/registration";
 import { SwimmerSheet } from "~/components/SwimmerSheet";
 import { Button, EmptyState, TextInput } from "~/components/ui";
 import { activeSwimmers, useAppStore } from "~/state/app-store";
-import { eventName, isEligible, shortName, type Swimmer } from "~/types/meet";
+import {
+  eventName,
+  isEligible,
+  shortName,
+  shortStroke,
+  type Swimmer,
+} from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Registration · Meet Runner" }];
@@ -148,7 +154,7 @@ export default function Registration() {
                   >
                     <span className="block text-slate-400">{index + 1}</span>
                     <span className="block">{event.distance}</span>
-                    <span className="block">{event.stroke}</span>
+                    <span className="block">{shortStroke(event.stroke)}</span>
                     <span
                       className={`block font-normal ${
                         event.gender === "Open"

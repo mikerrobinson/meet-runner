@@ -16,9 +16,40 @@ export type Gender = "M" | "F";
 /** Events can be restricted to one gender, or open to everyone. */
 export type EventGender = Gender | "Open";
 
-export type Stroke = "Free" | "Back" | "Breast" | "Fly" | "IM";
+export type Stroke =
+  | "Free"
+  | "Back"
+  | "Breast"
+  | "Fly"
+  | "IM"
+  | "Free Relay"
+  | "Medley Relay";
 
-export const STROKES: Stroke[] = ["Free", "Back", "Breast", "Fly", "IM"];
+export const STROKES: Stroke[] = [
+  "Free",
+  "Back",
+  "Breast",
+  "Fly",
+  "IM",
+  "Free Relay",
+  "Medley Relay",
+];
+
+/**
+ * Relays are timed exactly like any other event: one lane, one clock, one
+ * time. The app doesn't model the four legs — a relay lane is held by a single
+ * swimmer standing in for the squad, usually whoever leads off.
+ */
+export function isRelay(event: Pick<MeetEvent, "stroke">): boolean {
+  return event.stroke.endsWith("Relay");
+}
+
+/** Squeezed for the registration grid, where a column is about 3.5rem wide. */
+export function shortStroke(stroke: Stroke): string {
+  if (stroke === "Free Relay") return "Free R";
+  if (stroke === "Medley Relay") return "Mdly R";
+  return stroke;
+}
 
 export type LaneCount = 4 | 6 | 8;
 

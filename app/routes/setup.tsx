@@ -11,12 +11,19 @@ import {
   Segmented,
   Select,
 } from "~/components/ui";
-import { COMMON_DISTANCES, defaultEvents, makeEvent } from "~/lib/events";
+import {
+  COMMON_DISTANCES,
+  DUAL_MEET_EVENT_COUNT,
+  RELAY_DISTANCES,
+  defaultEvents,
+  makeEvent,
+} from "~/lib/events";
 import { useAppStore } from "~/state/app-store";
 import {
   LANE_COUNTS,
   STROKES,
   eventName,
+  isRelay,
   orderedLanes,
   type EventGender,
   type LaneCount,
@@ -78,6 +85,12 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
   const [stroke, setStroke] = useState<Stroke>("Free");
   const [gender, setGender] = useState<EventGender>("Open");
 
+  const relay = isRelay({ stroke });
+  const distances = relay ? RELAY_DISTANCES : COMMON_DISTANCES;
+  // Keep the distance valid when switching to or from a relay, so the form
+  // can't offer something like a 50 Medley Relay.
+  const chosen = distances.includes(distance) ? distance : relay ? 200 : 50;
+
   const hasResults = meet.results.length > 0;
 
   return (
@@ -96,9 +109,17 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
                   {index + 1}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-semibold">{eventName(event)}</p>
+                  <p className="truncate font-semibold">
+                    {eventName(event)}
+                    {isRelay(event) && (
+                      <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-800 dark:bg-violet-950 dark:text-violet-200">
+                        relay
+                      </span>
+                    )}
+                  </p>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    {(meet.entries[event.id] ?? []).length} entered
+                    {(meet.entries[event.id] ?? []).length}{" "}
+                    {isRelay(event) ? "lanes filled" : "entered"}
                   </p>
                 </div>
                 <Select
@@ -154,10 +175,10 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
         <div className="grid grid-cols-3 gap-2">
           <Field label="Distance">
             <Select
-              value={distance}
+              value={chosen}
               onChange={(e) => setDistance(Number(e.target.value))}
             >
-              {COMMON_DISTANCES.map((d) => (
+              {distances.map((d) => (
                 <option key={d} value={d}>
                   {d}
                 </option>
@@ -192,10 +213,17 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
           variant="primary"
           size="lg"
           full
-          onClick={() => addEvent(meet.id, makeEvent(distance, stroke, gender))}
+          onClick={() => addEvent(meet.id, makeEvent(chosen, stroke, gender))}
         >
-          Add {distance} {stroke}
+          Add {chosen} {stroke}
         </Button>
+        {relay && (
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+            Relays are timed like any other event — one clock per lane. Put one
+            swimmer in each relay's lane to stand for the squad; the four legs
+            aren&rsquo;t tracked separately.
+          </p>
+        )}
       </Card>
 
       <Card>
@@ -209,15 +237,16 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
         )}
         <div className="grid grid-cols-2 gap-2">
           <Button onClick={() => setEvents(meet.id, defaultEvents("open"))}>
-            8 open events
+            {DUAL_MEET_EVENT_COUNT} open events
           </Button>
           <Button onClick={() => setEvents(meet.id, defaultEvents("split"))}>
-            16 girls/boys
+            {DUAL_MEET_EVENT_COUNT * 2} girls/boys
           </Button>
         </div>
         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-          Individual events only — 200 Free, 200 IM, 50 Free, 100 Fly, 100 Free,
-          500 Free, 100 Back, 100 Breast.
+          The usual dual-meet order: 200 Medley Relay, 200 Free, 200 IM, 50
+          Free, 100 Fly, 100 Free, 500 Free, 200 Free Relay, 100 Back, 100
+          Breast, 400 Free Relay.
         </p>
       </Card>
     </div>

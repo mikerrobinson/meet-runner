@@ -11,7 +11,7 @@ import {
   Sheet,
   TextInput,
 } from "~/components/ui";
-import { defaultEvents } from "~/lib/events";
+import { DUAL_MEET_EVENT_COUNT, defaultEvents } from "~/lib/events";
 import { useAppStore } from "~/state/app-store";
 import {
   MEET_TYPES,
@@ -192,7 +192,7 @@ function NewMeetSheet({
             className="h-6 w-6 rounded border-slate-300"
           />
           <span className="text-sm font-semibold">
-            Start with the standard 8-event order
+            Start with the standard {DUAL_MEET_EVENT_COUNT}-event order
           </span>
         </label>
 
