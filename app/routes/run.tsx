@@ -9,12 +9,16 @@ import { heatsForEvent } from "~/lib/heats";
 import { formatClock, formatTime, parseTime } from "~/lib/time";
 import { activeSwimmers, useAppStore } from "~/state/app-store";
 import {
+  bySwimmer,
   displayName,
   eventName,
   findSwimmer,
+  isDiving,
   orderedLanes,
   type Heat,
   type MeetDoc,
+  type MeetEvent,
+  type NameOrder,
   type Result,
   type Swimmer,
 } from "~/types/meet";
@@ -48,9 +52,10 @@ export default function RunMeet() {
   );
   const heat: Heat | undefined = heats[heatIndex];
 
-  // Seed heats the first time we land on an event.
+  // Seed heats the first time we land on an event. Diving never gets heats —
+  // it's in the lineup so divers can see it, not to be run from here.
   useEffect(() => {
-    if (meet && event) store.ensureHeats(meet.id, event.id);
+    if (meet && event && !isDiving(event)) store.ensureHeats(meet.id, event.id);
   }, [meet, event, store]);
 
   const layout = meet?.options.laneLayout ?? "grid";
@@ -159,7 +164,14 @@ export default function RunMeet() {
         </Button>
       </div>
 
-      {heats.length === 0 || !heat ? (
+      {isDiving(event) ? (
+        <DivingPanel
+          meet={meet}
+          event={event}
+          roster={roster}
+          nameOrder={store.team.nameOrder}
+        />
+      ) : heats.length === 0 || !heat ? (
         <EmptyState title="Nobody is entered in this event">
           <Link
             to={`/meets/${meet.id}/registration`}
@@ -333,6 +345,62 @@ export default function RunMeet() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Diving keeps its place in the running order so the event numbers match the
+ * printed program, but there is nothing to time here — the board runs on its
+ * own sheet. All this does is show who's on it and let you move past.
+ */
+function DivingPanel({
+  meet,
+  event,
+  roster,
+  nameOrder,
+}: {
+  meet: MeetDoc;
+  event: MeetEvent;
+  roster: Swimmer[];
+  nameOrder: NameOrder;
+}) {
+  const divers = (meet.entries[event.id] ?? [])
+    .map((id) => findSwimmer(roster, id))
+    .filter((s): s is Swimmer => s !== undefined)
+    .sort(bySwimmer(nameOrder));
+
+  return (
+    <div className="rounded-2xl bg-sky-50 p-4 dark:bg-sky-950/40">
+      <p className="text-sm font-semibold text-sky-900 dark:text-sky-100">
+        Diving isn&rsquo;t timed here — scored on the diving sheet.
+      </p>
+      {divers.length === 0 ? (
+        <p className="mt-2 text-sm text-sky-800 dark:text-sky-200">
+          Nobody is on the board.{" "}
+          <Link
+            to={`/meets/${meet.id}/registration`}
+            className="font-semibold underline"
+          >
+            Add divers
+          </Link>{" "}
+          if that&rsquo;s not right.
+        </p>
+      ) : (
+        <ul className="mt-2 space-y-0.5">
+          {divers.map((diver) => (
+            <li
+              key={diver.id}
+              className="text-base font-semibold text-sky-900 dark:text-sky-100"
+            >
+              {displayName(diver, nameOrder)}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-3 text-xs text-sky-700 dark:text-sky-300">
+        Use the arrows above to carry on with the next event.
+      </p>
     </div>
   );
 }

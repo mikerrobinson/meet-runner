@@ -11,7 +11,7 @@ import {
   Sheet,
   TextInput,
 } from "~/components/ui";
-import { DUAL_MEET_RACE_COUNT, defaultEvents } from "~/lib/events";
+import { defaultEvents, dualMeetRaceCount } from "~/lib/events";
 import { useAppStore } from "~/state/app-store";
 import {
   MEET_TYPES,
@@ -193,7 +193,7 @@ function NewMeetSheet({
           />
           <span className="text-sm font-semibold">
             Start with the standard girls/boys order (
-            {DUAL_MEET_RACE_COUNT * 2} events)
+            {dualMeetRaceCount(true) * 2} events)
           </span>
         </label>
 

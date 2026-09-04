@@ -34,14 +34,19 @@ export function createMeetDoc(
   teamId: string,
   patch: Partial<MeetDoc> = {},
 ): MeetDoc {
-  return {
+  const doc: MeetDoc = {
     version: MEET_DOC_VERSION,
     id: generateId(),
     teamId,
     name: "New Meet",
     date: new Date().toISOString().slice(0, 10),
     type: "dual",
-    options: { laneCount: 6, laneLayout: "grid", leadGender: "F" },
+    options: {
+      laneCount: 6,
+      laneLayout: "grid",
+      leadGender: "F",
+      includeDiving: true,
+    },
     events: [],
     entries: {},
     heats: [],
@@ -51,6 +56,15 @@ export function createMeetDoc(
     updatedAt: Date.now(),
     syncedAt: null,
     ...patch,
+  };
+  // The lineup is the truth about diving — a meet started from an empty event
+  // list has no Diving event, so the option shouldn't claim otherwise.
+  return {
+    ...doc,
+    options: {
+      ...doc.options,
+      includeDiving: doc.events.some((e) => e.stroke === "Diving"),
+    },
   };
 }
 
@@ -116,6 +130,10 @@ export function migrateMeet(input: unknown, teamId?: string): MeetDoc | null {
           ? laneLayout
           : "grid",
       leadGender: leadGender === "M" ? "M" : "F",
+      // Older saves predate the option; infer it from what's actually there.
+      includeDiving:
+        doc.options?.includeDiving ??
+        (doc.events ?? []).some((e) => e.stroke === "Diving"),
     },
     events: doc.events,
     entries: doc.entries ?? {},

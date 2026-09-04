@@ -18,10 +18,10 @@ import {
 } from "~/lib/db";
 import { createMeetDoc, createTeam } from "~/lib/documents";
 import { listMeets, pullMeet, pullTeam } from "~/lib/sync";
-import { orderByLeadGender } from "~/lib/events";
+import { orderByLeadGender, withDiving, withoutDiving } from "~/lib/events";
 import { buildHeats, shuffle } from "~/lib/heats";
 import { generateId } from "~/lib/id";
-import { isEligible } from "~/types/meet";
+import { isDiving, isEligible } from "~/types/meet";
 import type {
   Gender,
   Heat,
@@ -70,6 +70,7 @@ interface AppStore {
   setLaneCount: (id: string, laneCount: LaneCount) => void;
   setLaneLayout: (id: string, laneLayout: LaneLayout) => void;
   setLeadGender: (id: string, leadGender: Gender) => void;
+  setIncludeDiving: (id: string, includeDiving: boolean) => void;
   setEvents: (id: string, events: MeetEvent[]) => void;
   addEvent: (id: string, event: MeetEvent) => void;
   updateEvent: (id: string, eventId: string, patch: Partial<MeetEvent>) => void;
@@ -286,6 +287,18 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       return { ...meet, heats: meet.heats.filter((h) => h.eventId !== eventId) };
     };
 
+    /**
+     * The lineup is the truth about diving; the option just reports it. Run
+     * after any change to the events so pulling the last Diving event out with
+     * the X also turns the setting off.
+     */
+    const withDivingInStep = (meet: MeetDoc): MeetDoc => {
+      const includeDiving = meet.events.some(isDiving);
+      return includeDiving === meet.options.includeDiving
+        ? meet
+        : { ...meet, options: { ...meet.options, includeDiving } };
+    };
+
     return {
       ready,
       team,
@@ -374,7 +387,32 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           events: orderByLeadGender(m.events, leadGender),
         })),
 
-      setEvents: (id, events) => editMeet(id, (m) => ({ ...m, events })),
+      // Diving lives in the lineup as an ordinary event, so the option is a
+      // reflection of it rather than a separate setting to keep in sync.
+      setIncludeDiving: (id, includeDiving) =>
+        editMeet(id, (m) => {
+          if (includeDiving) {
+            return withDivingInStep({
+              ...m,
+              events: withDiving(m.events, m.options.leadGender),
+            });
+          }
+          // Turning it off is a removal like any other, so the divers it had
+          // entered go with it rather than lingering under a dead event id.
+          const dropped = new Set(m.events.filter(isDiving).map((e) => e.id));
+          const entries = { ...m.entries };
+          for (const eventId of dropped) delete entries[eventId];
+          return withDivingInStep({
+            ...m,
+            events: withoutDiving(m.events),
+            entries,
+            heats: m.heats.filter((h) => !dropped.has(h.eventId)),
+            results: m.results.filter((r) => !dropped.has(r.eventId)),
+          });
+        }),
+
+      setEvents: (id, events) =>
+        editMeet(id, (m) => withDivingInStep({ ...m, events })),
 
       addEvent: (id, event) =>
         editMeet(id, (m) => ({ ...m, events: [...m.events, event] })),
@@ -409,14 +447,14 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         editMeet(id, (m) => {
           const entries = { ...m.entries };
           delete entries[eventId];
-          return {
+          return withDivingInStep({
             ...m,
             events: m.events.filter((e) => e.id !== eventId),
             entries,
             heats: m.heats.filter((h) => h.eventId !== eventId),
             results: m.results.filter((r) => r.eventId !== eventId),
             progress: { eventIndex: 0, heatIndex: 0 },
-          };
+          });
         }),
 
       moveEvent: (id, eventId, direction) =>

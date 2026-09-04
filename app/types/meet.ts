@@ -23,8 +23,14 @@ export type Stroke =
   | "Fly"
   | "IM"
   | "Free Relay"
-  | "Medley Relay";
+  | "Medley Relay"
+  | "Diving";
 
+/**
+ * Strokes offered when adding an event by hand. Diving is deliberately absent:
+ * it's added and removed by the meet's "include diving" option, not picked with
+ * a distance like a swim.
+ */
 export const STROKES: Stroke[] = [
   "Free",
   "Back",
@@ -34,6 +40,18 @@ export const STROKES: Stroke[] = [
   "Free Relay",
   "Medley Relay",
 ];
+
+/**
+ * Diving sits in the event list purely so divers can see it on the
+ * registration grid alongside their swims — plenty of divers swim too. It
+ * isn't timed, scored, or run here; the app is not a diving tool.
+ */
+export function isDiving(event: Pick<MeetEvent, "stroke">): boolean {
+  return event.stroke === "Diving";
+}
+
+/** Placeholder distance for diving, which has none. Never displayed. */
+export const DIVING_DISTANCE = 1;
 
 /**
  * Relays are timed exactly like any other event: one lane, one clock, one
@@ -170,6 +188,11 @@ export interface MeetOptions {
   laneCount: LaneCount;
   laneLayout: LaneLayout;
   /**
+   * Whether the lineup carries a Diving event. Kept in step with the events
+   * themselves: removing the last Diving event switches this off.
+   */
+  includeDiving: boolean;
+  /**
    * Which gender swims first in each pair of a split lineup. Flipping it
    * reorders the existing events rather than rebuilding them, so entries and
    * recorded times survive.
@@ -266,6 +289,8 @@ export function displayName(s: Swimmer, order: NameOrder = "last"): string {
 export function eventName(e: MeetEvent): string {
   if (e.name) return e.name;
   const prefix = e.gender === "Open" ? "" : e.gender === "M" ? "Boys " : "Girls ";
+  // Diving carries a placeholder distance, so don't write it out.
+  if (isDiving(e)) return `${prefix}Diving`;
   return `${prefix}${e.distance} ${e.stroke}`;
 }
 

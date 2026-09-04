@@ -13,9 +13,9 @@ import {
 } from "~/components/ui";
 import {
   COMMON_DISTANCES,
-  DUAL_MEET_RACE_COUNT,
   RELAY_DISTANCES,
   defaultEvents,
+  dualMeetRaceCount,
   makeEvent,
 } from "~/lib/events";
 import { useAppStore } from "~/state/app-store";
@@ -23,6 +23,7 @@ import {
   LANE_COUNTS,
   STROKES,
   eventName,
+  isDiving,
   isRelay,
   orderedLanes,
   type EventGender,
@@ -80,8 +81,15 @@ export default function Setup() {
 /* ------------------------------------------------------------------ events */
 
 function EventsTab({ meet }: { meet: MeetDoc }) {
-  const { addEvent, updateEvent, removeEvent, moveEvent, setEvents, setLeadGender } =
-    useAppStore();
+  const {
+    addEvent,
+    updateEvent,
+    removeEvent,
+    moveEvent,
+    setEvents,
+    setIncludeDiving,
+    setLeadGender,
+  } = useAppStore();
   const [distance, setDistance] = useState(50);
   const [stroke, setStroke] = useState<Stroke>("Free");
   const [gender, setGender] = useState<EventGender>("Open");
@@ -115,6 +123,11 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
                     {isRelay(event) && (
                       <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-800 dark:bg-violet-950 dark:text-violet-200">
                         relay
+                      </span>
+                    )}
+                    {isDiving(event) && (
+                      <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800 dark:bg-sky-950 dark:text-sky-200">
+                        not timed here
                       </span>
                     )}
                   </p>
@@ -228,6 +241,23 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
       </Card>
 
       <Card>
+        <SectionTitle>Diving</SectionTitle>
+        <Field
+          label="Diving event"
+          hint="Adds Diving to the order so divers can see it on the registration grid alongside their swims. It isn't scored or timed here — move or remove it like any other event."
+        >
+          <Segmented
+            value={meet.options.includeDiving ? "yes" : "no"}
+            onChange={(value) => setIncludeDiving(meet.id, value === "yes")}
+            options={[
+              { value: "yes", label: "Include" },
+              { value: "no", label: "Leave out" },
+            ]}
+          />
+        </Field>
+      </Card>
+
+      <Card>
         <SectionTitle>Running order</SectionTitle>
         <Field
           label="First in each pair"
@@ -259,21 +289,34 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
             onClick={() =>
               setEvents(
                 meet.id,
-                defaultEvents("split", meet.options.leadGender),
+                defaultEvents(
+                  "split",
+                  meet.options.leadGender,
+                  meet.options.includeDiving,
+                ),
               )
             }
           >
-            Girls &amp; boys ({DUAL_MEET_RACE_COUNT * 2})
+            Girls &amp; boys ({dualMeetRaceCount(meet.options.includeDiving) * 2}
+            )
           </Button>
-          <Button onClick={() => setEvents(meet.id, defaultEvents("open"))}>
-            Open ({DUAL_MEET_RACE_COUNT})
+          <Button
+            onClick={() =>
+              setEvents(
+                meet.id,
+                defaultEvents("open", "F", meet.options.includeDiving),
+              )
+            }
+          >
+            Open ({dualMeetRaceCount(meet.options.includeDiving)})
           </Button>
         </div>
         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
           The usual dual-meet order: 200 Medley Relay, 200 Free, 200 IM, 50
-          Free, 100 Fly, 100 Free, 500 Free, 200 Free Relay, 100 Back, 100
-          Breast, 400 Free Relay. &ldquo;Open&rdquo; swims each once, for an
-          inter-squad meet or a time trial.
+          Free, {meet.options.includeDiving && "Diving, "}100 Fly, 100 Free, 500
+          Free, 200 Free Relay, 100 Back, 100 Breast, 400 Free Relay.
+          &ldquo;Open&rdquo; swims each once, for an inter-squad meet or a time
+          trial.
         </p>
       </Card>
     </div>

@@ -64,6 +64,13 @@ interface Race {
 }
 
 /** The event in this race that a given swimmer would actually swim. */
+/** How a race reads in prose — diving has no distance worth printing. */
+function raceLabel(race: Race): string {
+  return race.stroke === "Diving"
+    ? "Diving"
+    : `${race.distance} ${race.stroke}`;
+}
+
 function eventFor(race: Race, swimmer: Swimmer): MeetEvent | undefined {
   const own = swimmer.gender === "F" ? race.girls : race.boys;
   return own ?? race.open;
@@ -252,10 +259,17 @@ export default function Registration() {
                 <th
                   key={race.key}
                   className="sticky top-0 z-20 border-b border-r border-slate-300 bg-slate-100 px-0.5 py-1 text-center text-[11px] font-bold leading-tight dark:border-slate-700 dark:bg-slate-800"
-                  title={`${race.distance} ${race.stroke} · event ${race.numbers.join(", ")}`}
+                  title={`${raceLabel(race)} · event ${race.numbers.join(", ")}`}
                 >
-                  <span className="block">{race.distance}</span>
-                  <span className="block">{shortStroke(race.stroke)}</span>
+                  {race.stroke === "Diving" ? (
+                    // No distance to show, so the name takes both lines.
+                    <span className="block py-1.5">Diving</span>
+                  ) : (
+                    <>
+                      <span className="block">{race.distance}</span>
+                      <span className="block">{shortStroke(race.stroke)}</span>
+                    </>
+                  )}
                   <span className="block font-normal text-slate-500">
                     {headerCount(race)}
                   </span>
@@ -298,7 +312,7 @@ export default function Registration() {
                           type="button"
                           disabled={event === undefined}
                           aria-pressed={isIn}
-                          aria-label={`${displayName(swimmer, team.nameOrder)} in ${race.distance} ${race.stroke}`}
+                          aria-label={`${displayName(swimmer, team.nameOrder)} in ${raceLabel(race)}`}
                           onClick={() =>
                             event && toggleEntry(meet.id, event.id, swimmer.id)
                           }
