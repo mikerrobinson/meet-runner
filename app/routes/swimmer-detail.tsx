@@ -11,6 +11,7 @@ import {
 } from "~/components/ui";
 import { formatTime } from "~/lib/time";
 import { currentSeason, enrollmentFor } from "~/lib/roster";
+import { allResults } from "~/lib/timing";
 import { useAppStore } from "~/state/app-store";
 import {
   ageOn,
@@ -53,16 +54,19 @@ export default function SwimmerDetail() {
 
     const swims: Swim[] = [];
     for (const meet of meets) {
-      for (const result of meet.results) {
+      const results = allResults(meet);
+      for (const result of results) {
         if (result.swimmerId !== swimmer.id) continue;
         const event = meet.events.find((e) => e.id === result.eventId);
         if (!event) continue;
 
         // Place is scored across the whole event, not within a heat.
-        const ranked = meet.results
+        const ranked = results
           .filter((r) => r.eventId === event.id && r.status === "OK")
           .sort((a, b) => a.timeMs - b.timeMs);
-        const index = ranked.findIndex((r) => r.id === result.id);
+        const index = ranked.findIndex(
+          (r) => r.heatId === result.heatId && r.lane === result.lane,
+        );
 
         swims.push({
           result,
@@ -196,7 +200,7 @@ export default function SwimmerDetail() {
                 <ul className="divide-y divide-slate-200 dark:divide-slate-800">
                   {group.swims.map((swim) => (
                     <li
-                      key={swim.result.id}
+                      key={`${swim.meet.id}:${swim.result.heatId}:${swim.result.lane}`}
                       className="flex items-center justify-between gap-3 py-2"
                     >
                       <span className="min-w-0">

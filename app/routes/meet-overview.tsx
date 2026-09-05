@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router";
 import type { Route } from "./+types/meet-overview";
 import { Banner, Button, Card, SectionTitle } from "~/components/ui";
 import { downloadFile, resultsToCsv } from "~/lib/csv";
+import { recordedCount } from "~/lib/timing";
 import { useAppStore } from "~/state/app-store";
 import { courseLabel, meetSubtitle } from "~/types/meet";
 
@@ -38,7 +39,7 @@ export default function MeetOverview() {
     { label: "Events", value: meet.events.length },
     { label: "Entries", value: entryCount },
     { label: "Heats", value: meet.heats.length },
-    { label: "Times", value: meet.results.length },
+    { label: "Times", value: recordedCount(meet) },
   ];
 
   const slug = `${meet.name.replace(/[^\w-]+/g, "-").toLowerCase()}-${meet.date}`;
@@ -109,7 +110,7 @@ export default function MeetOverview() {
         <SectionTitle>Export</SectionTitle>
         <div className="grid grid-cols-2 gap-2">
           <Button
-            disabled={meet.results.length === 0}
+            disabled={recordedCount(meet) === 0}
             onClick={() =>
               downloadFile(
                 `${slug}-results.csv`,
@@ -139,8 +140,8 @@ export default function MeetOverview() {
           <div className="space-y-2">
             <Banner tone="error">
               Deleting <strong>{meet.name}</strong> removes its events, entries
-              and {meet.results.length} recorded time
-              {meet.results.length === 1 ? "" : "s"}. The team roster isn't
+              and {recordedCount(meet)} recorded time
+              {recordedCount(meet) === 1 ? "" : "s"}. The team roster isn't
               touched. This can't be undone on this device.
             </Banner>
             <div className="grid grid-cols-2 gap-2">

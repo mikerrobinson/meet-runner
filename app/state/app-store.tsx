@@ -16,7 +16,12 @@ import {
   writeMeet,
   writeTeam,
 } from "~/lib/db";
-import { createMeetDoc, createTeam, type MeetPatch } from "~/lib/documents";
+import {
+  createMeetDoc,
+  createTeam,
+  tombstone,
+  type MeetPatch,
+} from "~/lib/documents";
 import {
   dayBefore,
   isGraduating,
@@ -33,9 +38,12 @@ import {
   withoutDiving,
 } from "~/lib/events";
 import { buildHeats, shuffle } from "~/lib/heats";
+import { makeRuling, makeWatch } from "~/lib/timing";
 import { generateId } from "~/lib/id";
 import {
+  isDeleted,
   isDiving,
+  rulingId,
   isEligible,
   normalizeTeamCode,
   todayIso,
@@ -48,11 +56,11 @@ import type {
   MeetCourse,
   MeetDoc,
   MeetEvent,
-  Result,
   ResultStatus,
   Season,
   Swimmer,
   TeamDoc,
+  WatchTime,
 } from "~/types/meet";
 
 /** One row of an import: the person, plus what's true of them this season. */
@@ -69,7 +77,10 @@ interface AppStore {
   /** False until IndexedDB has been read — nothing renders before then. */
   ready: boolean;
   team: TeamDoc;
+  /** Live meets, for everything on screen. */
   meets: MeetDoc[];
+  /** Deleted meets still waiting to tell the server so. Sync only. */
+  deletedMeets: MeetDoc[];
 
   /* Team */
   setTeamInfo: (
@@ -137,17 +148,41 @@ interface AppStore {
   ) => void;
   setProgress: (id: string, eventIndex: number, heatIndex: number) => void;
   startTimer: (id: string, heatId: string) => void;
-  stopLane: (id: string, heat: Heat, lane: number, elapsedMs: number) => void;
+  /** Record this device's watch on a lane. */
+  stopLane: (
+    id: string,
+    heat: Heat,
+    lane: number,
+    elapsedMs: number,
+    timerId: string,
+  ) => void;
   resetHeat: (id: string, heatId: string) => void;
+  /** Type a time in as this device's watch. */
   recordManualTime: (
     id: string,
     heat: Heat,
     lane: number,
-    swimmerId: string,
+    timeMs: number,
+    timerId: string,
+  ) => void;
+  /** DQ, no-show, or back to OK. A judgement, not a time. */
+  setLaneStatus: (
+    id: string,
+    heat: Heat,
+    lane: number,
+    status: ResultStatus,
+  ) => void;
+  /** Set the official time by hand, overriding whatever the watches say. */
+  overrideLaneTime: (
+    id: string,
+    heat: Heat,
+    lane: number,
     timeMs: number,
   ) => void;
-  setResultStatus: (id: string, resultId: string, status: ResultStatus) => void;
-  removeResult: (id: string, resultId: string) => void;
+  /** Throw away everything recorded on one lane. */
+  clearLaneTimes: (id: string, heat: Heat, lane: number) => void;
+  /** Drop a single watch — one timer's time, not the lane's. */
+  removeWatch: (id: string, watchId: string) => void;
 }
 
 const AppStoreContext = createContext<AppStore | null>(null);
@@ -303,7 +338,31 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  /**
+   * Save without claiming the document changed.
+   *
+   * Some of what a meet holds isn't about the meet at all — where this device
+   * has scrolled to in the running order is the obvious one. It's worth
+   * remembering across a reload, so it's written to disk, but leaving
+   * `updatedAt` alone keeps it from dirtying the document: tapping through
+   * events on the deck shouldn't queue a push, least of all over pool wifi.
+   * The position still travels with the next real edit.
+   */
+  const editMeetQuietly = useCallback((id: string, updater: MeetUpdater) => {
+    setMeets((current) => {
+      const index = current.findIndex((m) => m.id === id);
+      if (index < 0) return current;
+      const next = updater(current[index]);
+      if (next === current[index]) return current;
+      const copy = [...current];
+      copy[index] = next;
+      return copy;
+    });
+  }, []);
+
   const store = useMemo<AppStore>(() => {
+    const liveMeets = meets.filter((m) => !isDeleted(m));
+    const deletedMeets = meets.filter(isDeleted);
     const swimmerById = new Map(team.swimmers.map((s) => [s.id, s] as const));
 
     /** Registered swimmers for an event, in roster order. */
@@ -328,9 +387,15 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
      * keep the heats they were swum in; the UI offers a rebuild instead.
      */
     const invalidateHeats = (meet: MeetDoc, eventId: string): MeetDoc => {
-      if (meet.results.some((r) => r.eventId === eventId)) return meet;
+      if (meet.watches.some((w) => w.eventId === eventId)) return meet;
       return { ...meet, heats: meet.heats.filter((h) => h.eventId !== eventId) };
     };
+
+    /** Add or replace a watch, keyed by its own id so a retry is a no-op. */
+    const withWatch = (meet: MeetDoc, watch: WatchTime): MeetDoc => ({
+      ...meet,
+      watches: [...meet.watches.filter((w) => w.id !== watch.id), watch],
+    });
 
     /**
      * The lineup is the truth about diving; the option just reports it. Run
@@ -347,7 +412,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     return {
       ready,
       team,
-      meets,
+      meets: liveMeets,
+      deletedMeets,
 
       setTeamInfo: (patch) =>
         editTeam((t) => ({
@@ -486,9 +552,15 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         return meet;
       },
 
-      deleteMeet: (id) => setMeets((current) => current.filter((m) => m.id !== id)),
+      // Not a removal: the meet becomes a tombstone so the deletion can reach
+      // the server and every other device. Dropping the row locally would just
+      // mean the next sync handed it back.
+      deleteMeet: (id) =>
+        setMeets((current) =>
+          current.map((m) => (m.id === id ? tombstone(m) : m)),
+        ),
 
-      getMeet: (id) => meets.find((m) => m.id === id),
+      getMeet: (id) => liveMeets.find((m) => m.id === id),
 
       updateMeet: (id, updater) => editMeet(id, updater),
 
@@ -534,7 +606,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           // Lane assignments only mean something for one pool width. Events
           // already swum keep theirs; the rest are rebuilt on arrival.
           heats: m.heats.filter((h) =>
-            m.results.some((r) => r.eventId === h.eventId),
+            m.watches.some((w) => w.eventId === h.eventId),
           ),
         })),
 
@@ -566,7 +638,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
             events: withoutDiving(m.events),
             entries,
             heats: m.heats.filter((h) => !dropped.has(h.eventId)),
-            results: m.results.filter((r) => !dropped.has(r.eventId)),
+            watches: m.watches.filter((w) => !dropped.has(w.eventId)),
+            rulings: m.rulings.filter((r) => !dropped.has(r.eventId)),
           });
         }),
 
@@ -611,7 +684,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
             events: m.events.filter((e) => e.id !== eventId),
             entries,
             heats: m.heats.filter((h) => h.eventId !== eventId),
-            results: m.results.filter((r) => r.eventId !== eventId),
+            watches: m.watches.filter((w) => w.eventId !== eventId),
+            rulings: m.rulings.filter((r) => r.eventId !== eventId),
             progress: { eventIndex: 0, heatIndex: 0 },
           });
         }),
@@ -672,7 +746,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           const swimmerId = target?.lanes[lane - 1];
           if (!target || !swimmerId) return m;
           // A lane with a time on it is history; clear the time first.
-          if (m.results.some((r) => r.heatId === heatId && r.lane === lane)) {
+          if (m.watches.some((w) => w.heatId === heatId && w.lane === lane)) {
             return m;
           }
 
@@ -688,15 +762,22 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           const seededElsewhere = heats.some(
             (h) => h.eventId === target.eventId && h.lanes.includes(swimmerId),
           );
-          const hasResult = m.results.some(
-            (r) => r.eventId === target.eventId && r.swimmerId === swimmerId,
+          // Was this swimmer already timed in this event, in some other lane?
+          const timedElsewhere = m.heats.some(
+            (h) =>
+              h.eventId === target.eventId &&
+              h.lanes.some(
+                (id, i) =>
+                  id === swimmerId &&
+                  m.watches.some((w) => w.heatId === h.id && w.lane === i + 1),
+              ),
           );
 
           return {
             ...m,
             heats,
             entries:
-              seededElsewhere || hasResult
+              seededElsewhere || timedElsewhere
                 ? m.entries
                 : {
                     ...m.entries,
@@ -722,96 +803,103 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
             ...m.heats.filter((h) => h.eventId !== eventId),
             ...makeHeats(m, eventId, options?.shuffle ?? false),
           ],
-          results: m.results.filter((r) => r.eventId !== eventId),
+          watches: m.watches.filter((w) => w.eventId !== eventId),
+          rulings: m.rulings.filter((r) => r.eventId !== eventId),
           timer: null,
         })),
 
-      setProgress: (id, eventIndex, heatIndex) =>
-        editMeet(id, (m) => ({
+      // Moving through the running order is this device's business, so it
+      // saves without dirtying the document. Walking away from a live clock
+      // isn't — that stops the heat, which every device needs to know.
+      setProgress: (id, eventIndex, heatIndex) => {
+        const stopsAClock = meets.find((m) => m.id === id)?.timer != null;
+        const edit = stopsAClock ? editMeet : editMeetQuietly;
+        edit(id, (m) => ({
           ...m,
           progress: { eventIndex, heatIndex },
           // Never carry a running clock across a heat change.
           timer: null,
-        })),
+        }));
+      },
 
       startTimer: (id, heatId) =>
         editMeet(id, (m) => ({
           ...m,
           timer: { heatId, startedAt: Date.now() },
-          results: m.results.filter((r) => r.heatId !== heatId),
+          // Starting again wipes this heat: the watches from the false start
+          // aren't times of the race about to be swum.
+          watches: m.watches.filter((w) => w.heatId !== heatId),
+          rulings: m.rulings.filter((r) => r.heatId !== heatId),
         })),
 
-      stopLane: (id, heat, lane, elapsedMs) =>
-        editMeet(id, (m) => {
-          const swimmerId = heat.lanes[lane - 1];
-          if (!swimmerId) return m;
-          if (m.results.some((r) => r.heatId === heat.id && r.lane === lane)) {
-            return m;
-          }
-          const result: Result = {
-            id: generateId(),
-            eventId: heat.eventId,
-            heatId: heat.id,
-            swimmerId,
-            lane,
-            timeMs: elapsedMs,
-            status: "OK",
-            recordedAt: Date.now(),
-          };
-          return { ...m, results: [...m.results, result] };
-        }),
+      // This device's own watch. Recording again replaces its own time and
+      // nobody else's, which is exactly what a timer fixing a mistake wants.
+      stopLane: (id, heat, lane, elapsedMs, timerId) =>
+        editMeet(id, (m) =>
+          heat.lanes[lane - 1]
+            ? withWatch(m, makeWatch(heat, lane, timerId, elapsedMs, "stopwatch"))
+            : m,
+        ),
 
       resetHeat: (id, heatId) =>
         editMeet(id, (m) => ({
           ...m,
           timer: null,
-          results: m.results.filter((r) => r.heatId !== heatId),
+          watches: m.watches.filter((w) => w.heatId !== heatId),
+          rulings: m.rulings.filter((r) => r.heatId !== heatId),
         })),
 
-      recordManualTime: (id, heat, lane, swimmerId, timeMs) =>
+      recordManualTime: (id, heat, lane, timeMs, timerId) =>
         editMeet(id, (m) => {
-          const existing = m.results.find(
-            (r) => r.heatId === heat.id && r.lane === lane,
+          const next = withWatch(
+            m,
+            makeWatch(heat, lane, timerId, timeMs, "typed"),
           );
-          if (existing) {
-            return {
-              ...m,
-              results: m.results.map((r) =>
-                r.id === existing.id
-                  ? { ...r, timeMs, status: "OK" as ResultStatus, manual: true }
-                  : r,
-              ),
-            };
-          }
-          const result: Result = {
-            id: generateId(),
-            eventId: heat.eventId,
-            heatId: heat.id,
-            swimmerId,
-            lane,
-            timeMs,
-            status: "OK",
-            recordedAt: Date.now(),
-            manual: true,
+          // Typing a time is also a statement that the swim counts, so it
+          // clears any override that was standing in its place.
+          return {
+            ...next,
+            rulings: next.rulings.filter(
+              (r) => r.id !== rulingId(heat.id, lane),
+            ),
           };
-          return { ...m, results: [...m.results, result] };
         }),
 
-      setResultStatus: (id, resultId, status) =>
+      setLaneStatus: (id, heat, lane, status) =>
+        editMeet(id, (m) => {
+          const rulings = m.rulings.filter(
+            (r) => r.id !== rulingId(heat.id, lane),
+          );
+          return status === "OK"
+            ? { ...m, rulings }
+            : { ...m, rulings: [...rulings, makeRuling(heat, lane, status)] };
+        }),
+
+      overrideLaneTime: (id, heat, lane, timeMs) =>
         editMeet(id, (m) => ({
           ...m,
-          results: m.results.map((r) =>
-            r.id === resultId ? { ...r, status } : r,
-          ),
+          rulings: [
+            ...m.rulings.filter((r) => r.id !== rulingId(heat.id, lane)),
+            makeRuling(heat, lane, "OK", timeMs),
+          ],
         })),
 
-      removeResult: (id, resultId) =>
+      clearLaneTimes: (id, heat, lane) =>
         editMeet(id, (m) => ({
           ...m,
-          results: m.results.filter((r) => r.id !== resultId),
+          watches: m.watches.filter(
+            (w) => !(w.heatId === heat.id && w.lane === lane),
+          ),
+          rulings: m.rulings.filter((r) => r.id !== rulingId(heat.id, lane)),
+        })),
+
+      removeWatch: (id, watchId) =>
+        editMeet(id, (m) => ({
+          ...m,
+          watches: m.watches.filter((w) => w.id !== watchId),
         })),
     };
-  }, [ready, team, meets, editTeam, editMeet]);
+  }, [ready, team, meets, editTeam, editMeet, editMeetQuietly]);
 
   return (
     <AppStoreContext.Provider value={store}>{children}</AppStoreContext.Provider>

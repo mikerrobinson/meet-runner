@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Sheet, TextInput } from "./ui";
+import { allResults } from "~/lib/timing";
 import {
   bySwimmer,
   displayName,
@@ -64,7 +65,7 @@ export function LaneAssignSheet({
     }
 
     const swum = new Set(
-      meet.results
+      allResults(meet)
         .filter((r) => r.eventId === heat.eventId)
         .map((r) => r.swimmerId),
     );
@@ -87,7 +88,7 @@ export function LaneAssignSheet({
         if (aFree !== bFree) return aFree - bFree;
         return bySwimmer(nameOrder)(a.swimmer, b.swimmer);
       });
-  }, [roster, nameOrder, meet.heats, meet.results, heat.eventId, event, search]);
+  }, [roster, nameOrder, meet, heat.eventId, event, search]);
 
   return (
     <Sheet open title={`Lane ${lane} · who's swimming?`} onClose={onClose}>

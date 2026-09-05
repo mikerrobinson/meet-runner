@@ -6,6 +6,7 @@ import { LaneTile } from "~/components/LaneTile";
 import { Banner, Button, EmptyState, Field, Sheet, TextInput } from "~/components/ui";
 import { useElapsed, useWakeLock } from "~/hooks/use-stopwatch";
 import { heatsForEvent } from "~/lib/heats";
+import { resultsForHeat, watchesForLane } from "~/lib/timing";
 import { formatClock, formatTime, parseTime } from "~/lib/time";
 import { enrollmentIndex, seasonForMeet } from "~/lib/roster";
 import { activeSwimmers, useAppStore } from "~/state/app-store";
@@ -23,11 +24,20 @@ import {
   type NameOrder,
   type Result,
   type Swimmer,
+  type WatchTime,
 } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Run Meet · Meet Runner" }];
 }
+
+/** How an official time was arrived at, for the lane sheet. */
+const METHOD_LABEL: Record<string, string> = {
+  single: "one watch",
+  average: "average of 2",
+  median: "middle of 3",
+  official: "set by hand",
+};
 
 export default function RunMeet() {
   const store = useAppStore();
@@ -60,17 +70,17 @@ export default function RunMeet() {
     if (meet && event && !isDiving(event)) store.ensureHeats(meet.id, event.id);
   }, [meet, event, store]);
 
-  const { laneLayout: layout } = useViewPrefs();
+  const { laneLayout: layout, timerId } = useViewPrefs();
   const running = meet != null && heat != null && meet.timer?.heatId === heat.id;
 
+  // Derived, not stored: each lane's official time comes from the watches on
+  // it, so several timers can be recording at once without colliding.
   const resultsByLane = useMemo(() => {
     const map = new Map<number, Result>();
-    if (!heat) return map;
-    for (const result of meet?.results ?? []) {
-      if (result.heatId === heat.id) map.set(result.lane, result);
-    }
+    if (!meet || !heat) return map;
+    for (const result of resultsForHeat(meet, heat)) map.set(result.lane, result);
     return map;
-  }, [meet?.results, heat]);
+  }, [meet, heat]);
 
   const occupiedLanes = heat
     ? heat.lanes.map((id, i) => (id ? i + 1 : null)).filter((n): n is number => n !== null)
@@ -203,7 +213,13 @@ export default function RunMeet() {
                 laneCount={heat.lanes.length}
                 nameOrder={store.team.nameOrder}
                 onStop={() =>
-                  store.stopLane(meet.id, heat, lane, Date.now() - meet.timer!.startedAt)
+                  store.stopLane(
+                    meet.id,
+                    heat,
+                    lane,
+                    Date.now() - meet.timer!.startedAt,
+                    timerId,
+                  )
                 }
                 onEdit={() => setEditingLane(lane)}
                 onAssign={() => setAssigningLane(lane)}
@@ -330,21 +346,21 @@ export default function RunMeet() {
             const s = findSwimmer(roster, heat.lanes[editingLane - 1]);
             return s ? displayName(s, store.team.nameOrder) : `Lane ${editingLane}`;
           })()}
+          watches={watchesForLane(meet, heat.id, editingLane)}
+          timerId={timerId}
           onSaveTime={(timeMs) => {
-            const swimmerId = heat.lanes[editingLane - 1];
-            if (swimmerId) store.recordManualTime(meet.id, heat, editingLane, swimmerId, timeMs);
+            store.recordManualTime(meet.id, heat, editingLane, timeMs, timerId);
             setEditingLane(null);
           }}
           onStatus={(status) => {
-            const existing = resultsByLane.get(editingLane);
-            if (existing) store.setResultStatus(meet.id, existing.id, status);
+            store.setLaneStatus(meet.id, heat, editingLane, status);
             setEditingLane(null);
           }}
           onClear={() => {
-            const existing = resultsByLane.get(editingLane);
-            if (existing) store.removeResult(meet.id, existing.id);
+            store.clearLaneTimes(meet.id, heat, editingLane);
             setEditingLane(null);
           }}
+          onRemoveWatch={(id) => store.removeWatch(meet.id, id)}
           onRemoveFromLane={() => {
             store.clearLane(meet.id, heat.id, editingLane);
             setEditingLane(null);
@@ -420,25 +436,33 @@ function LaneSheet({
   lane,
   swimmerLabel,
   result,
+  watches,
+  timerId,
   onClose,
   onSaveTime,
   onStatus,
   onClear,
+  onRemoveWatch,
   onRemoveFromLane,
 }: {
   heat: Heat;
   lane: number;
   swimmerLabel: string;
   result?: Result;
+  /** Every watch on this lane, so a coach can see what the time is made of. */
+  watches: WatchTime[];
+  timerId: string;
   onClose: () => void;
   onSaveTime: (timeMs: number) => void;
   onStatus: (status: "OK" | "DQ" | "NS") => void;
   onClear: () => void;
+  onRemoveWatch: (watchId: string) => void;
   onRemoveFromLane: () => void;
 }) {
-  const [value, setValue] = useState(
-    result && result.status === "OK" ? formatTime(result.timeMs) : "",
-  );
+  // Prefilled with this device's own watch, since typing a time replaces that
+  // one — never somebody else's.
+  const own = watches.find((w) => w.timerId === timerId);
+  const [value, setValue] = useState(own ? formatTime(own.timeMs) : "");
   const empty = heat.lanes[lane - 1] === null;
 
   // Parsed on every keystroke so the sheet can show what will actually be
@@ -487,8 +511,48 @@ function LaneSheet({
             disabled={parsed === null}
             onClick={() => parsed !== null && onSaveTime(parsed)}
           >
-            Save time
+            {own ? "Replace my time" : "Save time"}
           </Button>
+
+          {watches.length > 0 && (
+            <div className="rounded-2xl bg-slate-100 p-3 dark:bg-slate-800">
+              <p className="mb-1 text-xs font-bold text-slate-600 dark:text-slate-300">
+                {watches.length} watch{watches.length === 1 ? "" : "es"} on this
+                lane
+                {result && result.method !== "official" && (
+                  <span className="font-normal">
+                    {" "}
+                    · official {formatTime(result.timeMs)} (
+                    {METHOD_LABEL[result.method]})
+                  </span>
+                )}
+              </p>
+              <ul className="divide-y divide-slate-200 dark:divide-slate-700">
+                {watches.map((watch) => (
+                  <li
+                    key={watch.id}
+                    className="flex items-center justify-between gap-2 py-1"
+                  >
+                    <span className="text-sm tabular-nums">
+                      {formatTime(watch.timeMs)}
+                      <span className="ml-2 text-xs text-slate-500">
+                        {watch.timerId === timerId ? "you" : "another timer"}
+                        {watch.source === "typed" && " · typed"}
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`Discard the ${formatTime(watch.timeMs)} watch`}
+                      onClick={() => onRemoveWatch(watch.id)}
+                      className="h-8 w-8 shrink-0 touch-manipulation rounded-lg text-sm text-red-600"
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-2">
             <Button onClick={() => onStatus("DQ")} disabled={!result}>
               Mark DQ
@@ -499,7 +563,7 @@ function LaneSheet({
           </div>
           {result ? (
             <Button variant="ghost" full onClick={onClear}>
-              Clear this lane's time
+              Clear this lane&rsquo;s times
             </Button>
           ) : (
             /* Undo for a wrong pick. Only offered while the lane has no time

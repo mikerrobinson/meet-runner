@@ -3,6 +3,8 @@ import { loadSyncToken } from "./storage";
 import type { MeetDoc, TeamDoc } from "~/types/meet";
 
 export interface RemoteMeetSummary {
+  /** Set when the meet was deleted; the summary is a tombstone. */
+  deletedAt?: number | null;
   id: string;
   name: string;
   date: string;

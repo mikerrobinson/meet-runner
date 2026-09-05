@@ -5,6 +5,7 @@ import { Button, Card, EmptyState, SectionTitle } from "~/components/ui";
 import { downloadFile, resultsToCsv } from "~/lib/csv";
 import { formatTime } from "~/lib/time";
 import { enrollmentIndex, seasonForMeet } from "~/lib/roster";
+import { allResults, recordedCount } from "~/lib/timing";
 import { useAppStore } from "~/state/app-store";
 import { eventName, swimmerName, type Result } from "~/types/meet";
 
@@ -33,7 +34,7 @@ export default function Results() {
 
   const byEvent = useMemo(() => {
     const map = new Map<string, Result[]>();
-    for (const result of meet?.results ?? []) {
+    for (const result of meet ? allResults(meet) : []) {
       const list = map.get(result.eventId) ?? [];
       list.push(result);
       map.set(result.eventId, list);
@@ -46,13 +47,13 @@ export default function Results() {
       });
     }
     return map;
-  }, [meet?.results]);
+  }, [meet]);
 
   if (!meet) return null;
 
   const slug = `${meet.name.replace(/[^\w-]+/g, "-").toLowerCase()}-${meet.date}`;
 
-  if (meet.results.length === 0) {
+  if (recordedCount(meet) === 0) {
     return (
       <EmptyState title="No times recorded yet">
         Times show up here as you run heats.
@@ -92,7 +93,7 @@ export default function Results() {
           </Button>
         </div>
         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-          {meet.results.length} time{meet.results.length === 1 ? "" : "s"} across{" "}
+          {recordedCount(meet)} time{recordedCount(meet) === 1 ? "" : "s"} across{" "}
           {byEvent.size} event{byEvent.size === 1 ? "" : "s"}.
         </p>
       </Card>
@@ -129,7 +130,7 @@ export default function Results() {
                   const swimmer = swimmers.get(result.swimmerId);
                   return (
                     <li
-                      key={result.id}
+                      key={`${result.heatId}:${result.lane}`}
                       className="flex items-center gap-3 py-2"
                     >
                       <span className="w-6 text-center text-sm font-bold text-slate-400">

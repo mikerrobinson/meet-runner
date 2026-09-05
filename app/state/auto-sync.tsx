@@ -28,6 +28,12 @@ export type SyncPhase =
   | "idle"
   | "syncing"
   | "error"
+  /**
+   * The server holds a newer copy of something this device is trying to push,
+   * so the push was refused. Retrying can't help — the two copies have to be
+   * reconciled by hand.
+   */
+  | "diverged"
   /** Server has no database bound, or the token is wrong. Stop trying. */
   | "unavailable";
 
@@ -55,7 +61,13 @@ const BACKOFF_MS = [4000, 10_000, 30_000, 60_000];
 const SyncStatusContext = createContext<SyncStatus | null>(null);
 
 export function AutoSyncProvider({ children }: { children: ReactNode }) {
-  const { ready, team, meets, markTeamSynced, markMeetSynced } = useAppStore();
+  const { ready, team, meets, deletedMeets, markTeamSynced, markMeetSynced } =
+    useAppStore();
+  // Tombstones are the whole point of the delete: they have to go up too.
+  const syncable = useMemo(
+    () => [...meets, ...deletedMeets],
+    [meets, deletedMeets],
+  );
 
   const [phase, setPhase] = useState<SyncPhase>("idle");
   // Defaults on; the stored preference is read once the client mounts.
@@ -68,8 +80,8 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   // `ready` matters as much as the documents: before the store has read
   // storage, `team` is a throwaway placeholder, and pushing that would put an
   // empty roster on the server ahead of the real one.
-  const docsRef = useRef({ ready, team, meets });
-  docsRef.current = { ready, team, meets };
+  const docsRef = useRef({ ready, team, meets: syncable });
+  docsRef.current = { ready, team, meets: syncable };
   const markRef = useRef({ markTeamSynced, markMeetSynced });
   markRef.current = { markTeamSynced, markMeetSynced };
 
@@ -78,6 +90,17 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inFlightRef = useRef(false);
+
+  /**
+   * Documents the server refused as stale, and the `updatedAt` it refused.
+   *
+   * Held back so a rejection doesn't become a retry loop, and so the rest of
+   * the season keeps syncing while one document is stuck. Keyed by version
+   * rather than by id: editing the document again is a new version and
+   * deserves a fresh attempt, which is exactly what the message tells the
+   * coach to do.
+   */
+  const divergedRef = useRef(new Map<string, number>());
   const failuresRef = useRef(0);
   const stoppedRef = useRef(false);
 
@@ -85,8 +108,23 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   // one of them is behind — and only the ones behind get pushed.
   const pendingCount =
     (team.syncedAt !== team.updatedAt ? 1 : 0) +
-    meets.filter((m) => m.syncedAt !== m.updatedAt).length;
+    syncable.filter((m) => m.syncedAt !== m.updatedAt).length;
   const pending = pendingCount > 0;
+
+  /**
+   * Which versions are waiting to go up, not just how many.
+   *
+   * Editing a document that's already pending leaves the count unchanged, so a
+   * scheduler watching the count alone would never wake for it — which matters
+   * most after a refused push, when the count is stuck at one and the coach's
+   * next edit is the thing that would resolve it.
+   */
+  const pendingSignature = [
+    team.syncedAt !== team.updatedAt ? team.updatedAt : "",
+    ...syncable
+      .filter((m) => m.syncedAt !== m.updatedAt)
+      .map((m) => `${m.id}:${m.updatedAt}`),
+  ].join("|");
 
   // Declared up front so `schedule` can reach the latest pump without the two
   // callbacks depending on each other.
@@ -110,9 +148,17 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
       meets: currentMeets,
     } = docsRef.current;
     if (!isReady) return;
+    const diverged = divergedRef.current;
+    const refusedAlready = (doc: { id: string; updatedAt: number }) =>
+      diverged.get(doc.id) === doc.updatedAt;
     const staleTeam =
-      currentTeam.syncedAt !== currentTeam.updatedAt ? currentTeam : null;
-    const staleMeets = currentMeets.filter((m) => m.syncedAt !== m.updatedAt);
+      currentTeam.syncedAt !== currentTeam.updatedAt &&
+      !refusedAlready(currentTeam)
+        ? currentTeam
+        : null;
+    const staleMeets = currentMeets.filter(
+      (m) => m.syncedAt !== m.updatedAt && !refusedAlready(m),
+    );
     if (!staleTeam && staleMeets.length === 0) return;
 
     inFlightRef.current = true;
@@ -121,21 +167,41 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
     try {
       // Roster first: a meet's swimmer ids are meaningless to another device
       // until the roster they point into has landed.
+      const refused: string[] = [];
+
       if (staleTeam) {
         const sentAt = staleTeam.updatedAt;
-        await pushTeam(staleTeam);
-        markRef.current.markTeamSynced(sentAt);
+        // `applied: false` means the server's copy is newer. Marking it synced
+        // anyway would claim the roster is safely up there when it isn't.
+        const { applied } = await pushTeam(staleTeam);
+        if (applied) markRef.current.markTeamSynced(sentAt);
+        else {
+          diverged.set(staleTeam.id, sentAt);
+          refused.push("the roster");
+        }
       }
       for (const meet of staleMeets) {
         // Remember what we're sending: edits made during the flight must stay
         // pending rather than being marked as synced.
         const sentAt = meet.updatedAt;
-        await pushMeet(meet);
-        markRef.current.markMeetSynced(meet.id, sentAt);
+        const { applied } = await pushMeet(meet);
+        if (applied) markRef.current.markMeetSynced(meet.id, sentAt);
+        else {
+          diverged.set(meet.id, sentAt);
+          refused.push(meet.name);
+        }
       }
+
       failuresRef.current = 0;
-      setPhase("idle");
-      setMessage(undefined);
+      if (refused.length > 0) {
+        setPhase("diverged");
+        setMessage(
+          `The server has a newer copy of ${refused.join(", ")}. Nothing was overwritten — restore from the server, or make a change here to push over it.`,
+        );
+      } else {
+        setPhase("idle");
+        setMessage(undefined);
+      }
       setLastSyncAt(Date.now());
     } catch (error) {
       const status = error instanceof SyncRequestError ? error.status : -1;
@@ -156,9 +222,11 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
 
     const now = docsRef.current;
     if (stoppedRef.current || !now.ready) return;
+    const unrefused = (doc: { id: string; updatedAt: number }) =>
+      divergedRef.current.get(doc.id) !== doc.updatedAt;
     const stillPending =
-      now.team.syncedAt !== now.team.updatedAt ||
-      now.meets.some((m) => m.syncedAt !== m.updatedAt);
+      (now.team.syncedAt !== now.team.updatedAt && unrefused(now.team)) ||
+      now.meets.some((m) => m.syncedAt !== m.updatedAt && unrefused(m));
     if (stillPending) {
       const failures = failuresRef.current;
       schedule(
@@ -208,7 +276,7 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
         ? DEBOUNCE_MS
         : BACKOFF_MS[Math.min(failuresRef.current - 1, BACKOFF_MS.length - 1)],
     );
-  }, [ready, pending, pendingCount, team.updatedAt, schedule]);
+  }, [ready, pending, pendingSignature, schedule]);
 
   // Coming back from a dead zone, or back to the tab, is the moment most
   // worth retrying — waiting out the backoff would be silly.
@@ -256,6 +324,9 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   );
 
   const syncNow = useCallback(() => {
+    // A manual push is the user saying "try again" — give refused documents
+    // another go rather than leaving them stuck forever.
+    divergedRef.current.clear();
     stoppedRef.current = false;
     failuresRef.current = 0;
     // A manual push works even with auto-sync switched off.
@@ -306,6 +377,7 @@ export function syncLabel(status: SyncStatus): {
       : { text: "Synced", tone: "good" };
   }
   if (status.phase === "syncing") return { text: "Saving…", tone: "busy" };
+  if (status.phase === "diverged") return { text: "Conflict", tone: "warn" };
   if (status.phase === "error") return { text: "Retrying…", tone: "warn" };
   if (status.pending) return { text: "Saving…", tone: "busy" };
   return { text: "Synced", tone: "good" };

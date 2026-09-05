@@ -1,6 +1,7 @@
 import { generateId } from "./id";
 import { formatTime } from "./time";
 import { enrollmentFor, seasonForMeet } from "./roster";
+import { allResults } from "./timing";
 import {
   eventName,
   swimmerName,
@@ -290,14 +291,18 @@ export function resultsToCsv(meet: MeetDoc, team: TeamDoc): string {
     ],
   ];
 
+  const results = allResults(meet);
+
   meet.events.forEach((event, eventIndex) => {
-    const eventResults = meet.results.filter((r) => r.eventId === event.id);
+    const eventResults = results.filter((r) => r.eventId === event.id);
 
     // Place is scored across the whole event, not within a heat.
     const ranked = eventResults
       .filter((r) => r.status === "OK")
       .sort((a, b) => a.timeMs - b.timeMs);
-    const place = new Map(ranked.map((r, i) => [r.id, i + 1] as const));
+    const place = new Map(
+      ranked.map((r, i) => [`${r.heatId}:${r.lane}`, i + 1] as const),
+    );
 
     const ordered = [...eventResults].sort((a, b) => {
       const heatDiff =
@@ -321,7 +326,7 @@ export function resultsToCsv(meet: MeetDoc, team: TeamDoc): string {
         result.status === "OK" ? formatTime(result.timeMs) : result.status,
         result.status === "OK" ? result.timeMs : "",
         result.status,
-        place.get(result.id) ?? "",
+        place.get(`${result.heatId}:${result.lane}`) ?? "",
         result.manual ? "manual" : "stopwatch",
       ]);
     }

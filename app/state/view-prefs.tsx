@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { loadLaneLayout, saveLaneLayout } from "~/lib/storage";
+import { loadLaneLayout, loadTimerId, saveLaneLayout } from "~/lib/storage";
 import type { LaneLayout } from "~/types/meet";
 
 /**
@@ -20,6 +20,8 @@ import type { LaneLayout } from "~/types/meet";
 interface ViewPrefs {
   laneLayout: LaneLayout;
   setLaneLayout: (layout: LaneLayout) => void;
+  /** This device's identity as a timer — every watch it takes is filed under it. */
+  timerId: string;
 }
 
 const ViewPrefsContext = createContext<ViewPrefs | null>(null);
@@ -28,20 +30,23 @@ export function ViewPrefsProvider({ children }: { children: ReactNode }) {
   // Starts at the default and adopts the stored value once mounted: the
   // server can't read localStorage, and guessing would mismatch on hydration.
   const [laneLayout, setLayout] = useState<LaneLayout>("grid");
+  const [timerId, setTimerId] = useState("device");
 
   useEffect(() => {
     setLayout(loadLaneLayout());
+    setTimerId(loadTimerId());
   }, []);
 
   const value = useMemo<ViewPrefs>(
     () => ({
       laneLayout,
+      timerId,
       setLaneLayout: (next) => {
         setLayout(next);
         saveLaneLayout(next);
       },
     }),
-    [laneLayout],
+    [laneLayout, timerId],
   );
 
   return (

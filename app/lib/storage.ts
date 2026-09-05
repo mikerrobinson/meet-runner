@@ -9,6 +9,7 @@ import { LANE_LAYOUTS, type LaneLayout } from "~/types/meet";
 const AUTO_SYNC_KEY = "meet-runner:auto-sync";
 const TOKEN_KEY = "meet-runner:sync-token";
 const LANE_LAYOUT_KEY = "meet-runner:lane-layout";
+const TIMER_ID_KEY = "meet-runner:timer-id";
 
 /**
  * Whether this device pushes on its own. A device/network preference rather
@@ -53,4 +54,21 @@ export function loadLaneLayout(): LaneLayout {
 export function saveLaneLayout(layout: LaneLayout): void {
   if (typeof localStorage === "undefined") return;
   localStorage.setItem(LANE_LAYOUT_KEY, layout);
+}
+
+/**
+ * Who this device is when it takes a time.
+ *
+ * A lane can be timed by several people at once, and each watch is stored
+ * under whoever took it — so "this device" needs a name that survives a
+ * reload, or every reload would look like a new timer and pile up duplicate
+ * times on the same lane. Becomes a user id once there are accounts.
+ */
+export function loadTimerId(): string {
+  if (typeof localStorage === "undefined") return "device";
+  const stored = localStorage.getItem(TIMER_ID_KEY);
+  if (stored) return stored;
+  const minted = `d-${Math.random().toString(36).slice(2, 10)}`;
+  localStorage.setItem(TIMER_ID_KEY, minted);
+  return minted;
 }

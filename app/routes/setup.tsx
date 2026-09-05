@@ -20,6 +20,7 @@ import {
   makeEvent,
   standardOrder,
 } from "~/lib/events";
+import { recordedCount } from "~/lib/timing";
 import { useAppStore } from "~/state/app-store";
 import {
   LANE_COUNTS,
@@ -105,7 +106,7 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
   // can't offer something like a 50 Medley Relay.
   const chosen = distances.includes(distance) ? distance : relay ? 200 : 50;
 
-  const hasResults = meet.results.length > 0;
+  const hasResults = recordedCount(meet) > 0;
 
   return (
     <div className="space-y-4">

@@ -14,9 +14,14 @@ import {
   isLaneCount,
   isMeetCourse,
   normalizeTeamCode,
+  rulingId,
+  watchId,
   type MeetDoc,
   type MeetOptions,
   type MeetType,
+  type ResultStatus,
+  type Ruling,
+  type WatchTime,
   type Swimmer,
   type TeamDoc,
 } from "~/types/meet";
@@ -72,7 +77,8 @@ export function createMeetDoc(teamId: string, patch: MeetPatch = {}): MeetDoc {
     events: [],
     entries: {},
     heats: [],
-    results: [],
+    watches: [],
+    rulings: [],
     progress: { eventIndex: 0, heatIndex: 0 },
     timer: null,
     updatedAt: Date.now(),
@@ -199,10 +205,98 @@ export function migrateMeet(input: unknown, teamId?: string): MeetDoc | null {
     events: doc.events,
     entries: doc.entries ?? {},
     heats: doc.heats ?? [],
-    results: doc.results ?? [],
+    ...migrateTiming(doc),
     progress: doc.progress ?? { eventIndex: 0, heatIndex: 0 },
     timer: doc.timer ?? null,
+    // Absent on a live meet rather than an explicit null, so a document that
+    // was never deleted is byte-for-byte what it always was.
+    deletedAt: doc.deletedAt || undefined,
     updatedAt: doc.updatedAt ?? Date.now(),
     syncedAt: doc.syncedAt ?? null,
+  };
+}
+
+/** A recorded time as it was stored before lanes could hold several. */
+interface LegacyResult {
+  id?: string;
+  eventId?: string;
+  heatId?: string;
+  lane?: number;
+  timeMs?: number;
+  status?: ResultStatus;
+  recordedAt?: number;
+  manual?: boolean;
+}
+
+/**
+ * Bring recorded times forward to watches and rulings.
+ *
+ * Every time already saved was taken by one person, so it becomes that
+ * person's single watch — credited to "legacy" because we don't know whose it
+ * was, which keeps its id stable and stops a second import duplicating it.
+ * Anything that wasn't a plain OK carries a ruling as well, since a DQ is a
+ * judgement rather than something a stopwatch said.
+ */
+function migrateTiming(
+  doc: Partial<MeetDoc> & { results?: LegacyResult[] },
+): Pick<MeetDoc, "watches" | "rulings"> {
+  if (doc.watches || doc.rulings) {
+    return { watches: doc.watches ?? [], rulings: doc.rulings ?? [] };
+  }
+
+  const watches: WatchTime[] = [];
+  const rulings: Ruling[] = [];
+
+  for (const old of doc.results ?? []) {
+    if (!old.heatId || !old.eventId || !old.lane) continue;
+    const base = {
+      eventId: old.eventId,
+      heatId: old.heatId,
+      lane: old.lane,
+    };
+
+    if (typeof old.timeMs === "number" && old.timeMs > 0) {
+      watches.push({
+        ...base,
+        id: watchId(old.heatId, old.lane, LEGACY_TIMER),
+        timerId: LEGACY_TIMER,
+        timeMs: old.timeMs,
+        recordedAt: old.recordedAt ?? Date.now(),
+        source: old.manual ? "typed" : "stopwatch",
+      });
+    }
+
+    if (old.status && old.status !== "OK") {
+      rulings.push({
+        ...base,
+        id: rulingId(old.heatId, old.lane),
+        status: old.status,
+        decidedAt: old.recordedAt ?? Date.now(),
+      });
+    }
+  }
+
+  return { watches, rulings };
+}
+
+/** Credited timer for times recorded before there were timers to credit. */
+const LEGACY_TIMER = "legacy";
+
+/**
+ * What's left of a meet once it's deleted: enough to identify it and to tell
+ * another device to drop its copy, and none of the bulk.
+ */
+export function tombstone(meet: MeetDoc): MeetDoc {
+  return {
+    ...createMeetDoc(meet.teamId, {
+      id: meet.id,
+      name: meet.name,
+      date: meet.date,
+      type: meet.type,
+      course: meet.course,
+    }),
+    deletedAt: Date.now(),
+    updatedAt: Date.now(),
+    syncedAt: meet.syncedAt,
   };
 }

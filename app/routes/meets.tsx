@@ -13,6 +13,7 @@ import {
 } from "~/components/ui";
 import type { MeetPatch } from "~/lib/documents";
 import { defaultEvents, dualMeetRaceCount } from "~/lib/events";
+import { recordedCount } from "~/lib/timing";
 import { useAppStore } from "~/state/app-store";
 import {
   LANE_COUNTS,
@@ -110,9 +111,8 @@ function summarize(meet: MeetDoc): string {
     `${meet.events.length} event${meet.events.length === 1 ? "" : "s"}`,
     `${entries} entr${entries === 1 ? "y" : "ies"}`,
   ];
-  if (meet.results.length > 0) {
-    parts.push(`${meet.results.length} time${meet.results.length === 1 ? "" : "s"}`);
-  }
+  const times = recordedCount(meet);
+  if (times > 0) parts.push(`${times} time${times === 1 ? "" : "s"}`);
   return parts.join(" · ");
 }
 

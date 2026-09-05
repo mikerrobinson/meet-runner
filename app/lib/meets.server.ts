@@ -96,6 +96,14 @@ async function ensureSchema(db: D1Database): Promise<void> {
     /* column already present */
   }
 
+  // Deleting a meet has to be a fact the server stores, not a row that goes
+  // missing — see `deletedAt` on MeetDoc.
+  try {
+    await db.prepare("ALTER TABLE meets ADD COLUMN deleted_at INTEGER").run();
+  } catch {
+    /* column already present */
+  }
+
   schemaReady = true;
 }
 
@@ -104,13 +112,16 @@ export interface MeetSummaryRow {
   name: string;
   date: string;
   updated_at: number;
+  deleted_at: number | null;
 }
 
 export async function listMeetSummaries(db: D1Database) {
   await ensureSchema(db);
+  // Deleted meets are listed too, with their tombstone: a device that already
+  // holds a copy learns to drop it, and one that never had it can skip it.
   const { results } = await db
     .prepare(
-      "SELECT id, name, date, updated_at FROM meets ORDER BY updated_at DESC LIMIT 50",
+      "SELECT id, name, date, updated_at, deleted_at FROM meets ORDER BY updated_at DESC LIMIT 50",
     )
     .all<MeetSummaryRow>();
   return results.map((row) => ({
@@ -118,6 +129,7 @@ export async function listMeetSummaries(db: D1Database) {
     name: row.name,
     date: row.date,
     updatedAt: row.updated_at,
+    deletedAt: row.deleted_at,
   }));
 }
 
@@ -159,13 +171,14 @@ export async function putMeet(
 
   await db
     .prepare(
-      `INSERT INTO meets (id, name, date, team_id, updated_at, data)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO meets (id, name, date, team_id, updated_at, deleted_at, data)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name,
          date = excluded.date,
          team_id = excluded.team_id,
          updated_at = excluded.updated_at,
+         deleted_at = excluded.deleted_at,
          data = excluded.data`,
     )
     .bind(
@@ -174,6 +187,7 @@ export async function putMeet(
       incoming.date,
       incoming.teamId,
       incoming.updatedAt,
+      incoming.deletedAt ?? null,
       JSON.stringify(incoming),
     )
     .run();

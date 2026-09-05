@@ -12,6 +12,7 @@ import {
 } from "~/components/ui";
 import { downloadFile, parseRosterCsv, toCsv } from "~/lib/csv";
 import { currentSeason, enrollmentsIn } from "~/lib/roster";
+import { allResults } from "~/lib/timing";
 import { useAppStore, type RosterEntry } from "~/state/app-store";
 import {
   bySwimmer,
@@ -45,7 +46,7 @@ export default function Team() {
     const counts = new Map<string, number>();
     for (const meet of meets) {
       const seen = new Set<string>();
-      for (const result of meet.results) {
+      for (const result of allResults(meet)) {
         if (seen.has(result.swimmerId)) continue;
         seen.add(result.swimmerId);
         counts.set(result.swimmerId, (counts.get(result.swimmerId) ?? 0) + 1);

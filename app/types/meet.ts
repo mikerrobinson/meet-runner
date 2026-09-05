@@ -315,8 +315,68 @@ export interface Heat {
 
 export type ResultStatus = "OK" | "DQ" | "NS";
 
-export interface Result {
+/**
+ * One person's watch on one lane.
+ *
+ * A lane is timed by whoever is standing at it — often two or three people,
+ * plus a coach — so a race produces several times for the same swim and the
+ * official one is worked out from them. Each watch is its own record: nobody
+ * overwrites anybody, a timer can correct their own time and only their own,
+ * and two timers on different lanes never touch the same thing.
+ *
+ * `id` is derived from heat, lane and timer rather than generated, so sending
+ * the same watch twice — a retry after the wifi drops at the wall — is a
+ * no-op instead of a duplicate.
+ */
+export interface WatchTime {
   id: string;
+  eventId: string;
+  heatId: string;
+  /** 1-based lane number. The watch times a lane; who was in it comes from the heat. */
+  lane: number;
+  /** Whoever took it: a device today, a signed-in timer later. */
+  timerId: string;
+  /** Elapsed time in milliseconds, measured on the timer's own device. */
+  timeMs: number;
+  recordedAt: number;
+  /** How it arrived: a stopwatch tap, or typed in afterwards. */
+  source: "stopwatch" | "typed";
+}
+
+export function watchId(heatId: string, lane: number, timerId: string): string {
+  return `${heatId}:${lane}:${timerId}`;
+}
+
+/**
+ * A judgement about a swim that no stopwatch can make: a disqualification, a
+ * no-show, or a coach setting the time by hand because the watches were wrong.
+ *
+ * One per lane, and last-write-wins is right for it — unlike a watch time,
+ * it's a deliberate decision, and the most recent one is the one that stands.
+ */
+export interface Ruling {
+  id: string;
+  eventId: string;
+  heatId: string;
+  lane: number;
+  status: ResultStatus;
+  /** Set when a coach overrides the watches outright. */
+  timeMs?: number;
+  decidedAt: number;
+}
+
+export function rulingId(heatId: string, lane: number): string {
+  return `${heatId}:${lane}`;
+}
+
+/**
+ * The official time for a lane, worked out from the watches on it.
+ *
+ * Derived rather than stored, which is what makes concurrent timing safe:
+ * every device computes the same answer from the same set of watches, so
+ * there's nothing to conflict over.
+ */
+export interface Result {
   eventId: string;
   heatId: string;
   swimmerId: string;
@@ -326,7 +386,11 @@ export interface Result {
   timeMs: number;
   status: ResultStatus;
   recordedAt: number;
-  /** True when the time was typed in rather than captured by the stopwatch. */
+  /** How the time was arrived at, for anyone asking why it says what it says. */
+  method: "single" | "average" | "median" | "official";
+  /** How many watches stood behind it. */
+  watchCount: number;
+  /** True when no stopwatch was involved at all. */
   manual?: boolean;
 }
 
@@ -378,9 +442,21 @@ export interface MeetDoc {
   events: MeetEvent[];
   entries: Entries;
   heats: Heat[];
-  results: Result[];
+  /** Every watch taken in this meet. Results are derived from these. */
+  watches: WatchTime[];
+  /** Per-lane judgements: DQs, no-shows, and coach overrides. */
+  rulings: Ruling[];
   progress: Progress;
   timer: TimerState | null;
+  /**
+   * When this meet was deleted, if it was.
+   *
+   * A delete has to be a fact the server can hold, not the absence of one:
+   * a row that simply vanishes looks identical to a row another device hasn't
+   * uploaded yet, so the next sync would put it back. A deleted meet keeps its
+   * id and its name and loses everything else.
+   */
+  deletedAt?: number | null;
   /** Local last-modified time, used to resolve sync conflicts. */
   updatedAt: number;
   /** `updatedAt` as of the last successful sync, or null if never synced. */
@@ -388,6 +464,10 @@ export interface MeetDoc {
 }
 
 export const MEET_DOC_VERSION = 5;
+
+export function isDeleted(meet: Pick<MeetDoc, "deletedAt">): boolean {
+  return meet.deletedAt != null;
+}
 
 /** Enough of a meet to render the schedule without loading the whole thing. */
 export interface MeetSummary {
@@ -397,6 +477,7 @@ export interface MeetSummary {
   type: MeetType;
   course: MeetCourse;
   location?: string;
+  deletedAt?: number | null;
   updatedAt: number;
 }
 

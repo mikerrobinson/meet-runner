@@ -34,6 +34,9 @@ export function SyncPanel() {
   const {
     team,
     meets,
+    deletedMeets,
+    getMeet,
+    deleteMeet,
     replaceTeam,
     replaceMeet,
     markTeamSynced,
@@ -92,10 +95,17 @@ export function SyncPanel() {
         markTeamSynced(sentAt);
         pushed += 1;
       }
-      for (const meet of meets) {
+      for (const meet of [...meets, ...deletedMeets]) {
         if (meet.syncedAt === meet.updatedAt) continue;
         const sentAt = meet.updatedAt;
-        await pushMeet(meet);
+        const { applied } = await pushMeet(meet);
+        // A refused push means the server is ahead; saying "pushed" would be
+        // a lie, and marking it synced would bury the divergence.
+        if (!applied) {
+          throw new Error(
+            `The server has a newer copy of ${meet.name}. Nothing was overwritten — restore from the server first.`,
+          );
+        }
         markMeetSynced(meet.id, sentAt);
         pushed += 1;
       }
@@ -115,16 +125,28 @@ export function SyncPanel() {
 
       const summaries = await listMeets();
       let restored = 0;
+      let dropped = 0;
       for (const summary of summaries) {
+        // A tombstone is news too: this device may still be holding the meet
+        // that another one deleted.
+        if (summary.deletedAt) {
+          if (getMeet(summary.id)) {
+            deleteMeet(summary.id);
+            dropped += 1;
+          }
+          continue;
+        }
         const meet = await pullMeet(summary.id);
         if (!meet) continue;
         replaceMeet({ ...meet, syncedAt: meet.updatedAt });
         restored += 1;
       }
       setConfirmRestore(false);
+      const removals =
+        dropped > 0 ? `, and removed ${dropped} deleted elsewhere` : "";
       return `Restored ${remoteTeam.swimmers.length} swimmers and ${restored} meet${
         restored === 1 ? "" : "s"
-      }.`;
+      }${removals}.`;
     });
 
   const handleSaveToken = () => {
@@ -147,6 +169,9 @@ export function SyncPanel() {
             auto.pendingCount === 1 ? "" : "s"
           } the server doesn't have.`
         : `Auto-sync is off. Last pushed ${relative(auto.lastSyncAt)}.`;
+    }
+    if (auto.phase === "diverged") {
+      return auto.message ?? "The server has a newer copy than this device.";
     }
     if (auto.phase === "error") {
       return `Couldn't reach the server, retrying. Last synced ${relative(auto.lastSyncAt)}.`;
@@ -230,50 +255,56 @@ export function SyncPanel() {
             On the server
           </h3>
           <ul className="divide-y divide-slate-200 dark:divide-slate-800">
-            {remote.map((summary) => {
-              const here = meets.some((m) => m.id === summary.id);
-              return (
-                <li
-                  key={summary.id}
-                  className="flex items-center justify-between gap-3 py-2"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate font-semibold">
-                      {summary.name}
-                      {here && (
-                        <span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-200">
-                          on this device
-                        </span>
-                      )}
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      {summary.date} · saved {relative(summary.updatedAt)}
-                    </p>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant={here ? "secondary" : "primary"}
-                    disabled={busy}
-                    onClick={() =>
-                      run(async () => {
-                        const meet = await pullMeet(summary.id);
-                        if (!meet) throw new Error("That meet is gone.");
-                        replaceMeet({ ...meet, syncedAt: meet.updatedAt });
-                        return `Pulled "${meet.name}".`;
-                      })
-                    }
+            {remote
+              .filter((summary) => !summary.deletedAt)
+              .map((summary) => {
+                const here = meets.some((m) => m.id === summary.id);
+                return (
+                  <li
+                    key={summary.id}
+                    className="flex items-center justify-between gap-3 py-2"
                   >
-                    {here ? "Reload" : "Pull"}
-                  </Button>
-                </li>
-              );
-            })}
+                    <div className="min-w-0">
+                      <p className="truncate font-semibold">
+                        {summary.name}
+                        {here && (
+                          <span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-200">
+                            on this device
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {summary.date} · saved {relative(summary.updatedAt)}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant={here ? "secondary" : "primary"}
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          const meet = await pullMeet(summary.id);
+                          if (!meet) throw new Error("That meet is gone.");
+                          replaceMeet({ ...meet, syncedAt: meet.updatedAt });
+                          return `Pulled "${meet.name}".`;
+                        })
+                      }
+                    >
+                      {here ? "Reload" : "Pull"}
+                    </Button>
+                  </li>
+                );
+              })}
           </ul>
         </div>
       )}
 
       <div className="mt-3">
-        <Button size="sm" variant="ghost" onClick={() => setShowToken((v) => !v)}>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setShowToken((v) => !v)}
+        >
           {showToken ? "Hide sync token" : "Sync token"}
         </Button>
       </div>
