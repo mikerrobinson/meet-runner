@@ -12,9 +12,11 @@ import {
 import { formatTime } from "~/lib/time";
 import { useAppStore } from "~/state/app-store";
 import {
+  ageOn,
   eventName,
   meetSubtitle,
   swimmerName,
+  todayIso,
   type MeetDoc,
   type Result,
 } from "~/types/meet";
@@ -116,6 +118,7 @@ export default function SwimmerDetail() {
   }
 
   const totalSwims = byEvent.reduce((sum, group) => sum + group.swims.length, 0);
+  const age = ageOn(swimmer, todayIso());
 
   return (
     <div className="space-y-4">
@@ -129,10 +132,11 @@ export default function SwimmerDetail() {
         >
           {swimmerName(swimmer)}
         </SectionTitle>
-        <dl className="grid grid-cols-3 gap-2">
+        <dl className="grid grid-cols-4 gap-2">
           {[
             { label: "Gender", value: swimmer.gender },
             { label: "Year", value: swimmer.year || "—" },
+            { label: "Age", value: age === null ? "—" : String(age) },
             { label: "Squad", value: swimmer.squad || "—" },
           ].map((item) => (
             <div
@@ -146,6 +150,11 @@ export default function SwimmerDetail() {
             </div>
           ))}
         </dl>
+        {swimmer.birthDate && (
+          <p className="mt-2 text-center text-xs text-slate-500 dark:text-slate-400">
+            Born {swimmer.birthDate}
+          </p>
+        )}
         {swimmer.archived && (
           <div className="mt-3">
             <Banner tone="warn">

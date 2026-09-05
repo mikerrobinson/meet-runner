@@ -83,6 +83,7 @@ export function normalizeSwimmer(raw: Partial<Swimmer> & { active?: boolean }): 
     lastName: raw.lastName ?? "",
     gender: raw.gender === "M" ? "M" : "F",
     year: raw.year ?? "",
+    birthDate: raw.birthDate || undefined,
     squad: raw.squad || undefined,
     // Pre-roster saves used `active` to mean "swimming this meet"; the closest
     // season-long equivalent is being off the roster.

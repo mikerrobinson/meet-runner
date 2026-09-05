@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button, Field, Segmented, Sheet, TextInput } from "./ui";
 import { generateId } from "~/lib/id";
-import type { Gender, Swimmer } from "~/types/meet";
+import { ageOn, todayIso, type Gender, type Swimmer } from "~/types/meet";
 
 /**
  * Add or edit one swimmer. Mount it only while it's open (or key it by swimmer
@@ -26,9 +26,11 @@ export function SwimmerSheet({
   const [lastName, setLastName] = useState(swimmer?.lastName ?? "");
   const [gender, setGender] = useState<Gender>(swimmer?.gender ?? "F");
   const [year, setYear] = useState(swimmer?.year ?? "");
+  const [birthDate, setBirthDate] = useState(swimmer?.birthDate ?? "");
   const [squad, setSquad] = useState(swimmer?.squad ?? "");
 
   const canSave = Boolean(firstName.trim() || lastName.trim());
+  const age = ageOn({ birthDate }, todayIso());
 
   const save = () => {
     if (!canSave) return;
@@ -38,6 +40,7 @@ export function SwimmerSheet({
       lastName: lastName.trim(),
       gender,
       year: year.trim(),
+      birthDate: birthDate || undefined,
       squad: squad.trim() || undefined,
       archived: swimmer?.archived ?? false,
     });
@@ -87,6 +90,21 @@ export function SwimmerSheet({
             />
           </Field>
         </div>
+        <Field
+          label="Birthday"
+          hint={
+            age === null
+              ? "Optional here, but age-group entries and .sd3 exports need it."
+              : `${age} years old today.`
+          }
+        >
+          <TextInput
+            type="date"
+            value={birthDate}
+            max={todayIso()}
+            onChange={(e) => setBirthDate(e.target.value)}
+          />
+        </Field>
         <Button variant="primary" size="lg" full onClick={save} disabled={!canSave}>
           Save
         </Button>

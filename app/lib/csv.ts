@@ -70,6 +70,14 @@ const COLUMN_ALIASES: Record<string, string[]> = {
   fullName: ["name", "fullname", "swimmer", "swimmername", "athlete"],
   gender: ["gender", "sex", "m/f", "mf"],
   year: ["year", "schoolyear", "grade", "gradelevel", "class", "yr"],
+  birthDate: [
+    "birthdate",
+    "birthday",
+    "dob",
+    "dateofbirth",
+    "birth",
+    "bday",
+  ],
   squad: ["squad", "team", "side", "color", "group"],
 };
 
@@ -78,6 +86,66 @@ function parseGender(value: string): Gender | null {
   if (["m", "male", "b", "boy", "boys", "men"].includes(v)) return "M";
   if (["f", "female", "g", "girl", "girls", "w", "women"].includes(v)) return "F";
   return null;
+}
+
+/**
+ * Read a birth date the way a coach's export actually writes it: ISO from a
+ * database, or US m/d/y from a spreadsheet. Returns the ISO day, or the reason
+ * it couldn't — a wrong birth date is worse than none, so anything ambiguous
+ * or implausible is refused rather than guessed at. An empty cell is simply
+ * absent, and reports an empty reason.
+ */
+export function parseBirthDate(
+  value: string,
+  today = new Date(),
+): { date: string } | { error: string } {
+  const text = value.trim();
+  if (!text) return { error: "" };
+
+  let year: number;
+  let month: number;
+  let day: number;
+
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(text);
+  const slashed = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})$/.exec(text);
+
+  if (iso) {
+    year = Number(iso[1]);
+    month = Number(iso[2]);
+    day = Number(iso[3]);
+  } else if (slashed) {
+    month = Number(slashed[1]);
+    day = Number(slashed[2]);
+    const rawYear = slashed[3];
+    year = Number(rawYear);
+    if (rawYear.length === 2) {
+      // Two digits can't say which century. Nobody on a roster was born in
+      // the future, so the recent past wins.
+      const century = Math.floor(today.getFullYear() / 100) * 100;
+      year = century + year;
+      if (year > today.getFullYear()) year -= 100;
+    }
+  } else {
+    return { error: `"${text}" isn't a date we recognise (try 2009-03-14 or 3/14/2009)` };
+  }
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) {
+    return { error: `"${text}" isn't a real date` };
+  }
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const date = `${year}-${pad(month)}-${pad(day)}`;
+
+  // Round-tripping catches the 31st of February and friends.
+  const check = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(check.getTime()) || check.toISOString().slice(0, 10) !== date) {
+    return { error: `"${text}" isn't a real date` };
+  }
+  if (year < 1900 || date > today.toISOString().slice(0, 10)) {
+    return { error: `"${text}" is outside the range of a swimmer's birthday` };
+  }
+
+  return { date };
 }
 
 export interface RosterImport {
@@ -158,12 +226,21 @@ export function parseRosterCsv(text: string): RosterImport {
       );
     }
 
+    const rawBirthDate = cell(row, "birthDate");
+    const birthDate = parseBirthDate(rawBirthDate);
+    if ("error" in birthDate && birthDate.error) {
+      warnings.push(
+        `Line ${lineNumber} (${firstName} ${lastName}): ${birthDate.error}, left blank.`,
+      );
+    }
+
     swimmers.push({
       id: generateId(),
       firstName,
       lastName,
       gender: gender ?? "F",
       year: cell(row, "year"),
+      birthDate: "date" in birthDate ? birthDate.date : undefined,
       squad: cell(row, "squad") || undefined,
       archived: false,
     });

@@ -110,6 +110,12 @@ export interface Swimmer {
   gender: Gender;
   /** School year as entered — "9", "Fr", "Senior", whatever the CSV had. */
   year: string;
+  /**
+   * ISO date (yyyy-mm-dd). Optional: a high-school dual meet never asks, but
+   * age-group entries do, and the SDIF (.sd3) files other systems exchange
+   * carry it on every athlete record.
+   */
+  birthDate?: string;
   /** Optional squad/side for an inter-squad meet (e.g. "Blue" / "Gold"). */
   squad?: string;
   /**
@@ -140,7 +146,45 @@ export interface TeamDoc {
   syncedAt: number | null;
 }
 
-export const TEAM_DOC_VERSION = 1;
+export const TEAM_DOC_VERSION = 2;
+
+/**
+ * Age on a given date — what entries are actually seeded by, and what an
+ * export has to state. Returns null when the birth date is missing or
+ * unparseable rather than guessing at one.
+ *
+ * Both dates are plain ISO days, so this compares calendar parts and never
+ * touches a timezone.
+ */
+export function ageOn(
+  swimmer: Pick<Swimmer, "birthDate">,
+  isoDate: string,
+): number | null {
+  const born = parseIsoDate(swimmer.birthDate);
+  const on = parseIsoDate(isoDate);
+  if (!born || !on) return null;
+
+  let age = on.year - born.year;
+  // Not yet had this year's birthday.
+  if (on.month < born.month || (on.month === born.month && on.day < born.day)) {
+    age -= 1;
+  }
+  return age >= 0 ? age : null;
+}
+
+function parseIsoDate(
+  value: string | undefined,
+): { year: number; month: number; day: number } | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value ?? "");
+  if (!match) return null;
+  const [, year, month, day] = match;
+  return { year: Number(year), month: Number(month), day: Number(day) };
+}
+
+/** Today, as the plain ISO day the rest of the model speaks in. */
+export function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 /* -------------------------------------------------------------------- meet */
 

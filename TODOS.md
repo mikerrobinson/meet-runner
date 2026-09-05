@@ -29,6 +29,12 @@ out so a meet can be shared into whatever the other team runs. Needs teams as
 first-class references first — an SD3 entry belongs to a team, not to "us".
 Export is the easier half and the one that pays off immediately after a meet.
 
+Swimmer birth dates are stored as of 2026-09-05, which SDIF needs on every
+athlete record. Still missing for export: an LSC/club code for the team, and
+whatever the exporter decides to do about athlete IDs — the legacy USS number
+is derived from the birth date and name, but a real registration ID is not
+something we can invent, so unregistered swimmers will need a fallback.
+
 ### Teams as first-class references
 Prerequisite for the above, and for scoring more than one team. Open question
 worth settling early: a meet's teams as references to team documents (so

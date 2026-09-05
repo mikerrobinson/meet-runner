@@ -24,9 +24,9 @@ export function meta({}: Route.MetaArgs) {
 }
 
 const TEMPLATE = toCsv([
-  ["First Name", "Last Name", "Gender", "Year", "Squad"],
-  ["Avery", "Nguyen", "F", "10", "Blue"],
-  ["Marcus", "Hill", "M", "12", "Gold"],
+  ["First Name", "Last Name", "Gender", "Year", "Birth Date", "Squad"],
+  ["Avery", "Nguyen", "F", "10", "2009-03-14", "Blue"],
+  ["Marcus", "Hill", "M", "12", "2007-11-02", "Gold"],
 ]);
 
 export default function Team() {
@@ -156,8 +156,9 @@ export default function Team() {
         <SectionTitle>Import roster</SectionTitle>
         <p className="mb-3 text-sm text-slate-600 dark:text-slate-300">
           CSV with a header row. Columns can be{" "}
-          <strong>First Name, Last Name, Gender, Year</strong> — plus an optional{" "}
-          <strong>Squad</strong>. A single <strong>Name</strong> column works too.
+          <strong>First Name, Last Name, Gender, Year</strong> — plus optional{" "}
+          <strong>Birth Date</strong> and <strong>Squad</strong>. A single{" "}
+          <strong>Name</strong> column works too.
         </p>
         <div className="grid grid-cols-2 gap-2">
           <Button variant="primary" onClick={() => fileInput.current?.click()}>
