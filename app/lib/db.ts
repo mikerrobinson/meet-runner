@@ -13,6 +13,7 @@ import {
   migrateTeam,
   normalizeSwimmer,
 } from "./documents";
+import { makeEnrollment } from "./roster";
 import type { MeetDoc, Swimmer, TeamDoc } from "~/types/meet";
 
 const DB_NAME = "meet-runner";
@@ -128,11 +129,26 @@ export async function migrateFromLocalStorage(): Promise<{
 
   try {
     const legacy = JSON.parse(raw) as Partial<MeetDoc> & {
-      swimmers?: Array<Partial<Swimmer> & { active?: boolean }>;
+      swimmers?: Array<
+        Partial<Swimmer> & { active?: boolean; year?: string; squad?: string }
+      >;
     };
 
     const team = createTeam("My Team");
-    team.swimmers = (legacy.swimmers ?? []).map(normalizeSwimmer);
+    // The pre-roster save had one flat list of swimmers; they all join the
+    // team's first season, and "active" meant on the roster.
+    const season = team.currentSeasonId;
+    for (const raw of legacy.swimmers ?? []) {
+      const athlete = normalizeSwimmer(raw);
+      team.swimmers.push(athlete);
+      team.enrollments.push(
+        makeEnrollment(team.id, season, athlete.id, {
+          year: raw.year,
+          squad: raw.squad,
+          status: raw.active === false ? "inactive" : "active",
+        }),
+      );
+    }
 
     const meet = migrateMeet(legacy, team.id);
     if (!meet) {

@@ -1,12 +1,15 @@
 import { generateId } from "./id";
 import { formatTime } from "./time";
+import { enrollmentFor, seasonForMeet } from "./roster";
 import {
   eventName,
   swimmerName,
   type Gender,
   type MeetDoc,
   type Swimmer,
+  type TeamDoc,
 } from "~/types/meet";
+import type { RosterEntry } from "~/state/app-store";
 
 /** RFC-4180-ish parser: handles quoted fields, embedded commas, and CRLF. */
 export function parseCsv(text: string): string[][] {
@@ -149,7 +152,7 @@ export function parseBirthDate(
 }
 
 export interface RosterImport {
-  swimmers: Swimmer[];
+  entries: RosterEntry[];
   /** Human-readable problems, one per skipped or patched row. */
   warnings: string[];
 }
@@ -165,7 +168,7 @@ export function parseRosterCsv(text: string): RosterImport {
   const warnings: string[] = [];
 
   if (rows.length === 0) {
-    return { swimmers: [], warnings: ["The file was empty."] };
+    return { entries: [], warnings: ["The file was empty."] };
   }
 
   const header = rows[0].map(normalizeHeader);
@@ -182,7 +185,7 @@ export function parseRosterCsv(text: string): RosterImport {
 
   if (!hasName) {
     return {
-      swimmers: [],
+      entries: [],
       warnings: [
         `No name column found. Expected a "First Name"/"Last Name" pair or a "Name" column. Found: ${rows[0].join(", ")}`,
       ],
@@ -192,7 +195,7 @@ export function parseRosterCsv(text: string): RosterImport {
   const cell = (row: string[], key: string) =>
     column[key] === undefined ? "" : (row[column[key]] ?? "").trim();
 
-  const swimmers: Swimmer[] = [];
+  const entries: RosterEntry[] = [];
 
   rows.slice(1).forEach((row, i) => {
     const lineNumber = i + 2;
@@ -234,19 +237,20 @@ export function parseRosterCsv(text: string): RosterImport {
       );
     }
 
-    swimmers.push({
-      id: generateId(),
-      firstName,
-      lastName,
-      gender: gender ?? "F",
+    entries.push({
+      athlete: {
+        id: generateId(),
+        firstName,
+        lastName,
+        gender: gender ?? "F",
+        birthDate: "date" in birthDate ? birthDate.date : undefined,
+      },
       year: cell(row, "year"),
-      birthDate: "date" in birthDate ? birthDate.date : undefined,
       squad: cell(row, "squad") || undefined,
-      archived: false,
     });
   });
 
-  return { swimmers, warnings };
+  return { entries, warnings };
 }
 
 function csvEscape(value: string | number): string {
@@ -262,8 +266,10 @@ export function toCsv(rows: Array<Array<string | number>>): string {
  * Results export: one row per recorded swim, ordered by event, then heat, then
  * finish place.
  */
-export function resultsToCsv(meet: MeetDoc, roster: Swimmer[]): string {
-  const swimmers = new Map(roster.map((s) => [s.id, s] as const));
+export function resultsToCsv(meet: MeetDoc, team: TeamDoc): string {
+  const swimmers = new Map(team.swimmers.map((s) => [s.id, s] as const));
+  // Their year and squad as of this meet, not as of today.
+  const seasonId = seasonForMeet(team, meet)?.id;
   const heats = new Map(meet.heats.map((h) => [h.id, h] as const));
 
   const rows: Array<Array<string | number>> = [
@@ -302,6 +308,7 @@ export function resultsToCsv(meet: MeetDoc, roster: Swimmer[]): string {
 
     for (const result of ordered) {
       const swimmer = swimmers.get(result.swimmerId);
+      const enrolled = enrollmentFor(team, result.swimmerId, seasonId);
       rows.push([
         eventIndex + 1,
         eventName(event),
@@ -309,8 +316,8 @@ export function resultsToCsv(meet: MeetDoc, roster: Swimmer[]): string {
         result.lane,
         swimmer ? swimmerName(swimmer) : "(unknown)",
         swimmer?.gender ?? "",
-        swimmer?.year ?? "",
-        swimmer?.squad ?? "",
+        enrolled?.year ?? "",
+        enrolled?.squad ?? "",
         result.status === "OK" ? formatTime(result.timeMs) : result.status,
         result.status === "OK" ? result.timeMs : "",
         result.status,

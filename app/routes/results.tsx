@@ -4,6 +4,7 @@ import type { Route } from "./+types/results";
 import { Button, Card, EmptyState, SectionTitle } from "~/components/ui";
 import { downloadFile, resultsToCsv } from "~/lib/csv";
 import { formatTime } from "~/lib/time";
+import { enrollmentIndex, seasonForMeet } from "~/lib/roster";
 import { useAppStore } from "~/state/app-store";
 import { eventName, swimmerName, type Result } from "~/types/meet";
 
@@ -22,6 +23,12 @@ export default function Results() {
   const swimmers = useMemo(
     () => new Map(team.swimmers.map((s) => [s.id, s] as const)),
     [team.swimmers],
+  );
+
+  // Squad as it was that season, not as it is now.
+  const enrollments = useMemo(
+    () => enrollmentIndex(team, meet ? seasonForMeet(team, meet)?.id : undefined),
+    [team, meet],
   );
 
   const byEvent = useMemo(() => {
@@ -64,7 +71,7 @@ export default function Results() {
             onClick={() =>
               downloadFile(
                 `${slug}-results.csv`,
-                resultsToCsv(meet, team.swimmers),
+                resultsToCsv(meet, team),
                 "text/csv",
               )
             }
@@ -134,7 +141,8 @@ export default function Results() {
                         </span>
                         <span className="block text-xs text-slate-500 dark:text-slate-400">
                           Lane {result.lane}
-                          {swimmer?.squad && ` · ${swimmer.squad}`}
+                          {enrollments.get(result.swimmerId)?.squad &&
+                            ` · ${enrollments.get(result.swimmerId)?.squad}`}
                           {result.manual && " · typed in"}
                         </span>
                       </span>

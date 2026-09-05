@@ -5,6 +5,7 @@
  */
 
 import { migrateMeet, migrateTeam } from "./documents";
+import { currentSeason } from "./roster";
 import type { MeetDoc, TeamDoc } from "~/types/meet";
 
 export interface SyncEnv {
@@ -286,7 +287,7 @@ export async function putTeam(
     .bind(
       incoming.id,
       incoming.name,
-      incoming.season,
+      currentSeason(incoming)?.name ?? "",
       incoming.updatedAt,
       JSON.stringify(incoming),
     )

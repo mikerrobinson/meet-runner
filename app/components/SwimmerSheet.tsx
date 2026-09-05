@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { Button, Field, Segmented, Sheet, TextInput } from "./ui";
 import { generateId } from "~/lib/id";
-import { ageOn, todayIso, type Gender, type Swimmer } from "~/types/meet";
+import {
+  ageOn,
+  todayIso,
+  type Enrollment,
+  type Gender,
+  type Swimmer,
+} from "~/types/meet";
 
 /**
  * Add or edit one swimmer. Mount it only while it's open (or key it by swimmer
@@ -10,6 +16,7 @@ import { ageOn, todayIso, type Gender, type Swimmer } from "~/types/meet";
 export function SwimmerSheet({
   title,
   swimmer,
+  enrollment,
   onClose,
   onSave,
   onDelete,
@@ -17,33 +24,35 @@ export function SwimmerSheet({
 }: {
   title: string;
   swimmer?: Swimmer;
+  /** This season's facts about them, edited alongside the person. */
+  enrollment?: Pick<Enrollment, "year" | "squad">;
   onClose: () => void;
-  onSave: (swimmer: Swimmer) => void;
+  onSave: (swimmer: Swimmer, facts: { year: string; squad?: string }) => void;
   onDelete?: () => void;
   deleteLabel?: string;
 }) {
   const [firstName, setFirstName] = useState(swimmer?.firstName ?? "");
   const [lastName, setLastName] = useState(swimmer?.lastName ?? "");
   const [gender, setGender] = useState<Gender>(swimmer?.gender ?? "F");
-  const [year, setYear] = useState(swimmer?.year ?? "");
+  const [year, setYear] = useState(enrollment?.year ?? "");
   const [birthDate, setBirthDate] = useState(swimmer?.birthDate ?? "");
-  const [squad, setSquad] = useState(swimmer?.squad ?? "");
+  const [squad, setSquad] = useState(enrollment?.squad ?? "");
 
   const canSave = Boolean(firstName.trim() || lastName.trim());
   const age = ageOn({ birthDate }, todayIso());
 
   const save = () => {
     if (!canSave) return;
-    onSave({
-      id: swimmer?.id ?? generateId(),
-      firstName: firstName.trim(),
-      lastName: lastName.trim(),
-      gender,
-      year: year.trim(),
-      birthDate: birthDate || undefined,
-      squad: squad.trim() || undefined,
-      archived: swimmer?.archived ?? false,
-    });
+    onSave(
+      {
+        id: swimmer?.id ?? generateId(),
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        gender,
+        birthDate: birthDate || undefined,
+      },
+      { year: year.trim(), squad: squad.trim() || undefined },
+    );
   };
 
   return (

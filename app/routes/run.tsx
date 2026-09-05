@@ -7,6 +7,7 @@ import { Banner, Button, EmptyState, Field, Sheet, TextInput } from "~/component
 import { useElapsed, useWakeLock } from "~/hooks/use-stopwatch";
 import { heatsForEvent } from "~/lib/heats";
 import { formatClock, formatTime, parseTime } from "~/lib/time";
+import { enrollmentIndex, seasonForMeet } from "~/lib/roster";
 import { activeSwimmers, useAppStore } from "~/state/app-store";
 import { useViewPrefs } from "~/state/view-prefs";
 import {
@@ -304,7 +305,11 @@ export default function RunMeet() {
       {heat && assigningLane !== null && (
         <LaneAssignSheet
           meet={meet}
-          roster={activeSwimmers(store.team)}
+          roster={activeSwimmers(store.team, meet)}
+          enrollments={enrollmentIndex(
+            store.team,
+            seasonForMeet(store.team, meet)?.id,
+          )}
           nameOrder={store.team.nameOrder}
           heat={heat}
           lane={assigningLane}

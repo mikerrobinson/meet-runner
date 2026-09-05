@@ -113,7 +113,7 @@ export default function MeetOverview() {
             onClick={() =>
               downloadFile(
                 `${slug}-results.csv`,
-                resultsToCsv(meet, team.swimmers),
+                resultsToCsv(meet, team),
                 "text/csv",
               )
             }

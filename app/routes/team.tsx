@@ -11,11 +11,13 @@ import {
   TextInput,
 } from "~/components/ui";
 import { downloadFile, parseRosterCsv, toCsv } from "~/lib/csv";
-import { useAppStore } from "~/state/app-store";
+import { currentSeason, enrollmentsIn } from "~/lib/roster";
+import { useAppStore, type RosterEntry } from "~/state/app-store";
 import {
   bySwimmer,
   displayName,
   swimmerName,
+  type Enrollment,
   type Swimmer,
 } from "~/types/meet";
 
@@ -30,9 +32,9 @@ const TEMPLATE = toCsv([
 ]);
 
 export default function Team() {
-  const { team, meets, addSwimmers, updateSwimmer, setArchived } = useAppStore();
+  const { team, meets, enrol } = useAppStore();
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [incoming, setIncoming] = useState<Swimmer[] | null>(null);
+  const [incoming, setIncoming] = useState<RosterEntry[] | null>(null);
   const [search, setSearch] = useState("");
   const [adding, setAdding] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -52,23 +54,38 @@ export default function Team() {
     return counts;
   }, [meets]);
 
+  const season = currentSeason(team);
+  const enrolled = useMemo(
+    () => (season ? enrollmentsIn(team, season.id) : []),
+    [team, season],
+  );
+
   const handleFile = async (file: File) => {
-    const { swimmers, warnings: issues } = parseRosterCsv(await file.text());
+    const { entries, warnings: issues } = parseRosterCsv(await file.text());
     setWarnings(issues);
-    if (swimmers.length === 0) return;
-    if (team.swimmers.length === 0) addSwimmers(swimmers, "replace");
-    else setIncoming(swimmers);
+    if (entries.length === 0) return;
+    if (enrolled.length === 0) enrol(entries, "replace");
+    else setIncoming(entries);
   };
 
-  const active = team.swimmers.filter((s) => !s.archived);
-  const archived = team.swimmers.filter((s) => s.archived);
+  const byId = useMemo(
+    () => new Map(team.swimmers.map((s) => [s.id, s] as const)),
+    [team.swimmers],
+  );
+  const active = enrolled.filter((e) => e.status === "active");
+  const inactive = enrolled.filter((e) => e.status !== "active");
 
   const visible = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return (showArchived ? team.swimmers : active)
-      .filter((s) => !query || swimmerName(s).toLowerCase().includes(query))
-      .sort(bySwimmer(team.nameOrder));
-  }, [team.swimmers, active, showArchived, search, team.nameOrder]);
+    return (showArchived ? enrolled : active)
+      .map((enrollment) => ({ enrollment, swimmer: byId.get(enrollment.athleteId) }))
+      .filter(
+        (row): row is { enrollment: Enrollment; swimmer: Swimmer } =>
+          row.swimmer !== undefined &&
+          (!query || swimmerName(row.swimmer).toLowerCase().includes(query)),
+      )
+      .sort((a, b) => bySwimmer(team.nameOrder)(a.swimmer, b.swimmer));
+  }, [enrolled, active, byId, showArchived, search, team.nameOrder]);
 
   return (
     <div className="space-y-4">
@@ -81,9 +98,14 @@ export default function Team() {
           }
         >
           Roster ({active.length})
+          {season && (
+            <span className="ml-2 text-sm font-normal text-slate-500 dark:text-slate-400">
+              {season.name}
+            </span>
+          )}
         </SectionTitle>
 
-        {team.swimmers.length === 0 ? (
+        {enrolled.length === 0 ? (
           <EmptyState title="No swimmers yet">
             Import a CSV below, or add them one at a time. The roster carries
             across every meet this season.
@@ -97,8 +119,9 @@ export default function Team() {
               className="mb-2"
             />
             <ul className="divide-y divide-slate-200 dark:divide-slate-800">
-              {visible.map((swimmer) => {
+              {visible.map(({ swimmer, enrollment }) => {
                 const swims = swimCounts.get(swimmer.id) ?? 0;
+                const off = enrollment.status !== "active";
                 return (
                   <li key={swimmer.id}>
                     <Link
@@ -108,20 +131,20 @@ export default function Team() {
                       <span className="min-w-0">
                         <span
                           className={`block truncate font-semibold ${
-                            swimmer.archived ? "text-slate-400" : ""
+                            off ? "text-slate-400" : ""
                           }`}
                         >
                           {displayName(swimmer, team.nameOrder)}
-                          {swimmer.archived && (
+                          {off && (
                             <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                              archived
+                              off roster
                             </span>
                           )}
                         </span>
                         <span className="block text-xs text-slate-500 dark:text-slate-400">
                           {swimmer.gender}
-                          {swimmer.year && ` · ${swimmer.year}`}
-                          {swimmer.squad && ` · ${swimmer.squad}`}
+                          {enrollment.year && ` · ${enrollment.year}`}
+                          {enrollment.squad && ` · ${enrollment.squad}`}
                           {swims > 0 &&
                             ` · ${swims} meet${swims === 1 ? "" : "s"}`}
                         </span>
@@ -135,7 +158,7 @@ export default function Team() {
               })}
             </ul>
 
-            {archived.length > 0 && (
+            {inactive.length > 0 && (
               <Button
                 className="mt-2"
                 size="sm"
@@ -144,8 +167,8 @@ export default function Team() {
                 onClick={() => setShowArchived((v) => !v)}
               >
                 {showArchived
-                  ? "Hide archived"
-                  : `Show ${archived.length} archived`}
+                  ? "Hide those off the roster"
+                  : `Show ${inactive.length} off the roster`}
               </Button>
             )}
           </>
@@ -187,16 +210,17 @@ export default function Team() {
         {incoming && (
           <div className="mt-3 space-y-2">
             <Banner tone="warn">
-              You already have {team.swimmers.length} swimmers. Add the{" "}
-              {incoming.length} in this file, or replace the roster? Replacing
-              only swaps the roster — entries and times already recorded in past
-              meets would then point at swimmers who are no longer listed.
+              {season?.name ?? "This season"} already has {enrolled.length}{" "}
+              swimmers. Add the {incoming.length} in this file, or replace the
+              roster? Replacing only clears this season&rsquo;s roster — the
+              swimmers themselves stay, so past meets keep their names and
+              times.
             </Banner>
             <div className="grid grid-cols-3 gap-2">
               <Button
                 variant="primary"
                 onClick={() => {
-                  addSwimmers(incoming, "append");
+                  enrol(incoming, "append");
                   setIncoming(null);
                 }}
               >
@@ -205,7 +229,7 @@ export default function Team() {
               <Button
                 variant="danger"
                 onClick={() => {
-                  addSwimmers(incoming, "replace");
+                  enrol(incoming, "replace");
                   setIncoming(null);
                 }}
               >
@@ -235,8 +259,8 @@ export default function Team() {
         <SwimmerSheet
           title="Add swimmer"
           onClose={() => setAdding(false)}
-          onSave={(swimmer) => {
-            addSwimmers([swimmer], "append");
+          onSave={(swimmer, facts) => {
+            enrol([{ athlete: swimmer, ...facts }], "append");
             setAdding(false);
           }}
         />

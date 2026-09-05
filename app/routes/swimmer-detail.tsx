@@ -10,6 +10,7 @@ import {
   SectionTitle,
 } from "~/components/ui";
 import { formatTime } from "~/lib/time";
+import { currentSeason, enrollmentFor } from "~/lib/roster";
 import { useAppStore } from "~/state/app-store";
 import {
   ageOn,
@@ -36,7 +37,7 @@ interface Swim {
 }
 
 export default function SwimmerDetail() {
-  const { team, meets, updateSwimmer, setArchived } = useAppStore();
+  const { team, meets, saveAthlete, setEnrollmentStatus } = useAppStore();
   const { swimmerId } = useParams();
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
@@ -119,6 +120,9 @@ export default function SwimmerDetail() {
 
   const totalSwims = byEvent.reduce((sum, group) => sum + group.swims.length, 0);
   const age = ageOn(swimmer, todayIso());
+  const season = currentSeason(team);
+  const enrollment = enrollmentFor(team, swimmer.id, season?.id);
+  const onRoster = enrollment?.status === "active";
 
   return (
     <div className="space-y-4">
@@ -135,9 +139,9 @@ export default function SwimmerDetail() {
         <dl className="grid grid-cols-4 gap-2">
           {[
             { label: "Gender", value: swimmer.gender },
-            { label: "Year", value: swimmer.year || "—" },
+            { label: "Year", value: enrollment?.year || "—" },
             { label: "Age", value: age === null ? "—" : String(age) },
-            { label: "Squad", value: swimmer.squad || "—" },
+            { label: "Squad", value: enrollment?.squad || "—" },
           ].map((item) => (
             <div
               key={item.label}
@@ -155,11 +159,12 @@ export default function SwimmerDetail() {
             Born {swimmer.birthDate}
           </p>
         )}
-        {swimmer.archived && (
+        {!onRoster && (
           <div className="mt-3">
             <Banner tone="warn">
-              Archived — hidden from registration and lane pickers, but their
-              past results still show their name.
+              Not on the {season?.name ?? "current"} roster — hidden from
+              registration and lane pickers, but their past results still show
+              their name.
             </Banner>
           </div>
         )}
@@ -229,18 +234,26 @@ export default function SwimmerDetail() {
 
       <Card>
         <SectionTitle>Roster</SectionTitle>
-        {swimmer.archived ? (
-          <Button full onClick={() => setArchived(swimmer.id, false)}>
-            Return to the roster
+        {!onRoster ? (
+          <Button
+            full
+            onClick={() => setEnrollmentStatus(swimmer.id, "active")}
+          >
+            Add to the {season?.name ?? "current"} roster
           </Button>
         ) : (
           <>
             <p className="mb-2 text-sm text-slate-600 dark:text-slate-300">
-              Archiving takes them off the roster for new meets. Their past
-              results keep working, which is why there's no delete.
+              Takes them off the {season?.name ?? "current"} roster for new
+              meets. Their past results keep working, which is why there's no
+              delete.
             </p>
-            <Button variant="ghost" full onClick={() => setArchived(swimmer.id, true)}>
-              Archive {swimmerName(swimmer)}
+            <Button
+              variant="ghost"
+              full
+              onClick={() => setEnrollmentStatus(swimmer.id, "inactive")}
+            >
+              Take {swimmerName(swimmer)} off the roster
             </Button>
           </>
         )}
@@ -250,17 +263,18 @@ export default function SwimmerDetail() {
         <SwimmerSheet
           title="Edit swimmer"
           swimmer={swimmer}
+          enrollment={enrollment}
           onClose={() => setEditing(false)}
-          onSave={(next) => {
-            updateSwimmer(swimmer.id, next);
+          onSave={(next, facts) => {
+            saveAthlete(next, facts);
             setEditing(false);
           }}
           onDelete={() => {
-            setArchived(swimmer.id, true);
+            setEnrollmentStatus(swimmer.id, "inactive");
             setEditing(false);
             navigate("/team");
           }}
-          deleteLabel="Archive"
+          deleteLabel="Take off the roster"
         />
       )}
     </div>

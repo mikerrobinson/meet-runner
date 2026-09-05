@@ -103,27 +103,70 @@ export function orderedLanes(laneCount: number, layout: LaneLayout): number[] {
 
 /* -------------------------------------------------------------------- team */
 
+/**
+ * A person, and only the things that stay true about them wherever they swim.
+ *
+ * Durable across seasons and teams, and never deleted — results reference
+ * athletes by id forever. What changes season to season (their grade, their
+ * squad, whether they're still on the roster) belongs to an `Enrollment`.
+ */
 export interface Swimmer {
   id: string;
   firstName: string;
   lastName: string;
   gender: Gender;
-  /** School year as entered — "9", "Fr", "Senior", whatever the CSV had. */
-  year: string;
   /**
    * ISO date (yyyy-mm-dd). Optional: a high-school dual meet never asks, but
    * age-group entries do, and the SDIF (.sd3) files other systems exchange
    * carry it on every athlete record.
    */
   birthDate?: string;
+}
+
+/**
+ * A team's competitive year. Scoped to the team on purpose: a high-school
+ * season and a club season don't line up, so there's no useful global one.
+ *
+ * The dates are what a meet's season is derived from, and both are optional —
+ * a season with neither runs from the beginning of time to the end of it,
+ * which is exactly what a roster carried over from before seasons existed
+ * means.
+ */
+export interface Season {
+  id: string;
+  teamId: string;
+  /** Free text as the coach writes it — "2026-27", "Summer 2027". */
+  name: string;
+  /** ISO date (yyyy-mm-dd), inclusive. */
+  startDate?: string;
+  /** ISO date (yyyy-mm-dd), inclusive. */
+  endDate?: string;
+}
+
+/**
+ * On the roster, but only for a while. Everything seasonal about a swimmer
+ * lives here rather than on the athlete, so last year's sophomore is this
+ * year's junior without anyone editing anything, and a swimmer who moves
+ * between a club and a school team is one person with two enrollments.
+ */
+export interface Enrollment {
+  id: string;
+  teamId: string;
+  seasonId: string;
+  athleteId: string;
+  /** School year as entered — "9", "Fr", "Senior", whatever the CSV had. */
+  year: string;
   /** Optional squad/side for an inter-squad meet (e.g. "Blue" / "Gold"). */
   squad?: string;
   /**
-   * Off the roster, but kept so past results can still resolve their name.
-   * Archived swimmers are hidden from registration and lane pickers.
+   * "inactive" is someone who left mid-season: off the roster for new races,
+   * but they were on it, and any times they swam still stand. Someone who
+   * simply isn't on the team this year has no enrollment at all.
    */
-  archived: boolean;
+  status: EnrollmentStatus;
 }
+
+export type EnrollmentStatus = "active" | "inactive";
 
 /**
  * How names are ordered and written. "last" gives "Aaronson, Avery" sorted by
@@ -133,20 +176,40 @@ export interface Swimmer {
  */
 export type NameOrder = "first" | "last";
 
-/** The season-long document: who's on the team, and what the team is called. */
+/**
+ * The team and everything that belongs to it: its people, its seasons, and who
+ * was on the roster when.
+ *
+ * The collections are held together in one document only because sync is still
+ * whole-document. They're modelled as objects with their own ids so that
+ * splitting them onto their own rows later is a storage change, not a
+ * redesign — nothing here indexes into an array by position.
+ */
 export interface TeamDoc {
   version: number;
   id: string;
   name: string;
-  /** Free-text season label, e.g. "2026-27". */
-  season: string;
+  /** Short code as it appears on a heat sheet or an SD3 file — "CHAP". */
+  code: string;
+  /** Display only. Becomes a coach membership once there are user accounts. */
+  headCoach?: string;
   nameOrder: NameOrder;
+  /** Which season the app is working in when nothing says otherwise. */
+  currentSeasonId: string;
+  seasons: Season[];
+  /** The people. Everyone who has ever been on the team, active or not. */
   swimmers: Swimmer[];
+  enrollments: Enrollment[];
   updatedAt: number;
   syncedAt: number | null;
 }
 
-export const TEAM_DOC_VERSION = 2;
+export const TEAM_DOC_VERSION = 3;
+
+/** Team codes are short and upper-case wherever they're exchanged. */
+export function normalizeTeamCode(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+}
 
 /**
  * Age on a given date — what entries are actually seeded by, and what an

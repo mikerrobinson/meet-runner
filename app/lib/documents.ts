@@ -7,11 +7,13 @@
  */
 
 import { generateId } from "./id";
+import { makeEnrollment, makeSeason } from "./roster";
 import {
   MEET_DOC_VERSION,
   TEAM_DOC_VERSION,
   isLaneCount,
   isMeetCourse,
+  normalizeTeamCode,
   type MeetDoc,
   type MeetOptions,
   type MeetType,
@@ -20,16 +22,32 @@ import {
 } from "~/types/meet";
 
 export function createTeam(name = "My Team"): TeamDoc {
+  const id = generateId();
+  const season = makeSeason(id, defaultSeasonName());
   return {
     version: TEAM_DOC_VERSION,
-    id: generateId(),
+    id,
     name,
-    season: String(new Date().getFullYear()),
+    code: "",
     nameOrder: "last",
+    currentSeasonId: season.id,
+    seasons: [season],
     swimmers: [],
+    enrollments: [],
     updatedAt: Date.now(),
     syncedAt: null,
   };
+}
+
+/**
+ * A school year rather than a calendar one: a season starting in autumn runs
+ * into the next year, which is how coaches write it.
+ */
+export function defaultSeasonName(now = new Date()): string {
+  const year = now.getFullYear();
+  // Before July the season began last year.
+  const start = now.getMonth() < 6 ? year - 1 : year;
+  return `${start}-${String((start + 1) % 100).padStart(2, "0")}`;
 }
 
 /** A patch may set just one option and leave the rest at their defaults. */
@@ -76,32 +94,67 @@ export function createMeetDoc(teamId: string, patch: MeetPatch = {}): MeetDoc {
   };
 }
 
-export function normalizeSwimmer(raw: Partial<Swimmer> & { active?: boolean }): Swimmer {
+/** A swimmer as stored before enrollments existed, or as a backup holds one. */
+type LegacySwimmer = Partial<Swimmer> & {
+  active?: boolean;
+  archived?: boolean;
+  year?: string;
+  squad?: string;
+};
+
+export function normalizeSwimmer(raw: LegacySwimmer): Swimmer {
   return {
     id: raw.id ?? generateId(),
     firstName: raw.firstName ?? "",
     lastName: raw.lastName ?? "",
     gender: raw.gender === "M" ? "M" : "F",
-    year: raw.year ?? "",
     birthDate: raw.birthDate || undefined,
-    squad: raw.squad || undefined,
-    // Pre-roster saves used `active` to mean "swimming this meet"; the closest
-    // season-long equivalent is being off the roster.
-    archived: raw.archived ?? raw.active === false,
   };
 }
 
 export function migrateTeam(input: unknown): TeamDoc | null {
   if (!input || typeof input !== "object") return null;
-  const doc = input as Partial<TeamDoc>;
+  const doc = input as Partial<TeamDoc> & { season?: string };
   if (!doc.id || !Array.isArray(doc.swimmers)) return null;
+
+  const swimmers = (doc.swimmers as LegacySwimmer[]).map(normalizeSwimmer);
+
+  // Before seasons, the roster was a flat list on the team and the season was
+  // a label. That's one unbounded season with everyone enrolled in it — grade,
+  // squad and the old `archived` flag become facts about the enrollment.
+  const legacySeason =
+    doc.seasons === undefined
+      ? makeSeason(doc.id, doc.season || defaultSeasonName())
+      : null;
+
+  const seasons = legacySeason ? [legacySeason] : (doc.seasons ?? []);
+  const enrollments = legacySeason
+    ? (doc.swimmers as LegacySwimmer[]).map((raw, i) =>
+        makeEnrollment(doc.id!, legacySeason.id, swimmers[i].id, {
+          year: raw.year,
+          squad: raw.squad,
+          status:
+            (raw.archived ?? raw.active === false) ? "inactive" : "active",
+        }),
+      )
+    : (doc.enrollments ?? []);
+
+  const currentSeasonId =
+    seasons.find((s) => s.id === doc.currentSeasonId)?.id ??
+    seasons[seasons.length - 1]?.id ??
+    "";
+
   return {
     version: TEAM_DOC_VERSION,
     id: doc.id,
     name: doc.name ?? "My Team",
-    season: doc.season ?? String(new Date().getFullYear()),
+    code: normalizeTeamCode(doc.code ?? ""),
+    headCoach: doc.headCoach || undefined,
     nameOrder: doc.nameOrder === "first" ? "first" : "last",
-    swimmers: doc.swimmers.map(normalizeSwimmer),
+    currentSeasonId,
+    seasons,
+    swimmers,
+    enrollments,
     updatedAt: doc.updatedAt ?? Date.now(),
     syncedAt: doc.syncedAt ?? null,
   };

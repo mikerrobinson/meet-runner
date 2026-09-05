@@ -6,6 +6,7 @@ import {
   eventName,
   isEligible,
   swimmerName,
+  type Enrollment,
   type Heat,
   type MeetDoc,
   type NameOrder,
@@ -28,6 +29,7 @@ interface Candidate {
 export function LaneAssignSheet({
   meet,
   roster,
+  enrollments,
   nameOrder,
   heat,
   lane,
@@ -35,8 +37,10 @@ export function LaneAssignSheet({
   onClose,
 }: {
   meet: MeetDoc;
-  /** Active roster — archived swimmers can't be entered in new races. */
+  /** This meet's season roster — anyone off it can't be entered. */
   roster: Swimmer[];
+  /** Their year and squad this season, keyed by athlete id. */
+  enrollments: Map<string, Enrollment>;
   nameOrder: NameOrder;
   heat: Heat;
   lane: number;
@@ -123,8 +127,10 @@ export function LaneAssignSheet({
                   </span>
                   <span className="block text-xs text-slate-500 dark:text-slate-400">
                     {swimmer.gender}
-                    {swimmer.year && ` · ${swimmer.year}`}
-                    {swimmer.squad && ` · ${swimmer.squad}`}
+                    {enrollments.get(swimmer.id)?.year &&
+                      ` · ${enrollments.get(swimmer.id)?.year}`}
+                    {enrollments.get(swimmer.id)?.squad &&
+                      ` · ${enrollments.get(swimmer.id)?.squad}`}
                   </span>
                 </span>
 

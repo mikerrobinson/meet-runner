@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router";
 import type { Route } from "./+types/registration";
 import { SwimmerSheet } from "~/components/SwimmerSheet";
 import { Button, EmptyState, TextInput } from "~/components/ui";
+import { enrollmentIndex, seasonForMeet } from "~/lib/roster";
 import { activeSwimmers, useAppStore } from "~/state/app-store";
 import {
   bySwimmer,
@@ -77,7 +78,7 @@ function eventFor(race: Race, swimmer: Swimmer): MeetEvent | undefined {
 }
 
 export default function Registration() {
-  const { team, meets, toggleEntry, addSwimmers } = useAppStore();
+  const { team, meets, toggleEntry, enrol } = useAppStore();
   const { meetId } = useParams();
   const [params] = useSearchParams();
   const [search, setSearch] = useState("");
@@ -90,9 +91,16 @@ export default function Registration() {
   const genderFilter: Gender | "all" =
     param === "f" ? "F" : param === "m" ? "M" : "all";
 
+  const seasonId = meet ? seasonForMeet(team, meet)?.id : undefined;
+  const enrollments = useMemo(
+    () => enrollmentIndex(team, seasonId),
+    [team, seasonId],
+  );
+
   const swimmers = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return activeSwimmers(team)
+    if (!meet) return [];
+    return activeSwimmers(team, meet)
       .filter((s) => genderFilter === "all" || s.gender === genderFilter)
       .filter(
         (s) =>
@@ -173,7 +181,7 @@ export default function Registration() {
   if (races.length === 0 || swimmers.length === 0) {
     return (
       <EmptyState title="Nothing to register yet">
-        {activeSwimmers(team).length === 0 ? (
+        {activeSwimmers(team, meet).length === 0 ? (
           <>
             The team roster is empty.{" "}
             <Link to="/team" className="font-semibold text-blue-600 underline">
@@ -292,8 +300,9 @@ export default function Registration() {
                     </span>
                     <span className="block text-[11px] font-normal text-slate-500">
                       {swimmer.gender}
-                      {swimmer.year && ` · ${swimmer.year}`} ·{" "}
-                      {perSwimmer.get(swimmer.id) ?? 0} ev
+                      {enrollments.get(swimmer.id)?.year &&
+                        ` · ${enrollments.get(swimmer.id)?.year}`}{" "}
+                      · {perSwimmer.get(swimmer.id) ?? 0} ev
                     </span>
                   </th>
                   {races.map((race) => {
@@ -340,8 +349,8 @@ export default function Registration() {
         <SwimmerSheet
           title="Add swimmer"
           onClose={() => setAdding(false)}
-          onSave={(swimmer: Swimmer) => {
-            addSwimmers([swimmer], "append");
+          onSave={(swimmer, facts) => {
+            enrol([{ athlete: swimmer, ...facts }], "append", seasonId);
             setAdding(false);
             setSearch("");
           }}

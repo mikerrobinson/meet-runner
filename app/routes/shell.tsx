@@ -1,4 +1,5 @@
 import { Link, NavLink, Outlet, useLocation, useParams } from "react-router";
+import { currentSeason, rosterFor } from "~/lib/roster";
 import { useAppStore } from "~/state/app-store";
 import { syncLabel, useSyncStatus } from "~/state/auto-sync";
 import { useViewPrefs } from "~/state/view-prefs";
@@ -222,7 +223,7 @@ export default function Shell() {
     : openMeet
       ? meetSubtitle(openMeet)
       : location.pathname.startsWith("/team")
-        ? `${team.swimmers.filter((s) => !s.archived).length} swimmers · ${team.season}`
+        ? `${rosterFor(team, team.currentSeasonId).length} swimmers · ${currentSeason(team)?.name ?? ""}`
         : undefined;
 
   return (

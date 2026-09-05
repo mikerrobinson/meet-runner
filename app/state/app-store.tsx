@@ -17,6 +17,14 @@ import {
   writeTeam,
 } from "~/lib/db";
 import { createMeetDoc, createTeam, type MeetPatch } from "~/lib/documents";
+import {
+  dayBefore,
+  isGraduating,
+  makeEnrollment,
+  makeSeason,
+  nextYear,
+  rosterForMeet,
+} from "~/lib/roster";
 import { listMeets, pullMeet, pullTeam } from "~/lib/sync";
 import {
   convertDistances,
@@ -26,8 +34,14 @@ import {
 } from "~/lib/events";
 import { buildHeats, shuffle } from "~/lib/heats";
 import { generateId } from "~/lib/id";
-import { isDiving, isEligible } from "~/types/meet";
+import {
+  isDiving,
+  isEligible,
+  normalizeTeamCode,
+  todayIso,
+} from "~/types/meet";
 import type {
+  EnrollmentStatus,
   Gender,
   Heat,
   LaneCount,
@@ -36,9 +50,17 @@ import type {
   MeetEvent,
   Result,
   ResultStatus,
+  Season,
   Swimmer,
   TeamDoc,
 } from "~/types/meet";
+
+/** One row of an import: the person, plus what's true of them this season. */
+export interface RosterEntry {
+  athlete: Swimmer;
+  year: string;
+  squad?: string;
+}
 
 type TeamUpdater = (team: TeamDoc) => TeamDoc;
 type MeetUpdater = (meet: MeetDoc) => MeetDoc;
@@ -51,11 +73,29 @@ interface AppStore {
 
   /* Team */
   setTeamInfo: (
-    patch: Partial<Pick<TeamDoc, "name" | "season" | "nameOrder">>,
+    patch: Partial<Pick<TeamDoc, "name" | "code" | "headCoach" | "nameOrder">>,
   ) => void;
-  addSwimmers: (swimmers: Swimmer[], mode: "replace" | "append") => void;
-  updateSwimmer: (id: string, patch: Partial<Swimmer>) => void;
-  setArchived: (id: string, archived: boolean) => void;
+  /** Add athletes and enrol them in a season, or replace that season's roster. */
+  enrol: (
+    entries: RosterEntry[],
+    mode: "replace" | "append",
+    seasonId?: string,
+  ) => void;
+  /** Edit the person and their enrollment in one go — the form edits both. */
+  saveAthlete: (
+    athlete: Swimmer,
+    facts: { year: string; squad?: string },
+    seasonId?: string,
+  ) => void;
+  setEnrollmentStatus: (
+    athleteId: string,
+    status: EnrollmentStatus,
+    seasonId?: string,
+  ) => void;
+  renameSeason: (seasonId: string, name: string) => void;
+  setCurrentSeason: (seasonId: string) => void;
+  /** Open a new season, carrying this one's roster into it. */
+  startSeason: (name: string) => Season;
 
   /* Meets */
   createMeet: (patch?: MeetPatch) => MeetDoc;
@@ -266,11 +306,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const store = useMemo<AppStore>(() => {
     const swimmerById = new Map(team.swimmers.map((s) => [s.id, s] as const));
 
-    /** Registered, non-archived swimmers for an event, in roster order. */
+    /** Registered swimmers for an event, in roster order. */
     const entrantsFor = (meet: MeetDoc, eventId: string): string[] => {
       const registered = new Set(meet.entries[eventId] ?? []);
-      return team.swimmers
-        .filter((s) => !s.archived && registered.has(s.id))
+      return rosterForMeet(team, meet)
+        .filter((s) => registered.has(s.id))
         .map((s) => s.id);
     };
 
@@ -309,28 +349,136 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       team,
       meets,
 
-      setTeamInfo: (patch) => editTeam((t) => ({ ...t, ...patch })),
-
-      addSwimmers: (swimmers, mode) =>
-        editTeam((t) =>
-          mode === "replace"
-            ? { ...t, swimmers }
-            : { ...t, swimmers: [...t.swimmers, ...swimmers] },
-        ),
-
-      updateSwimmer: (id, patch) =>
+      setTeamInfo: (patch) =>
         editTeam((t) => ({
           ...t,
-          swimmers: t.swimmers.map((s) => (s.id === id ? { ...s, ...patch } : s)),
+          ...patch,
+          code: patch.code === undefined ? t.code : normalizeTeamCode(patch.code),
         })),
 
-      // Never a hard delete: live results reference swimmers by id, so
-      // removing the record would leave past meets pointing at nothing.
-      setArchived: (id, archived) =>
+      // "replace" swaps out this season's roster, not the team's history: the
+      // athletes stay, so past results still resolve, and only the enrollments
+      // for this season are rebuilt.
+      enrol: (entries, mode, seasonId) =>
+        editTeam((t) => {
+          const season = seasonId ?? t.currentSeasonId;
+          const athletes = [...t.swimmers];
+          const enrollments =
+            mode === "replace"
+              ? t.enrollments.filter((e) => e.seasonId !== season)
+              : [...t.enrollments];
+
+          for (const entry of entries) {
+            if (!athletes.some((a) => a.id === entry.athlete.id)) {
+              athletes.push(entry.athlete);
+            }
+            const existing = enrollments.find(
+              (e) => e.seasonId === season && e.athleteId === entry.athlete.id,
+            );
+            if (existing) continue;
+            enrollments.push(
+              makeEnrollment(t.id, season, entry.athlete.id, {
+                year: entry.year,
+                squad: entry.squad,
+              }),
+            );
+          }
+
+          return { ...t, swimmers: athletes, enrollments };
+        }),
+
+      saveAthlete: (athlete, facts, seasonId) =>
+        editTeam((t) => {
+          const season = seasonId ?? t.currentSeasonId;
+          const known = t.swimmers.some((a) => a.id === athlete.id);
+          const swimmers = known
+            ? t.swimmers.map((a) => (a.id === athlete.id ? athlete : a))
+            : [...t.swimmers, athlete];
+
+          const existing = t.enrollments.find(
+            (e) => e.seasonId === season && e.athleteId === athlete.id,
+          );
+          const enrollments = existing
+            ? t.enrollments.map((e) =>
+                e.id === existing.id
+                  ? { ...e, year: facts.year, squad: facts.squad || undefined }
+                  : e,
+              )
+            : [
+                ...t.enrollments,
+                makeEnrollment(t.id, season, athlete.id, facts),
+              ];
+
+          return { ...t, swimmers, enrollments };
+        }),
+
+      // Never a hard delete: live results reference athletes by id, so
+      // removing the person would leave past meets pointing at nothing. Taking
+      // someone off the roster is an enrollment that's no longer active.
+      setEnrollmentStatus: (athleteId, status, seasonId) =>
+        editTeam((t) => {
+          const season = seasonId ?? t.currentSeasonId;
+          const existing = t.enrollments.find(
+            (e) => e.seasonId === season && e.athleteId === athleteId,
+          );
+          return {
+            ...t,
+            enrollments: existing
+              ? t.enrollments.map((e) =>
+                  e.id === existing.id ? { ...e, status } : e,
+                )
+              : [
+                  ...t.enrollments,
+                  makeEnrollment(t.id, season, athleteId, { status }),
+                ],
+          };
+        }),
+
+      renameSeason: (seasonId, name) =>
         editTeam((t) => ({
           ...t,
-          swimmers: t.swimmers.map((s) => (s.id === id ? { ...s, archived } : s)),
+          seasons: t.seasons.map((s) =>
+            s.id === seasonId ? { ...s, name } : s,
+          ),
         })),
+
+      setCurrentSeason: (seasonId) =>
+        editTeam((t) => ({ ...t, currentSeasonId: seasonId })),
+
+      // Carries the roster forward with grades advanced, which is the whole
+      // point of enrollments. Anyone in their final year is left behind rather
+      // than being promoted out of the school.
+      //
+      // The new season opens today and the old one closes yesterday, because
+      // a meet finds its season by date: leave both open-ended and every meet
+      // already swum would start drawing on the new roster.
+      startSeason: (name) => {
+        const today = todayIso();
+        const season = makeSeason(team.id, name, { startDate: today });
+        editTeam((t) => {
+          const carried = t.enrollments
+            .filter((e) => e.seasonId === t.currentSeasonId)
+            .filter((e) => e.status === "active" && !isGraduating(e.year))
+            .map((e) =>
+              makeEnrollment(t.id, season.id, e.athleteId, {
+                year: nextYear(e.year),
+                squad: e.squad,
+              }),
+            );
+          const closed = t.seasons.map((s) =>
+            s.id === t.currentSeasonId && !s.endDate
+              ? { ...s, endDate: dayBefore(today) }
+              : s,
+          );
+          return {
+            ...t,
+            seasons: [...closed, season],
+            enrollments: [...t.enrollments, ...carried],
+            currentSeasonId: season.id,
+          };
+        });
+        return season;
+      },
 
       createMeet: (patch) => {
         const meet = createMeetDoc(team.id, patch);
@@ -678,7 +826,7 @@ export function useAppStore(): AppStore {
   return store;
 }
 
-/** Active swimmers, in roster order — the roster minus anyone archived. */
-export function activeSwimmers(team: TeamDoc): Swimmer[] {
-  return team.swimmers.filter((s) => !s.archived);
+/** Everyone enterable in this meet: the roster of the season it falls in. */
+export function activeSwimmers(team: TeamDoc, meet: MeetDoc): Swimmer[] {
+  return rosterForMeet(team, meet);
 }
