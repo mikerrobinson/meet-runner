@@ -10,6 +10,7 @@ import {
 import type { Route } from "./+types/root";
 import { AutoSyncProvider } from "./state/auto-sync";
 import { AppStoreProvider } from "./state/app-store";
+import { ViewPrefsProvider } from "./state/view-prefs";
 import "./app.css";
 
 /**
@@ -71,7 +72,9 @@ export default function App() {
   return (
     <AppStoreProvider>
       <AutoSyncProvider>
-        <Outlet />
+        <ViewPrefsProvider>
+          <Outlet />
+        </ViewPrefsProvider>
       </AutoSyncProvider>
     </AppStoreProvider>
   );

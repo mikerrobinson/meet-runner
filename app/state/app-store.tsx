@@ -31,7 +31,6 @@ import type {
   Gender,
   Heat,
   LaneCount,
-  LaneLayout,
   MeetCourse,
   MeetDoc,
   MeetEvent,
@@ -75,7 +74,6 @@ interface AppStore {
   ) => void;
   setCourse: (id: string, course: MeetCourse) => void;
   setLaneCount: (id: string, laneCount: LaneCount) => void;
-  setLaneLayout: (id: string, laneLayout: LaneLayout) => void;
   setLeadGender: (id: string, leadGender: Gender) => void;
   setIncludeDiving: (id: string, includeDiving: boolean) => void;
   setEvents: (id: string, events: MeetEvent[]) => void;
@@ -391,9 +389,6 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
             m.results.some((r) => r.eventId === h.eventId),
           ),
         })),
-
-      setLaneLayout: (id, laneLayout) =>
-        editMeet(id, (m) => ({ ...m, options: { ...m.options, laneLayout } })),
 
       // Reorders rather than regenerates, so entries and times survive a flip.
       setLeadGender: (id, leadGender) =>

@@ -1,7 +1,8 @@
 import { Link, NavLink, Outlet, useLocation, useParams } from "react-router";
 import { useAppStore } from "~/state/app-store";
 import { syncLabel, useSyncStatus } from "~/state/auto-sync";
-import { meetSubtitle } from "~/types/meet";
+import { useViewPrefs } from "~/state/view-prefs";
+import { LANE_LAYOUTS, meetSubtitle, type LaneLayout } from "~/types/meet";
 
 const CHIP_TONES: Record<string, string> = {
   good: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200",
@@ -41,65 +42,138 @@ function meetTabs(meetId: string): Tab[] {
 }
 
 /**
- * Girls / Boys toggles for the registration grid. Lives in the header so it
- * costs no vertical space on the one screen that wants every pixel, and rides
- * on a search param so the grid needn't share state with the chrome.
+ * The header's view switcher, centred between the title and the sync chip.
  *
- * There's no "All" button: showing everyone is the default, and tapping the
- * active filter is the way back to it.
+ * One control for every screen that has a way of looking at itself: the
+ * registration grid filters by gender, the stopwatch picks its button layout.
+ * Living in the header costs no vertical space on the screens that want every
+ * pixel, and keeps the same control in the same place everywhere.
+ *
+ * An option is a `Link` when the state belongs in the URL and a button when it
+ * belongs to the device; either way they look and behave identically.
  */
-function GenderFilter({
-  pathname,
-  current,
-}: {
-  pathname: string;
-  current: string;
-}) {
-  const options = [
-    { value: "f", label: "Girls" },
-    { value: "m", label: "Boys" },
-  ];
+interface ToggleOption {
+  value: string;
+  label: string;
+  title?: string;
+  active: boolean;
+  to?: string;
+  onSelect?: () => void;
+}
 
+function HeaderToggles({
+  label,
+  options,
+  disabled,
+}: {
+  label: string;
+  options: ToggleOption[];
+  disabled?: boolean;
+}) {
   return (
     <div
       role="group"
-      aria-label="Filter roster by gender"
+      aria-label={label}
       className="flex shrink-0 overflow-hidden rounded-lg border border-slate-300 dark:border-slate-700"
     >
       {options.map((option, index) => {
-        const active = current === option.value;
-        const label = active
-          ? `${option.label} only — tap to show everyone`
-          : `${option.label} only`;
-        return (
+        const className = `flex h-8 touch-manipulation items-center justify-center px-3 text-xs font-bold transition-colors ${
+          index > 0 ? "border-l border-slate-300 dark:border-slate-700" : ""
+        } ${
+          option.active
+            ? "bg-blue-600 text-white"
+            : "text-slate-600 dark:text-slate-300"
+        } ${disabled ? "opacity-50" : ""}`;
+
+        return option.to !== undefined && !disabled ? (
           <Link
             key={option.value}
-            // Tapping the active one clears the filter; tapping the other
-            // swaps to it. Either way only one can be on.
-            to={active ? pathname : `${pathname}?g=${option.value}`}
+            to={option.to}
             replace
-            title={label}
-            aria-label={label}
-            aria-current={active ? "true" : undefined}
-            className={`flex h-8 touch-manipulation items-center justify-center px-3 text-xs font-bold transition-colors ${
-              index > 0 ? "border-l border-slate-300 dark:border-slate-700" : ""
-            } ${
-              active
-                ? "bg-blue-600 text-white"
-                : "text-slate-600 dark:text-slate-300"
-            }`}
+            title={option.title ?? option.label}
+            aria-label={option.title ?? option.label}
+            aria-current={option.active ? "true" : undefined}
+            className={className}
           >
             {option.label}
           </Link>
+        ) : (
+          <button
+            key={option.value}
+            type="button"
+            disabled={disabled}
+            onClick={option.onSelect}
+            title={option.title ?? option.label}
+            aria-label={option.title ?? option.label}
+            aria-pressed={option.active}
+            className={className}
+          >
+            {option.label}
+          </button>
         );
       })}
     </div>
   );
 }
 
+/**
+ * Girls / Boys for the registration grid. Rides on a search param so the grid
+ * needn't share state with the chrome.
+ *
+ * There's no "All" button: showing everyone is the default, and tapping the
+ * active filter is the way back to it.
+ */
+function genderOptions(pathname: string, current: string): ToggleOption[] {
+  return [
+    { value: "f", label: "Girls" },
+    { value: "m", label: "Boys" },
+  ].map((option) => {
+    const active = current === option.value;
+    return {
+      ...option,
+      active,
+      title: active
+        ? `${option.label} only — tap to show everyone`
+        : `${option.label} only`,
+      // Tapping the active one clears the filter; tapping the other swaps to
+      // it. Either way only one can be on.
+      to: active ? pathname : `${pathname}?g=${option.value}`,
+    };
+  });
+}
+
+/**
+ * How the stopwatch arranges its lane buttons. A single column in pool order
+ * suits watching from the side; the grid suits standing at the end. It's a
+ * device preference, so it carries to the next meet.
+ */
+function layoutOptions(
+  laneCount: number,
+  current: LaneLayout,
+  choose: (layout: LaneLayout) => void,
+): ToggleOption[] {
+  const labels: Record<LaneLayout, string> = {
+    grid: "Grid",
+    "list-asc": `1→${laneCount}`,
+    "list-desc": `${laneCount}→1`,
+  };
+
+  return LANE_LAYOUTS.map((layout) => ({
+    value: layout,
+    label: labels[layout],
+    title:
+      layout === "grid"
+        ? "Lane buttons in a grid"
+        : `Lane buttons in one column, ${labels[layout]}`,
+    active: current === layout,
+    onSelect: () => choose(layout),
+  }));
+}
+
 export default function Shell() {
   const { ready, team, meets } = useAppStore();
   const status = useSyncStatus();
+  const { laneLayout, setLaneLayout } = useViewPrefs();
   const location = useLocation();
   const params = useParams();
 
@@ -118,8 +192,29 @@ export default function Shell() {
   const chip = syncLabel(status);
 
   const onRegistration = location.pathname.endsWith("/registration");
+  const onRun = location.pathname.endsWith("/run");
   const rawGender = new URLSearchParams(location.search).get("g");
   const genderParam = rawGender === "f" || rawGender === "m" ? rawGender : "all";
+
+  // Rearranging the stop buttons under a running clock is how a lane gets
+  // missed, so the layout is fixed until the heat is off the clock.
+  const heatLive = openMeet?.timer != null;
+  const toggles = onRegistration ? (
+    <HeaderToggles
+      label="Filter roster by gender"
+      options={genderOptions(location.pathname, genderParam)}
+    />
+  ) : onRun && openMeet ? (
+    <HeaderToggles
+      label="Stopwatch button layout"
+      disabled={heatLive}
+      options={layoutOptions(
+        openMeet.options.laneCount,
+        laneLayout,
+        setLaneLayout,
+      )}
+    />
+  ) : null;
 
   const title = openMeet?.name ?? team.name;
   const subtitle = onRegistration
@@ -141,10 +236,10 @@ export default function Shell() {
             "right" mean the window edges on the full-bleed grid. */}
         <div
           className={`mx-auto grid h-full items-center gap-3 px-4 ${
-            onRegistration
-              ? "max-w-none grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"
-              : "max-w-3xl grid-cols-[minmax(0,1fr)_auto]"
-          }`}
+            toggles
+              ? "grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"
+              : "grid-cols-[minmax(0,1fr)_auto]"
+          } ${onRegistration ? "max-w-none" : "max-w-3xl"}`}
         >
           <div className="min-w-0">
             <h1 className="truncate text-base font-bold leading-tight">{title}</h1>
@@ -155,14 +250,7 @@ export default function Shell() {
             )}
           </div>
 
-          {onRegistration && (
-            <div className="justify-self-center">
-              <GenderFilter
-                pathname={location.pathname}
-                current={genderParam}
-              />
-            </div>
-          )}
+          {toggles && <div className="justify-self-center">{toggles}</div>}
 
           <span
             className={`justify-self-end rounded-full px-2 py-1 text-xs font-semibold ${CHIP_TONES[chip.tone]}`}

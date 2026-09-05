@@ -12,7 +12,6 @@ import {
   TEAM_DOC_VERSION,
   isLaneCount,
   isMeetCourse,
-  type LaneLayout,
   type MeetDoc,
   type MeetOptions,
   type MeetType,
@@ -49,7 +48,6 @@ export function createMeetDoc(teamId: string, patch: MeetPatch = {}): MeetDoc {
     course: "SCY",
     options: {
       laneCount: 6,
-      laneLayout: "grid",
       leadGender: "F",
       includeDiving: true,
     },
@@ -122,7 +120,6 @@ export function migrateMeet(input: unknown, teamId?: string): MeetDoc | null {
   if (!doc.id || !Array.isArray(doc.events)) return null;
 
   const laneCount = doc.options?.laneCount;
-  const laneLayout = doc.options?.laneLayout as LaneLayout | undefined;
   // "format" was this field's name for a day; "course" is the domain word.
   const course = doc.course ?? (doc as { format?: unknown }).format;
   const leadGender = doc.options?.leadGender;
@@ -139,10 +136,6 @@ export function migrateMeet(input: unknown, teamId?: string): MeetDoc | null {
     location: doc.location || undefined,
     options: {
       laneCount: isLaneCount(laneCount) ? laneCount : 6,
-      laneLayout:
-        laneLayout === "list-asc" || laneLayout === "list-desc"
-          ? laneLayout
-          : "grid",
       leadGender: leadGender === "M" ? "M" : "F",
       // Older saves predate the option; infer it from what's actually there.
       includeDiving:

@@ -4,8 +4,11 @@
  * synced or exported.
  */
 
+import { LANE_LAYOUTS, type LaneLayout } from "~/types/meet";
+
 const AUTO_SYNC_KEY = "meet-runner:auto-sync";
 const TOKEN_KEY = "meet-runner:sync-token";
+const LANE_LAYOUT_KEY = "meet-runner:lane-layout";
 
 /**
  * Whether this device pushes on its own. A device/network preference rather
@@ -33,4 +36,21 @@ export function saveSyncToken(token: string): void {
   if (typeof localStorage === "undefined") return;
   if (token) localStorage.setItem(TOKEN_KEY, token);
   else localStorage.removeItem(TOKEN_KEY);
+}
+
+/**
+ * How the stopwatch arranges its lane buttons. A property of whoever is
+ * holding the device — where they stand on the deck, which hand they use —
+ * rather than of the meet, so it stays here and carries to the next meet
+ * instead of being set again on every one.
+ */
+export function loadLaneLayout(): LaneLayout {
+  if (typeof localStorage === "undefined") return "grid";
+  const stored = localStorage.getItem(LANE_LAYOUT_KEY) as LaneLayout | null;
+  return stored && LANE_LAYOUTS.includes(stored) ? stored : "grid";
+}
+
+export function saveLaneLayout(layout: LaneLayout): void {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(LANE_LAYOUT_KEY, layout);
 }

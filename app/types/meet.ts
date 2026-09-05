@@ -86,6 +86,10 @@ export function isLaneCount(value: unknown): value is LaneCount {
  * layouts put the lanes in a single column in pool order, so whoever is
  * watching from the side maps a finish straight onto a button without
  * having to work out which column it's in.
+ *
+ * A device preference rather than a meet option — it depends on where the
+ * person holding the phone is standing, not on the meet — so it lives in
+ * `storage.ts` and never syncs.
  */
 export type LaneLayout = "grid" | "list-asc" | "list-desc";
 
@@ -221,7 +225,6 @@ export interface Result {
 
 export interface MeetOptions {
   laneCount: LaneCount;
-  laneLayout: LaneLayout;
   /**
    * Whether the lineup carries a Diving event. Kept in step with the events
    * themselves: removing the last Diving event switches this off.
@@ -277,7 +280,7 @@ export interface MeetDoc {
   syncedAt: number | null;
 }
 
-export const MEET_DOC_VERSION = 4;
+export const MEET_DOC_VERSION = 5;
 
 /** Enough of a meet to render the schedule without loading the whole thing. */
 export interface MeetSummary {

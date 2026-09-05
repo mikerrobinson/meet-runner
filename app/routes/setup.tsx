@@ -30,11 +30,9 @@ import {
   eventName,
   isDiving,
   isRelay,
-  orderedLanes,
   type EventGender,
   type Gender,
   type LaneCount,
-  type LaneLayout,
   type MeetCourse,
   type MeetDoc,
   type MeetType,
@@ -338,8 +336,8 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
 /* ----------------------------------------------------------------- options */
 
 function OptionsTab({ meet }: { meet: MeetDoc }) {
-  const { setMeetInfo, setCourse, setLaneCount, setLaneLayout } = useAppStore();
-  const { laneCount, laneLayout } = meet.options;
+  const { setMeetInfo, setCourse, setLaneCount } = useAppStore();
+  const { laneCount } = meet.options;
 
   return (
     <div className="space-y-4">
@@ -424,51 +422,6 @@ function OptionsTab({ meet }: { meet: MeetDoc }) {
           </Field>
         </div>
       </Card>
-
-      <Card>
-        <SectionTitle>Stopwatch buttons</SectionTitle>
-        <Field
-          label="Layout"
-          hint="A single column in pool order is easier to hit without looking — read the finish, drop straight down the column."
-        >
-          <Segmented
-            value={laneLayout}
-            onChange={(value) => setLaneLayout(meet.id, value as LaneLayout)}
-            options={[
-              { value: "grid" as LaneLayout, label: "Grid" },
-              { value: "list-asc" as LaneLayout, label: `1 → ${laneCount}` },
-              { value: "list-desc" as LaneLayout, label: `${laneCount} → 1` },
-            ]}
-          />
-        </Field>
-        <LayoutPreview laneCount={laneCount} layout={laneLayout} />
-      </Card>
-    </div>
-  );
-}
-
-/** Miniature of the Run screen's button arrangement, so the choice is visible. */
-function LayoutPreview({
-  laneCount,
-  layout,
-}: {
-  laneCount: LaneCount;
-  layout: LaneLayout;
-}) {
-  return (
-    <div
-      className={`mt-3 grid gap-1 ${
-        layout === "grid" ? "grid-cols-2" : "grid-cols-1"
-      }`}
-    >
-      {orderedLanes(laneCount, layout).map((lane) => (
-        <div
-          key={lane}
-          className="rounded-md bg-slate-200 py-1 text-center text-xs font-bold text-slate-600 dark:bg-slate-700 dark:text-slate-300"
-        >
-          Lane {lane}
-        </div>
-      ))}
     </div>
   );
 }

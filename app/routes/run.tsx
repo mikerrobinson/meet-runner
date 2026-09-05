@@ -8,6 +8,7 @@ import { useElapsed, useWakeLock } from "~/hooks/use-stopwatch";
 import { heatsForEvent } from "~/lib/heats";
 import { formatClock, formatTime, parseTime } from "~/lib/time";
 import { activeSwimmers, useAppStore } from "~/state/app-store";
+import { useViewPrefs } from "~/state/view-prefs";
 import {
   bySwimmer,
   displayName,
@@ -58,7 +59,7 @@ export default function RunMeet() {
     if (meet && event && !isDiving(event)) store.ensureHeats(meet.id, event.id);
   }, [meet, event, store]);
 
-  const layout = meet?.options.laneLayout ?? "grid";
+  const { laneLayout: layout } = useViewPrefs();
   const running = meet != null && heat != null && meet.timer?.heatId === heat.id;
 
   const resultsByLane = useMemo(() => {
