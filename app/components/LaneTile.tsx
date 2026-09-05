@@ -14,15 +14,19 @@ import {
  */
 const GRID_HEIGHT: Record<number, string> = {
   4: "h-32",
+  5: "h-28",
   6: "h-28",
   8: "h-24",
+  10: "h-20",
 };
 
 /** Shorter, because a list puts every lane in its own row. */
 const LIST_HEIGHT: Record<number, string> = {
   4: "h-20",
+  5: "h-18",
   6: "h-16",
   8: "h-[3.25rem]",
+  10: "h-12",
 };
 
 export function laneTileHeight(laneCount: number, layout: LaneLayout): string {

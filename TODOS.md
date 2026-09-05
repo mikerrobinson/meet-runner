@@ -22,6 +22,18 @@ In a split lineup, adding "100 Fly" nearly always means adding both girls' and
 boys'. Right now you add one and repeat. Could add the pair in lead order from
 one tap.
 
+### SD3 import and export
+The plan: read the standard `.sd3` files Hy-Tek, SwimTopia and Commit export, so
+an opponent's lineup can be imported rather than typed, and write results back
+out so a meet can be shared into whatever the other team runs. Needs teams as
+first-class references first — an SD3 entry belongs to a team, not to "us".
+Export is the easier half and the one that pays off immediately after a meet.
+
+### Teams as first-class references
+Prerequisite for the above, and for scoring more than one team. Open question
+worth settling early: a meet's teams as references to team documents (so
+rosters and lineups can be imported and reused) rather than labels on a meet.
+
 ### Copy the lineup from a previous meet
 Cheaper than full reusable templates (which we passed on) and gets most of the
 benefit — "same as last time" covers most of a season.

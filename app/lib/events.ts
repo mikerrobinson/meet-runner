@@ -1,11 +1,21 @@
 import { generateId } from "./id";
-import { DIVING_DISTANCE, isDiving, raceKey } from "~/types/meet";
-import type { EventGender, Gender, MeetEvent, Stroke } from "~/types/meet";
+import { DIVING_DISTANCE, isDiving, isRelay, raceKey } from "~/types/meet";
+import type {
+  EventGender,
+  Gender,
+  MeetCourse,
+  MeetEvent,
+  Stroke,
+} from "~/types/meet";
 
 /**
  * A standard high-school dual meet, in the order it's swum — relays included,
  * which is where they actually fall: medley opens, free relay closes, and
  * diving breaks up the middle after the 50 free.
+ *
+ * Written in yards, the US high-school norm. Every distance here is swum
+ * unchanged in a metric pool bar one: the distance event is a 400 rather than
+ * a 500, which is what `dualMeetOrder` swaps.
  */
 const DUAL_MEET_ORDER: Array<{ distance: number; stroke: Stroke }> = [
   { distance: 200, stroke: "Medley Relay" },
@@ -21,6 +31,24 @@ const DUAL_MEET_ORDER: Array<{ distance: number; stroke: Stroke }> = [
   { distance: 100, stroke: "Breast" },
   { distance: 400, stroke: "Free Relay" },
 ];
+
+function isYards(course: MeetCourse): boolean {
+  return course === "SCY";
+}
+
+/** The standard order as plain races, for building a lineup or naming one. */
+export function standardOrder(
+  course: MeetCourse,
+  includeDiving = true,
+): Array<{ distance: number; stroke: Stroke }> {
+  return DUAL_MEET_ORDER.filter(
+    (e) => includeDiving || e.stroke !== "Diving",
+  ).map((e) =>
+    !isYards(course) && e.distance === 500 && e.stroke === "Free"
+      ? { ...e, distance: 400 }
+      : e,
+  );
+}
 
 /** Races in the standard order — half the event count of a split lineup. */
 export function dualMeetRaceCount(includeDiving: boolean): number {
@@ -48,14 +76,18 @@ export function otherGender(gender: Gender): Gender {
  * back, with `leadGender` going first. "open" collapses that to one race per
  * event, which suits an inter-squad meet or a time trial.
  */
-export function defaultEvents(
-  mode: "split" | "open" = "split",
-  leadGender: Gender = "F",
+export function defaultEvents({
+  mode = "split",
+  leadGender = "F",
   includeDiving = true,
-): MeetEvent[] {
-  const order = includeDiving
-    ? DUAL_MEET_ORDER
-    : DUAL_MEET_ORDER.filter((e) => e.stroke !== "Diving");
+  course = "SCY",
+}: {
+  mode?: "split" | "open";
+  leadGender?: Gender;
+  includeDiving?: boolean;
+  course?: MeetCourse;
+} = {}): MeetEvent[] {
+  const order = standardOrder(course, includeDiving);
 
   if (mode === "open") {
     return order.map((e) => makeEvent(e.distance, e.stroke, "Open"));
@@ -136,8 +168,59 @@ export function orderByLeadGender(
   return ordered;
 }
 
-/** Distances offered in the "add event" picker. */
-export const COMMON_DISTANCES = [25, 50, 100, 200, 400, 500, 800, 1000, 1650];
+/**
+ * Distances with a counterpart in the other measure. Only these three differ:
+ * everything from the 25 up to the 200 is swum at the same number in either
+ * pool, which is why a lineup converts so cleanly.
+ */
+const DISTANCE_PAIRS: Array<[yards: number, metres: number]> = [
+  [500, 400],
+  [1000, 800],
+  [1650, 1500],
+];
 
-/** Relays are only ever swum at these distances, so the picker follows suit. */
+/**
+ * Rewrite a lineup's distances when a meet moves between yards and metres —
+ * the 500 free becomes a 400, the mile becomes the metric mile.
+ *
+ * Event ids are kept, so entries, heats and any recorded times come along.
+ * Relays are left alone: a 400 free relay is a 400 free relay in either pool,
+ * and converting it would silently turn it into a 500.
+ */
+export function convertDistances(
+  events: MeetEvent[],
+  from: MeetCourse,
+  to: MeetCourse,
+): MeetEvent[] {
+  if (isYards(from) === isYards(to)) return events;
+
+  const toMetres = isYards(from);
+  const swap = new Map(
+    DISTANCE_PAIRS.map(([yards, metres]) =>
+      toMetres ? [yards, metres] : [metres, yards],
+    ),
+  );
+
+  return events.map((event) => {
+    if (isRelay(event) || isDiving(event)) return event;
+    const distance = swap.get(event.distance);
+    return distance ? { ...event, distance } : event;
+  });
+}
+
+/**
+ * Distances offered in the "add event" picker, for the course this meet is
+ * swum in — a yards pool has no 400 free, a metric one no 500. The meet knows
+ * its course, so the picker doesn't have to offer both and hope.
+ */
+export function distancesFor(course: MeetCourse): number[] {
+  return isYards(course)
+    ? [25, 50, 100, 200, 500, 1000, 1650]
+    : [25, 50, 100, 200, 400, 800, 1500];
+}
+
+/**
+ * Relays are only ever swum at these distances, so the picker follows suit.
+ * The same four in either course — a 200 free relay is a 200 free relay.
+ */
 export const RELAY_DISTANCES = [100, 200, 400, 800];

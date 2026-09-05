@@ -1,25 +1,17 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import type { Route } from "./+types/meet-overview";
-import {
-  Banner,
-  Button,
-  Card,
-  Field,
-  SectionTitle,
-  Select,
-  TextInput,
-} from "~/components/ui";
+import { Banner, Button, Card, SectionTitle } from "~/components/ui";
 import { downloadFile, resultsToCsv } from "~/lib/csv";
 import { useAppStore } from "~/state/app-store";
-import { MEET_TYPES, type MeetType } from "~/types/meet";
+import { courseLabel, meetSubtitle } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Meet · Meet Runner" }];
 }
 
 const MODES = [
-  { slug: "setup", title: "Setup", detail: "Event order and pool options" },
+  { slug: "setup", title: "Setup", detail: "Meet details and event order" },
   {
     slug: "registration",
     title: "Registration",
@@ -30,7 +22,7 @@ const MODES = [
 ];
 
 export default function MeetOverview() {
-  const { meets, team, setMeetInfo, deleteMeet } = useAppStore();
+  const { meets, team, deleteMeet } = useAppStore();
   const { meetId } = useParams();
   const navigate = useNavigate();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -54,47 +46,29 @@ export default function MeetOverview() {
   return (
     <div className="space-y-4">
       <Card>
-        <SectionTitle>Meet details</SectionTitle>
-        <div className="space-y-3">
-          <Field label="Name">
-            <TextInput
-              value={meet.name}
-              onChange={(e) => setMeetInfo(meet.id, { name: e.target.value })}
-            />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Date">
-              <TextInput
-                type="date"
-                value={meet.date}
-                onChange={(e) => setMeetInfo(meet.id, { date: e.target.value })}
-              />
-            </Field>
-            <Field label="Type">
-              <Select
-                value={meet.type}
-                onChange={(e) =>
-                  setMeetInfo(meet.id, { type: e.target.value as MeetType })
-                }
-              >
-                {MEET_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          </div>
-          <Field label="Opponent" hint="Left blank for inter-squad and time trials.">
-            <TextInput
-              value={meet.opponent ?? ""}
-              onChange={(e) =>
-                setMeetInfo(meet.id, { opponent: e.target.value || undefined })
-              }
-              autoCapitalize="words"
-            />
-          </Field>
-        </div>
+        <SectionTitle
+          action={
+            <Link
+              to={`/meets/${meet.id}/setup`}
+              className="text-sm font-semibold text-blue-600"
+            >
+              Edit ›
+            </Link>
+          }
+        >
+          {meet.name}
+        </SectionTitle>
+        <p className="text-sm text-slate-600 dark:text-slate-300">
+          {[
+            meetSubtitle(meet),
+            meet.date,
+            courseLabel(meet.course),
+            `${meet.options.laneCount} lanes`,
+            meet.location,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </p>
 
         <dl className="mt-4 grid grid-cols-4 gap-2">
           {stats.map((stat) => (

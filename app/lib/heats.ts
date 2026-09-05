@@ -3,16 +3,24 @@ import type { Heat, LaneCount, MeetDoc } from "~/types/meet";
 
 /**
  * Lane assignment order, fastest lane first. Standard practice puts the top
- * seed in the middle of the pool and works outward, alternating sides.
+ * seed in the middle of the pool and works outward, alternating sides: six
+ * lanes seed 3-4-2-5-1-6, five lanes 3-2-4-1-5. An even pool has no true
+ * centre, so its first pair leans to the high side.
  */
-const LANE_ORDER: Record<LaneCount, number[]> = {
-  4: [2, 3, 1, 4],
-  6: [3, 4, 2, 5, 1, 6],
-  8: [4, 5, 3, 6, 2, 7, 1, 8],
-};
-
 export function laneOrder(laneCount: LaneCount): number[] {
-  return LANE_ORDER[laneCount] ?? LANE_ORDER[6];
+  const middle = Math.floor((laneCount + 1) / 2);
+  const even = laneCount % 2 === 0;
+  const order = [middle];
+
+  for (let step = 1; order.length < laneCount; step++) {
+    for (const lane of even
+      ? [middle + step, middle - step]
+      : [middle - step, middle + step]) {
+      if (lane >= 1 && lane <= laneCount) order.push(lane);
+    }
+  }
+
+  return order;
 }
 
 /**

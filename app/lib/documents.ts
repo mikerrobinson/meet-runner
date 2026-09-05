@@ -10,8 +10,11 @@ import { generateId } from "./id";
 import {
   MEET_DOC_VERSION,
   TEAM_DOC_VERSION,
+  isLaneCount,
+  isMeetCourse,
   type LaneLayout,
   type MeetDoc,
+  type MeetOptions,
   type MeetType,
   type Swimmer,
   type TeamDoc,
@@ -30,17 +33,20 @@ export function createTeam(name = "My Team"): TeamDoc {
   };
 }
 
-export function createMeetDoc(
-  teamId: string,
-  patch: Partial<MeetDoc> = {},
-): MeetDoc {
-  const doc: MeetDoc = {
+/** A patch may set just one option and leave the rest at their defaults. */
+export type MeetPatch = Partial<Omit<MeetDoc, "options">> & {
+  options?: Partial<MeetOptions>;
+};
+
+export function createMeetDoc(teamId: string, patch: MeetPatch = {}): MeetDoc {
+  const defaults: MeetDoc = {
     version: MEET_DOC_VERSION,
     id: generateId(),
     teamId,
     name: "New Meet",
     date: new Date().toISOString().slice(0, 10),
     type: "dual",
+    course: "SCY",
     options: {
       laneCount: 6,
       laneLayout: "grid",
@@ -55,7 +61,11 @@ export function createMeetDoc(
     timer: null,
     updatedAt: Date.now(),
     syncedAt: null,
+  };
+  const doc: MeetDoc = {
+    ...defaults,
     ...patch,
+    options: { ...defaults.options, ...patch.options },
   };
   // The lineup is the truth about diving — a meet started from an empty event
   // list has no Diving event, so the option shouldn't claim otherwise.
@@ -113,6 +123,8 @@ export function migrateMeet(input: unknown, teamId?: string): MeetDoc | null {
 
   const laneCount = doc.options?.laneCount;
   const laneLayout = doc.options?.laneLayout as LaneLayout | undefined;
+  // "format" was this field's name for a day; "course" is the domain word.
+  const course = doc.course ?? (doc as { format?: unknown }).format;
   const leadGender = doc.options?.leadGender;
 
   return {
@@ -122,9 +134,11 @@ export function migrateMeet(input: unknown, teamId?: string): MeetDoc | null {
     name: doc.name ?? "Untitled Meet",
     date: doc.date ?? new Date().toISOString().slice(0, 10),
     type: doc.type && MEET_TYPES.has(doc.type) ? doc.type : "dual",
-    opponent: doc.opponent || undefined,
+    // Saves predating the field were all high-school yards.
+    course: isMeetCourse(course) ? course : "SCY",
+    location: doc.location || undefined,
     options: {
-      laneCount: laneCount === 4 || laneCount === 8 ? laneCount : 6,
+      laneCount: isLaneCount(laneCount) ? laneCount : 6,
       laneLayout:
         laneLayout === "list-asc" || laneLayout === "list-desc"
           ? laneLayout

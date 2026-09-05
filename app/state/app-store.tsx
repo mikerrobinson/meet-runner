@@ -16,9 +16,14 @@ import {
   writeMeet,
   writeTeam,
 } from "~/lib/db";
-import { createMeetDoc, createTeam } from "~/lib/documents";
+import { createMeetDoc, createTeam, type MeetPatch } from "~/lib/documents";
 import { listMeets, pullMeet, pullTeam } from "~/lib/sync";
-import { orderByLeadGender, withDiving, withoutDiving } from "~/lib/events";
+import {
+  convertDistances,
+  orderByLeadGender,
+  withDiving,
+  withoutDiving,
+} from "~/lib/events";
 import { buildHeats, shuffle } from "~/lib/heats";
 import { generateId } from "~/lib/id";
 import { isDiving, isEligible } from "~/types/meet";
@@ -27,6 +32,7 @@ import type {
   Heat,
   LaneCount,
   LaneLayout,
+  MeetCourse,
   MeetDoc,
   MeetEvent,
   Result,
@@ -53,7 +59,7 @@ interface AppStore {
   setArchived: (id: string, archived: boolean) => void;
 
   /* Meets */
-  createMeet: (patch?: Partial<MeetDoc>) => MeetDoc;
+  createMeet: (patch?: MeetPatch) => MeetDoc;
   deleteMeet: (id: string) => void;
   getMeet: (id: string) => MeetDoc | undefined;
   updateMeet: (id: string, updater: MeetUpdater) => void;
@@ -65,8 +71,9 @@ interface AppStore {
   /* Meet detail — all scoped to an explicit meet id */
   setMeetInfo: (
     id: string,
-    patch: Partial<Pick<MeetDoc, "name" | "date" | "type" | "opponent">>,
+    patch: Partial<Pick<MeetDoc, "name" | "date" | "type" | "location">>,
   ) => void;
+  setCourse: (id: string, course: MeetCourse) => void;
   setLaneCount: (id: string, laneCount: LaneCount) => void;
   setLaneLayout: (id: string, laneLayout: LaneLayout) => void;
   setLeadGender: (id: string, leadGender: Gender) => void;
@@ -364,6 +371,15 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         ),
 
       setMeetInfo: (id, patch) => editMeet(id, (m) => ({ ...m, ...patch })),
+
+      // Moving between yards and metres converts the lineup with it, so a
+      // meet switched to LCM doesn't sit there offering a 500 free.
+      setCourse: (id, course) =>
+        editMeet(id, (m) => ({
+          ...m,
+          course,
+          events: convertDistances(m.events, m.course, course),
+        })),
 
       setLaneCount: (id, laneCount) =>
         editMeet(id, (m) => ({

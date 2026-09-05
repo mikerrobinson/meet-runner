@@ -10,18 +10,23 @@ import {
   SectionTitle,
   Segmented,
   Select,
+  TextInput,
 } from "~/components/ui";
 import {
-  COMMON_DISTANCES,
   RELAY_DISTANCES,
   defaultEvents,
+  distancesFor,
   dualMeetRaceCount,
   makeEvent,
+  standardOrder,
 } from "~/lib/events";
 import { useAppStore } from "~/state/app-store";
 import {
   LANE_COUNTS,
+  MEET_COURSES,
+  MEET_TYPES,
   STROKES,
+  courseLabel,
   eventName,
   isDiving,
   isRelay,
@@ -30,7 +35,9 @@ import {
   type Gender,
   type LaneCount,
   type LaneLayout,
+  type MeetCourse,
   type MeetDoc,
+  type MeetType,
   type Stroke,
 } from "~/types/meet";
 
@@ -95,7 +102,7 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
   const [gender, setGender] = useState<EventGender>("Open");
 
   const relay = isRelay({ stroke });
-  const distances = relay ? RELAY_DISTANCES : COMMON_DISTANCES;
+  const distances = relay ? RELAY_DISTANCES : distancesFor(meet.course);
   // Keep the distance valid when switching to or from a relay, so the form
   // can't offer something like a 50 Medley Relay.
   const chosen = distances.includes(distance) ? distance : relay ? 200 : 50;
@@ -289,22 +296,26 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
             onClick={() =>
               setEvents(
                 meet.id,
-                defaultEvents(
-                  "split",
-                  meet.options.leadGender,
-                  meet.options.includeDiving,
-                ),
+                defaultEvents({
+                  leadGender: meet.options.leadGender,
+                  includeDiving: meet.options.includeDiving,
+                  course: meet.course,
+                }),
               )
             }
           >
-            Girls &amp; boys ({dualMeetRaceCount(meet.options.includeDiving) * 2}
-            )
+            Girls &amp; boys (
+            {dualMeetRaceCount(meet.options.includeDiving) * 2})
           </Button>
           <Button
             onClick={() =>
               setEvents(
                 meet.id,
-                defaultEvents("open", "F", meet.options.includeDiving),
+                defaultEvents({
+                  mode: "open",
+                  includeDiving: meet.options.includeDiving,
+                  course: meet.course,
+                }),
               )
             }
           >
@@ -312,11 +323,12 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
           </Button>
         </div>
         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-          The usual dual-meet order: 200 Medley Relay, 200 Free, 200 IM, 50
-          Free, {meet.options.includeDiving && "Diving, "}100 Fly, 100 Free, 500
-          Free, 200 Free Relay, 100 Back, 100 Breast, 400 Free Relay.
-          &ldquo;Open&rdquo; swims each once, for an inter-squad meet or a time
-          trial.
+          The usual dual-meet order:{" "}
+          {standardOrder(meet.course, meet.options.includeDiving)
+            .map((e) => (isDiving(e) ? "Diving" : `${e.distance} ${e.stroke}`))
+            .join(", ")}
+          . &ldquo;Open&rdquo; swims each once, for an inter-squad meet or a
+          time trial.
         </p>
       </Card>
     </div>
@@ -326,27 +338,91 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
 /* ----------------------------------------------------------------- options */
 
 function OptionsTab({ meet }: { meet: MeetDoc }) {
-  const { setLaneCount, setLaneLayout } = useAppStore();
+  const { setMeetInfo, setCourse, setLaneCount, setLaneLayout } = useAppStore();
   const { laneCount, laneLayout } = meet.options;
 
   return (
     <div className="space-y-4">
       <Card>
-        <SectionTitle>Pool</SectionTitle>
-        <Field
-          label="Lanes"
-          hint="Sets how many swimmers go per heat, and how many buttons the stopwatch shows."
-        >
-          <Segmented
-            value={laneCount}
-            onChange={(value) => setLaneCount(meet.id, value as LaneCount)}
-            options={LANE_COUNTS.map((n) => ({ value: n, label: String(n) }))}
-          />
-        </Field>
-        <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-          Changing the lane count re-seeds heats for any event that hasn't been
-          swum yet. Events with recorded times keep their original lanes.
-        </p>
+        <SectionTitle>Meet details</SectionTitle>
+        <div className="space-y-3">
+          <Field label="Name">
+            <TextInput
+              value={meet.name}
+              onChange={(e) => setMeetInfo(meet.id, { name: e.target.value })}
+              autoCapitalize="words"
+            />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Date">
+              <TextInput
+                type="date"
+                value={meet.date}
+                onChange={(e) => setMeetInfo(meet.id, { date: e.target.value })}
+              />
+            </Field>
+            <Field label="Type">
+              <Select
+                value={meet.type}
+                onChange={(e) =>
+                  setMeetInfo(meet.id, { type: e.target.value as MeetType })
+                }
+              >
+                {MEET_TYPES.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    {t.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field
+              label="Course"
+              hint="Switching between yards and metres converts the lineup: the 500 free becomes a 400, the mile the metric mile."
+            >
+              <Select
+                value={meet.course}
+                onChange={(e) =>
+                  setCourse(meet.id, e.target.value as MeetCourse)
+                }
+              >
+                {MEET_COURSES.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {courseLabel(c.value)}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field
+              label="Lanes"
+              hint="Re-seeds heats for anything not yet swum."
+            >
+              <Select
+                value={laneCount}
+                onChange={(e) =>
+                  setLaneCount(meet.id, Number(e.target.value) as LaneCount)
+                }
+              >
+                {LANE_COUNTS.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <Field label="Location">
+            <TextInput
+              value={meet.location ?? ""}
+              onChange={(e) =>
+                setMeetInfo(meet.id, { location: e.target.value || undefined })
+              }
+              placeholder="Cactus Aquatic Center"
+              autoCapitalize="words"
+            />
+          </Field>
+        </div>
       </Card>
 
       <Card>

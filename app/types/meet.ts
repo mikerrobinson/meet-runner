@@ -69,9 +69,17 @@ export function shortStroke(stroke: Stroke): string {
   return stroke;
 }
 
-export type LaneCount = 4 | 6 | 8;
+export type LaneCount = 4 | 5 | 6 | 8 | 10;
 
-export const LANE_COUNTS: LaneCount[] = [4, 6, 8];
+/**
+ * Offered widths, likeliest first: six lanes is the high-school norm, and a
+ * five- or four-lane pool is a real thing at a small school.
+ */
+export const LANE_COUNTS: LaneCount[] = [6, 8, 10, 5, 4];
+
+export function isLaneCount(value: unknown): value is LaneCount {
+  return LANE_COUNTS.includes(value as LaneCount);
+}
 
 /**
  * How the lane buttons are arranged while running a heat. The two list
@@ -144,6 +152,33 @@ export const MEET_TYPES: Array<{ value: MeetType; label: string }> = [
 
 export function meetTypeLabel(type: MeetType): string {
   return MEET_TYPES.find((t) => t.value === type)?.label ?? "Meet";
+}
+
+/**
+ * The pool a meet is swum in. Short course yards is the US high-school
+ * default; the metric courses cover summer league and club water. Recorded
+ * with the meet because a time only means something next to its course.
+ */
+export type MeetCourse = "SCY" | "LCM" | "SCM";
+
+export const MEET_COURSES: Array<{
+  value: MeetCourse;
+  label: string;
+  detail: string;
+}> = [
+  { value: "SCY", label: "SCY", detail: "25 yard" },
+  { value: "LCM", label: "LCM", detail: "50 metre" },
+  { value: "SCM", label: "SCM", detail: "25 metre" },
+];
+
+export function isMeetCourse(value: unknown): value is MeetCourse {
+  return MEET_COURSES.some((c) => c.value === value);
+}
+
+/** Long form for the dropdown, e.g. "SCY — 25 yard". */
+export function courseLabel(course: MeetCourse): string {
+  const match = MEET_COURSES.find((c) => c.value === course);
+  return match ? `${match.label} — ${match.detail}` : course;
 }
 
 export interface MeetEvent {
@@ -224,8 +259,10 @@ export interface MeetDoc {
   /** ISO date (yyyy-mm-dd). */
   date: string;
   type: MeetType;
-  /** Who they're swimming, when that applies. */
-  opponent?: string;
+  /** The course times in this meet were swum in. */
+  course: MeetCourse;
+  /** Where it's being swum, free text — e.g. "Cactus Aquatic Center". */
+  location?: string;
   options: MeetOptions;
   /** Order of this array is the order events are swum. */
   events: MeetEvent[];
@@ -240,7 +277,7 @@ export interface MeetDoc {
   syncedAt: number | null;
 }
 
-export const MEET_DOC_VERSION = 2;
+export const MEET_DOC_VERSION = 4;
 
 /** Enough of a meet to render the schedule without loading the whole thing. */
 export interface MeetSummary {
@@ -248,7 +285,8 @@ export interface MeetSummary {
   name: string;
   date: string;
   type: MeetType;
-  opponent?: string;
+  course: MeetCourse;
+  location?: string;
   updatedAt: number;
 }
 
@@ -295,9 +333,8 @@ export function eventName(e: MeetEvent): string {
 }
 
 /** "Dual vs Central" / "Inter-squad" — the subtitle in the meet list. */
-export function meetSubtitle(meet: Pick<MeetDoc, "type" | "opponent">): string {
-  const label = meetTypeLabel(meet.type);
-  return meet.opponent ? `${label} vs ${meet.opponent}` : label;
+export function meetSubtitle(meet: Pick<MeetDoc, "type">): string {
+  return meetTypeLabel(meet.type);
 }
 
 /**

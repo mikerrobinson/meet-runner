@@ -11,11 +11,18 @@ import {
   Sheet,
   TextInput,
 } from "~/components/ui";
+import type { MeetPatch } from "~/lib/documents";
 import { defaultEvents, dualMeetRaceCount } from "~/lib/events";
 import { useAppStore } from "~/state/app-store";
 import {
+  LANE_COUNTS,
+  MEET_COURSES,
   MEET_TYPES,
+  courseLabel,
   meetSubtitle,
+  meetTypeLabel,
+  type LaneCount,
+  type MeetCourse,
   type MeetDoc,
   type MeetType,
 } from "~/types/meet";
@@ -23,6 +30,7 @@ import {
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Meets · Meet Runner" }];
 }
+
 
 export default function Meets() {
   const { meets, createMeet } = useAppStore();
@@ -64,8 +72,10 @@ export default function Meets() {
                     <span className="block truncate font-semibold">
                       {meet.name}
                     </span>
-                    <span className="block text-xs text-slate-500 dark:text-slate-400">
-                      {meet.date} · {meetSubtitle(meet)}
+                    <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
+                      {[meet.date, meetSubtitle(meet), meet.course, meet.location]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </span>
                     <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">
                       {summarize(meet)}
@@ -111,31 +121,31 @@ function NewMeetSheet({
   onCreate,
 }: {
   onClose: () => void;
-  onCreate: (patch: Partial<MeetDoc>) => MeetDoc;
+  onCreate: (patch: MeetPatch) => MeetDoc;
 }) {
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [type, setType] = useState<MeetType>("dual");
-  const [opponent, setOpponent] = useState("");
+  const [course, setCourse] = useState<MeetCourse>("SCY");
+  const [laneCount, setLaneCount] = useState<LaneCount>(6);
+  const [location, setLocation] = useState("");
   const [withDefaults, setWithDefaults] = useState(true);
 
-  const suggested =
-    type === "intersquad"
-      ? "Inter-squad"
-      : opponent.trim()
-        ? `vs ${opponent.trim()}`
-        : "New Meet";
+  // Named after what it is until there are teams to name it after.
+  const suggested = meetTypeLabel(type);
 
   const create = () => {
     const meet = onCreate({
       name: name.trim() || suggested,
       date,
       type,
-      opponent: opponent.trim() || undefined,
+      course,
+      location: location.trim() || undefined,
+      options: { laneCount },
       // Most meets swim the same lineup, so start from the standard order
       // rather than an empty setup screen.
-      events: withDefaults ? defaultEvents("split") : [],
+      events: withDefaults ? defaultEvents({ course }) : [],
     });
     onClose();
     navigate(`/meets/${meet.id}/setup`);
@@ -173,16 +183,42 @@ function NewMeetSheet({
             </Select>
           </Field>
         </div>
-        {type !== "intersquad" && type !== "time-trial" && (
-          <Field label="Opponent">
-            <TextInput
-              value={opponent}
-              onChange={(e) => setOpponent(e.target.value)}
-              placeholder="Central High"
-              autoCapitalize="words"
-            />
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Course">
+            <Select
+              value={course}
+              onChange={(e) => setCourse(e.target.value as MeetCourse)}
+            >
+              {MEET_COURSES.map((c) => (
+                <option key={c.value} value={c.value}>
+                  {courseLabel(c.value)}
+                </option>
+              ))}
+            </Select>
           </Field>
-        )}
+          <Field label="Lanes">
+            <Select
+              value={laneCount}
+              onChange={(e) =>
+                setLaneCount(Number(e.target.value) as LaneCount)
+              }
+            >
+              {LANE_COUNTS.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        <Field label="Location">
+          <TextInput
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder="Cactus Aquatic Center"
+            autoCapitalize="words"
+          />
+        </Field>
 
         <label className="flex min-h-12 touch-manipulation items-center gap-3">
           <input
