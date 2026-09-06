@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
 import type { Route } from "./+types/setup";
 import {
@@ -36,6 +36,7 @@ import {
   type LaneCount,
   type MeetCourse,
   type MeetDoc,
+  type MeetEvent,
   type MeetType,
   type Stroke,
 } from "~/types/meet";
@@ -116,52 +117,14 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
             Load a standard dual-meet order below, or add events one at a time.
           </EmptyState>
         ) : (
-          <ol className="divide-y divide-slate-200 dark:divide-slate-800">
-            {meet.events.map((event, index) => (
-              <li key={event.id} className="flex items-center gap-2 py-2">
-                <span className="w-7 shrink-0 text-center text-sm font-bold text-slate-400">
-                  {index + 1}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-semibold">{eventName(event)}</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    {(meet.entries[event.id] ?? []).length}
-                    {(meet.entries[event.id] ?? []).length == 1
-                      ? " entry"
-                      : " entries"}
-                  </p>
-                </div>
-                <div className="flex shrink-0 flex-col">
-                  <button
-                    type="button"
-                    aria-label="Move up"
-                    disabled={index === 0}
-                    onClick={() => moveEvent(meet.id, event.id, -1)}
-                    className="h-7 w-9 touch-manipulation rounded-t-lg bg-slate-200 text-xs disabled:opacity-30 dark:bg-slate-800"
-                  >
-                    ▲
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Move down"
-                    disabled={index === meet.events.length - 1}
-                    onClick={() => moveEvent(meet.id, event.id, 1)}
-                    className="h-7 w-9 touch-manipulation rounded-b-lg bg-slate-200 text-xs disabled:opacity-30 dark:bg-slate-800"
-                  >
-                    ▼
-                  </button>
-                </div>
-                <button
-                  type="button"
-                  aria-label={`Remove ${eventName(event)}`}
-                  onClick={() => removeEvent(meet.id, event.id)}
-                  className="h-11 w-9 shrink-0 touch-manipulation rounded-lg text-lg text-red-600"
-                >
-                  ✕
-                </button>
-              </li>
-            ))}
-          </ol>
+          <EventOrder
+            meet={meet}
+            onReorder={(events) => setEvents(meet.id, events)}
+            onNudge={(eventId, direction) =>
+              moveEvent(meet.id, eventId, direction)
+            }
+            onRemove={(eventId) => removeEvent(meet.id, eventId)}
+          />
         )}
       </Card>
 
@@ -306,6 +269,174 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
         </p>
       </Card>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------ event order */
+
+/**
+ * The running order, reorderable by dragging the handle on the left.
+ *
+ * Pointer events rather than HTML5 drag-and-drop, which doesn't fire on touch
+ * at all — and this list is mostly used on an iPad. The handle sits on the
+ * opposite side from the delete button so a mis-grab can't cost an event, and
+ * carries `touch-action: none` so a drag doesn't scroll the page instead.
+ *
+ * The handle is still a button: arrow keys move an event without dragging,
+ * which keeps it usable from a keyboard and by anyone who can't drag.
+ */
+function EventOrder({
+  meet,
+  onReorder,
+  onNudge,
+  onRemove,
+}: {
+  meet: MeetDoc;
+  onReorder: (events: MeetEvent[]) => void;
+  onNudge: (eventId: string, direction: -1 | 1) => void;
+  onRemove: (eventId: string) => void;
+}) {
+  const listRef = useRef<HTMLOListElement>(null);
+  // While a drag is in flight the list follows the pointer locally; the store
+  // hears about it once, on drop, rather than on every crossing.
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [order, setOrder] = useState<MeetEvent[] | null>(null);
+  const orderRef = useRef<MeetEvent[] | null>(null);
+
+  const events = order ?? meet.events;
+
+  /**
+   * Tracking happens on the window, bound the moment the drag starts.
+   *
+   * Pointer capture looks like the right tool and isn't: reordering moves the
+   * dragged row's DOM node, and moving a node releases its capture — after
+   * which the drop lands somewhere else and the drag never ends. Binding here
+   * rather than in an effect also means a quick flick can't slip through the
+   * gap before the next render.
+   */
+  const detachRef = useRef<(() => void) | null>(null);
+
+  const startDrag = (eventId: string) => (e: React.PointerEvent) => {
+    e.preventDefault();
+    setDragging(eventId);
+    setOrder(meet.events);
+    orderRef.current = meet.events;
+
+    const move = (moveEvent: PointerEvent) => {
+      const current = orderRef.current;
+      if (!current || !listRef.current) return;
+
+      const rows = [...listRef.current.children] as HTMLElement[];
+      const from = current.findIndex((event) => event.id === eventId);
+      // Measured rather than assumed: rows aren't all the same height.
+      const to = rows.findIndex((row) => {
+        const box = row.getBoundingClientRect();
+        return moveEvent.clientY >= box.top && moveEvent.clientY <= box.bottom;
+      });
+      if (to < 0 || from < 0 || to === from) return;
+
+      const next = [...current];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      orderRef.current = next;
+      setOrder(next);
+    };
+
+    const finish = (commit: boolean) => {
+      detachRef.current?.();
+      const current = orderRef.current;
+      if (commit && current) {
+        const changed = current.some(
+          (event, i) => event.id !== meet.events[i]?.id,
+        );
+        if (changed) onReorder(current);
+      }
+      orderRef.current = null;
+      setDragging(null);
+      setOrder(null);
+    };
+
+    const drop = () => finish(true);
+    const cancel = () => finish(false);
+    const onKey = (key: KeyboardEvent) => {
+      if (key.key === "Escape") cancel();
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", drop);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", onKey);
+    detachRef.current = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", drop);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", onKey);
+      detachRef.current = null;
+    };
+  };
+
+  // A drag interrupted by navigating away shouldn't leave listeners behind.
+  useEffect(() => () => detachRef.current?.(), []);
+
+  return (
+    <ol ref={listRef} className="divide-y divide-slate-200 dark:divide-slate-800">
+      {events.map((event, index) => {
+        const entries = (meet.entries[event.id] ?? []).length;
+        const held = dragging === event.id;
+        return (
+          <li
+            key={event.id}
+            // Lifted off the page while held: slightly larger, and a shadow
+            // thrown evenly rather than downward, so it reads as picked up
+            // rather than as the row below it having moved. `z-10` keeps it
+            // above the dividing lines it now overlaps.
+            className={`flex items-center gap-2 py-2 transition duration-150 ${
+              held
+                ? "relative z-10 scale-[1.03] rounded-xl bg-white shadow-[0_0_18px_rgba(15,23,42,0.28)] dark:bg-slate-800 dark:shadow-[0_0_18px_rgba(0,0,0,0.65)]"
+                : dragging
+                  ? "opacity-60"
+                  : ""
+            }`}
+          >
+            <button
+              type="button"
+              aria-label={`Reorder ${eventName(event)}`}
+              onPointerDown={startDrag(event.id)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowUp" && index > 0) {
+                  e.preventDefault();
+                  onNudge(event.id, -1);
+                } else if (e.key === "ArrowDown" && index < events.length - 1) {
+                  e.preventDefault();
+                  onNudge(event.id, 1);
+                }
+              }}
+              className="h-11 w-8 shrink-0 cursor-grab touch-none text-lg leading-none text-slate-400 active:cursor-grabbing"
+            >
+              ⠿
+            </button>
+            <span className="w-6 shrink-0 text-center text-sm font-bold text-slate-400">
+              {index + 1}
+            </span>
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-semibold">{eventName(event)}</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {entries}
+                {entries === 1 ? " entry" : " entries"}
+              </p>
+            </div>
+            <button
+              type="button"
+              aria-label={`Remove ${eventName(event)}`}
+              onClick={() => onRemove(event.id)}
+              className="h-11 w-9 shrink-0 touch-manipulation rounded-lg text-lg text-red-600"
+            >
+              ✕
+            </button>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
