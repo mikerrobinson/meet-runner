@@ -1,0 +1,78 @@
+import type { Route } from "./+types/api.sync";
+import {
+  SyncError,
+  errorResponse,
+  json,
+  requireAuth,
+  requireDb,
+  type SyncEnv,
+} from "~/lib/meets.server";
+import { convertDocuments, pullObjects, pushObjects } from "~/lib/sync.server";
+import type { SyncObject } from "~/lib/objects";
+
+/**
+ * One endpoint for the whole exchange: send what changed, get back what
+ * changed elsewhere.
+ *
+ *   POST { teamId, cursor, changes[] } -> { cursor, changes[], more, refused[] }
+ *
+ * Pushing and pulling in one round trip is what makes this usable on pool
+ * wifi, where the cost is the round trip rather than the bytes.
+ */
+export async function action({ request, context }: Route.ActionArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  try {
+    requireAuth(request, env);
+    if (request.method !== "POST") {
+      throw new SyncError("Use POST to sync", 405);
+    }
+
+    const body = (await request.json().catch(() => null)) as {
+      teamId?: string;
+      cursor?: string;
+      changes?: SyncObject[];
+    } | null;
+
+    if (!body?.teamId) throw new SyncError("Which team?", 400);
+
+    const db = requireDb(env);
+    const changes = body.changes ?? [];
+
+    // Objects can only ever be written into their own team's season.
+    const foreign = changes.find((o) => o.teamId !== body.teamId);
+    if (foreign) {
+      throw new SyncError("That batch mixes teams", 400);
+    }
+
+    const pushed = await pushObjects(db, changes);
+    const pulled = await pullObjects(db, body.teamId, body.cursor);
+
+    return json({
+      cursor: pulled.cursor,
+      changes: pulled.changes,
+      more: pulled.more,
+      applied: pushed.applied,
+      refused: pushed.refused,
+    });
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
+/**
+ * One-off: fill the object store from the old document tables. Safe to repeat
+ * — the objects it writes are the same ones each time.
+ */
+export async function loader({ request, context }: Route.LoaderArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  try {
+    requireAuth(request, env);
+    const url = new URL(request.url);
+    if (url.searchParams.get("convert") !== "1") {
+      throw new SyncError("POST to sync, or ?convert=1 to import documents", 400);
+    }
+    return json(await convertDocuments(requireDb(env)));
+  } catch (error) {
+    return errorResponse(error);
+  }
+}

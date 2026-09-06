@@ -30,7 +30,7 @@ import {
   nextYear,
   rosterForMeet,
 } from "~/lib/roster";
-import { listMeets, pullMeet, pullTeam } from "~/lib/sync";
+import { listMeets, listTeams, pullMeet, pullTeam } from "~/lib/sync";
 import {
   convertDistances,
   orderByLeadGender,
@@ -76,6 +76,8 @@ type MeetUpdater = (meet: MeetDoc) => MeetDoc;
 interface AppStore {
   /** False until IndexedDB has been read — nothing renders before then. */
   ready: boolean;
+  /** Set when on-device storage couldn't be opened at all. */
+  storageError: string | null;
   team: TeamDoc;
   /** Live meets, for everything on screen. */
   meets: MeetDoc[];
@@ -115,6 +117,12 @@ interface AppStore {
   updateMeet: (id: string, updater: MeetUpdater) => void;
   replaceTeam: (team: TeamDoc) => void;
   replaceMeet: (meet: MeetDoc) => void;
+  /** Take on a whole season from the server: this team, and only its meets. */
+  adoptSeason: (team: TeamDoc, meets: MeetDoc[]) => void;
+  /** Accept a deletion made on another device, without pushing it back. */
+  applyRemoteDeletion: (id: string, deletedAt: number) => void;
+  /** Take on what a sync brought back, keeping this device's own view of things. */
+  applyFromSync: (team: TeamDoc, meets: MeetDoc[]) => void;
   markTeamSynced: (updatedAt: number) => void;
   markMeetSynced: (id: string, updatedAt: number) => void;
 
@@ -200,16 +208,32 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * Pull the season onto a device that has none. Returns null when the server
- * has no team or can't be reached, in which case the caller starts fresh.
+ * Pull the season onto a device that has none.
+ *
+ * Asks what teams exist rather than letting the server decide what this
+ * device probably meant. Exactly one team is unambiguous, so it's adopted;
+ * several means a choice only a person can make, and the device waits to be
+ * told in Settings rather than guessing and possibly starting a second copy
+ * of the season.
+ *
+ * Returns null when there's nothing to adopt or the server can't be reached,
+ * in which case the caller starts fresh.
  */
 async function adoptSeasonFromServer(): Promise<{
   team: TeamDoc;
   meets: MeetDoc[];
 } | null> {
+  let candidates: Awaited<ReturnType<typeof listTeams>>;
+  try {
+    candidates = await withTimeout(listTeams(), ADOPT_TIMEOUT_MS);
+  } catch {
+    return null;
+  }
+  if (candidates.length !== 1) return null;
+
   let team: TeamDoc | null;
   try {
-    team = await withTimeout(pullTeam(), ADOPT_TIMEOUT_MS);
+    team = await withTimeout(pullTeam(candidates[0].id), ADOPT_TIMEOUT_MS);
   } catch {
     return null;
   }
@@ -217,13 +241,14 @@ async function adoptSeasonFromServer(): Promise<{
 
   const meets: MeetDoc[] = [];
   try {
-    const summaries = await withTimeout(listMeets(), ADOPT_TIMEOUT_MS);
+    const summaries = await withTimeout(
+      listMeets(team.id),
+      ADOPT_TIMEOUT_MS,
+    );
     for (const summary of summaries) {
+      if (summary.deletedAt) continue;
       const meet = await pullMeet(summary.id);
-      // Only this team's meets: the table can hold others from a past season.
-      if (meet && meet.teamId === team.id) {
-        meets.push({ ...meet, syncedAt: meet.updatedAt });
-      }
+      if (meet) meets.push({ ...meet, syncedAt: meet.updatedAt });
     }
   } catch {
     // The roster is the part that matters; meets can arrive on the next sync.
@@ -234,6 +259,7 @@ async function adoptSeasonFromServer(): Promise<{
 
 export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
+  const [storageError, setStorageError] = useState<string | null>(null);
   const [team, setTeam] = useState<TeamDoc>(() => createTeam());
   const [meets, setMeets] = useState<MeetDoc[]>([]);
 
@@ -278,6 +304,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         persistedMeets.current = new Map(loadedMeets.map((m) => [m.id, m]));
       } catch (error) {
         console.error("Could not open local storage:", error);
+        if (!cancelled) {
+          setStorageError(
+            error instanceof Error ? error.message : "Storage is unavailable.",
+          );
+        }
       } finally {
         if (!cancelled) setReady(true);
       }
@@ -411,6 +442,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
     return {
       ready,
+      storageError,
       team,
       meets: liveMeets,
       deletedMeets,
@@ -567,6 +599,41 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       replaceTeam: (next) => {
         persistedTeam.current = null;
         setTeam(next);
+      },
+
+      // Switching seasons replaces the lot. Meets belonging to a team this
+      // device is no longer holding would otherwise linger in the schedule
+      // with nobody on their roster.
+      adoptSeason: (nextTeam, nextMeets) => {
+        persistedTeam.current = null;
+        setTeam(nextTeam);
+        setMeets(nextMeets);
+      },
+
+      // The server says this meet was deleted elsewhere. Recording it as an
+      // already-synced tombstone rather than a fresh delete keeps it from
+      // bouncing back up as though this device had decided it.
+      applyRemoteDeletion: (id, deletedAt) =>
+        setMeets((current) =>
+          current.map((m) =>
+            m.id === id && !isDeleted(m)
+              ? { ...tombstone(m), deletedAt, updatedAt: deletedAt, syncedAt: deletedAt }
+              : m,
+          ),
+        ),
+
+      // The merged season, recomposed from objects. Where the device has a
+      // view of its own — which event it's sitting on — that's kept: it was
+      // never the server's to have an opinion about.
+      applyFromSync: (nextTeam, nextMeets) => {
+        setTeam(nextTeam);
+        setMeets((current) => {
+          const localById = new Map(current.map((m) => [m.id, m] as const));
+          return nextMeets.map((meet) => {
+            const local = localById.get(meet.id);
+            return local ? { ...meet, progress: local.progress } : meet;
+          });
+        });
       },
 
       replaceMeet: (next) =>
@@ -899,7 +966,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           watches: m.watches.filter((w) => w.id !== watchId),
         })),
     };
-  }, [ready, team, meets, editTeam, editMeet, editMeetQuietly]);
+  }, [ready, storageError, team, meets, editTeam, editMeet, editMeetQuietly]);
 
   return (
     <AppStoreContext.Provider value={store}>{children}</AppStoreContext.Provider>

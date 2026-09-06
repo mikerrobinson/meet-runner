@@ -1,5 +1,6 @@
 import { migrateMeet, migrateTeam } from "./documents";
 import { loadSyncToken } from "./storage";
+import type { SyncObject } from "./objects";
 import type { MeetDoc, TeamDoc } from "~/types/meet";
 
 export interface RemoteMeetSummary {
@@ -80,8 +81,13 @@ export async function pullMeet(id: string): Promise<MeetDoc | null> {
   return body.meet ? migrateMeet(body.meet) : null;
 }
 
-export async function listMeets(): Promise<RemoteMeetSummary[]> {
-  const body = await request<{ meets: RemoteMeetSummary[] }>("/api/meets");
+export async function listMeets(
+  teamId?: string,
+): Promise<RemoteMeetSummary[]> {
+  const query = teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
+  const body = await request<{ meets: RemoteMeetSummary[] }>(
+    `/api/meets${query}`,
+  );
   return body.meets;
 }
 
@@ -89,12 +95,56 @@ export async function listMeets(): Promise<RemoteMeetSummary[]> {
 export async function pushTeam(
   team: TeamDoc,
 ): Promise<{ updatedAt: number; applied: boolean }> {
-  return request("/api/team", { method: "PUT", body: JSON.stringify(team) });
+  return request(`/api/teams/${team.id}`, {
+    method: "PUT",
+    body: JSON.stringify(team),
+  });
 }
 
-export async function pullTeam(): Promise<TeamDoc | null> {
-  const body = await request<{ team: unknown | null }>("/api/team");
+/** Fetch one team by id. Null when the server has never seen it. */
+export async function pullTeam(id: string): Promise<TeamDoc | null> {
+  const body = await request<{ team: unknown | null }>(`/api/teams/${id}`);
   return body.team ? migrateTeam(body.team) : null;
+}
+
+export interface RemoteTeamSummary {
+  id: string;
+  name: string;
+  code: string;
+  season: string;
+  swimmers: number;
+  meets: number;
+  updatedAt: number;
+}
+
+/** Every team on the server, for a device deciding which season it's joining. */
+export async function listTeams(): Promise<RemoteTeamSummary[]> {
+  const body = await request<{ teams: RemoteTeamSummary[] }>("/api/teams");
+  return body.teams;
+}
+
+export interface SyncExchange {
+  cursor: string;
+  changes: SyncObject[];
+  more: boolean;
+  applied: number;
+  /** Objects the server refused because its copy was edited more recently. */
+  refused: SyncObject[];
+}
+
+/**
+ * One round trip: hand over what changed here, take back what changed
+ * elsewhere. On pool wifi the round trip is the expense, not the bytes.
+ */
+export async function exchange(
+  teamId: string,
+  cursor: string,
+  changes: SyncObject[],
+): Promise<SyncExchange> {
+  return request("/api/sync", {
+    method: "POST",
+    body: JSON.stringify({ teamId, cursor, changes }),
+  });
 }
 
 /** Whether the server has sync configured at all (i.e. a D1 binding exists). */

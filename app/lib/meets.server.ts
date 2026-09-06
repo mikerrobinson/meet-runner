@@ -115,15 +115,25 @@ export interface MeetSummaryRow {
   deleted_at: number | null;
 }
 
-export async function listMeetSummaries(db: D1Database) {
+export async function listMeetSummaries(db: D1Database, teamId?: string) {
   await ensureSchema(db);
   // Deleted meets are listed too, with their tombstone: a device that already
   // holds a copy learns to drop it, and one that never had it can skip it.
-  const { results } = await db
-    .prepare(
-      "SELECT id, name, date, updated_at, deleted_at FROM meets ORDER BY updated_at DESC LIMIT 50",
-    )
-    .all<MeetSummaryRow>();
+  // Scoped to one team when the caller says which — a device only wants the
+  // meets belonging to the season it's holding.
+  const { results } = teamId
+    ? await db
+        .prepare(
+          `SELECT id, name, date, updated_at, deleted_at FROM meets
+           WHERE team_id = ? ORDER BY updated_at DESC LIMIT 50`,
+        )
+        .bind(teamId)
+        .all<MeetSummaryRow>()
+    : await db
+        .prepare(
+          "SELECT id, name, date, updated_at, deleted_at FROM meets ORDER BY updated_at DESC LIMIT 50",
+        )
+        .all<MeetSummaryRow>();
   return results.map((row) => ({
     id: row.id,
     name: row.name,
@@ -225,51 +235,68 @@ function parseTeamRow(data: string): TeamDoc | null {
   }
 }
 
+/** One team, by id. The client always knows which team it means. */
+export async function getTeam(
+  db: D1Database,
+  id: string,
+): Promise<TeamDoc | null> {
+  await ensureSchema(db);
+  const row = await db
+    .prepare("SELECT data FROM teams WHERE id = ?")
+    .bind(id)
+    .first<{ data: string }>();
+  return row ? parseTeamRow(row.data) : null;
+}
+
+export interface TeamSummary {
+  id: string;
+  name: string;
+  code: string;
+  season: string;
+  swimmers: number;
+  meets: number;
+  updatedAt: number;
+}
+
 /**
- * The season's team.
+ * Every team the server holds.
  *
- * There should only ever be one row. More than one means some device minted
- * its own team instead of adopting the season already here — in which case the
- * newest row is usually the *empty* one it just created, so recency is exactly
- * the wrong tiebreak. Decide by what the data says instead: whichever team the
- * meets actually belong to, then whichever has a roster at all, and only then
- * the most recently touched.
+ * Replaces the old "work out which team they probably meant" ranking. A
+ * device asks for the team it knows about, and a device that knows about none
+ * is shown this list rather than being guessed at — guessing is what let an
+ * empty team shadow a real roster in the first place.
  */
-export async function getTeam(db: D1Database): Promise<TeamDoc | null> {
+export async function listTeams(db: D1Database): Promise<TeamSummary[]> {
   await ensureSchema(db);
 
   const { results } = await db
-    .prepare("SELECT id, updated_at, data FROM teams")
+    .prepare("SELECT id, updated_at, data FROM teams ORDER BY updated_at DESC")
     .all<{ id: string; updated_at: number; data: string }>();
-
-  if (results.length === 0) return null;
-  if (results.length === 1) return parseTeamRow(results[0].data);
 
   const { results: meetCounts } = await db
     .prepare(
-      "SELECT team_id, COUNT(*) AS n FROM meets WHERE team_id IS NOT NULL GROUP BY team_id",
+      `SELECT team_id, COUNT(*) AS n FROM meets
+       WHERE team_id IS NOT NULL AND deleted_at IS NULL
+       GROUP BY team_id`,
     )
     .all<{ team_id: string; n: number }>();
   const byTeam = new Map(meetCounts.map((row) => [row.team_id, row.n] as const));
 
-  const ranked = results
-    .map((row) => {
-      const team = parseTeamRow(row.data);
-      return {
-        team,
+  return results.flatMap((row) => {
+    const team = parseTeamRow(row.data);
+    if (!team) return [];
+    return [
+      {
+        id: team.id,
+        name: team.name,
+        code: team.code,
+        season: currentSeason(team)?.name ?? "",
+        swimmers: team.swimmers.length,
         meets: byTeam.get(row.id) ?? 0,
-        swimmers: team?.swimmers.length ?? 0,
         updatedAt: row.updated_at,
-      };
-    })
-    .sort(
-      (a, b) =>
-        b.meets - a.meets ||
-        b.swimmers - a.swimmers ||
-        b.updatedAt - a.updatedAt,
-    );
-
-  return ranked[0].team;
+      },
+    ];
+  });
 }
 
 /** Same last-write-wins rule as meets: a stale push is rejected, not applied. */

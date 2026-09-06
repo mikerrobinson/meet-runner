@@ -172,11 +172,28 @@ function layoutOptions(
 }
 
 export default function Shell() {
-  const { ready, team, meets } = useAppStore();
+  const { ready, storageError, team, meets } = useAppStore();
   const status = useSyncStatus();
   const { laneLayout, setLaneLayout } = useViewPrefs();
   const location = useLocation();
   const params = useParams();
+
+  if (storageError) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-6">
+        <div className="max-w-sm text-center">
+          <p className="text-lg font-bold">Can&rsquo;t open this device&rsquo;s storage</p>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+            {storageError}
+          </p>
+          <p className="mt-2 text-xs text-slate-500">
+            Nothing has been lost — the season is still on this device and on
+            the server.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (!ready) {
     return (

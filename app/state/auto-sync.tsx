@@ -9,8 +9,17 @@ import {
   type ReactNode,
 } from "react";
 import { loadAutoSync, saveAutoSync } from "~/lib/storage";
-import { SyncRequestError, pushMeet, pushTeam, syncStatus } from "~/lib/sync";
+import { readBaseline, readCursor, writeBaseline, writeCursor } from "~/lib/db";
+import {
+  changedObjects,
+  fromObjects,
+  mergeObjects,
+  toObjects,
+  type SyncObject,
+} from "~/lib/objects";
+import { SyncRequestError, exchange, syncStatus } from "~/lib/sync";
 import { useAppStore } from "~/state/app-store";
+import type { MeetDoc, TeamDoc } from "~/types/meet";
 
 /**
  * Pushes the meet to the server on its own, shortly after things go quiet.
@@ -53,16 +62,43 @@ export interface SyncStatus {
   syncNow: () => void;
 }
 
+/**
+ * Whether a team is worth putting on the server yet.
+ *
+ * A team with nobody on it and no meets is a placeholder a device made for
+ * itself before it knew any better. Pushing one is how an empty roster once
+ * came to shadow a real season — so it stays put until it has something in
+ * it, and adopting the real team quietly replaces it.
+ */
+function hasSomethingToSay(team: TeamDoc, meets: MeetDoc[]): boolean {
+  return team.swimmers.length > 0 || meets.length > 0;
+}
+
 /** Quiet period before a push. Long enough to swallow a burst of lane taps. */
 const DEBOUNCE_MS = 2500;
+/**
+ * How often a visible device asks what happened elsewhere.
+ *
+ * Without this, news only arrives when the device has something of its own to
+ * send or the tab regains focus — so a coach watching the registration grid
+ * while someone else fills it in would sit there looking at a stale screen.
+ * Ten seconds is short enough to feel live on a deck and long enough that an
+ * idle tab costs almost nothing: an empty exchange is about 130 bytes.
+ */
+const POLL_MS = 10_000;
 /** Backoff after failures — a dead pool wifi shouldn't be retried every second. */
 const BACKOFF_MS = [4000, 10_000, 30_000, 60_000];
 
 const SyncStatusContext = createContext<SyncStatus | null>(null);
 
 export function AutoSyncProvider({ children }: { children: ReactNode }) {
-  const { ready, team, meets, deletedMeets, markTeamSynced, markMeetSynced } =
-    useAppStore();
+  const {
+    ready,
+    team,
+    meets,
+    deletedMeets,
+    applyFromSync,
+  } = useAppStore();
   // Tombstones are the whole point of the delete: they have to go up too.
   const syncable = useMemo(
     () => [...meets, ...deletedMeets],
@@ -82,8 +118,8 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   // empty roster on the server ahead of the real one.
   const docsRef = useRef({ ready, team, meets: syncable });
   docsRef.current = { ready, team, meets: syncable };
-  const markRef = useRef({ markTeamSynced, markMeetSynced });
-  markRef.current = { markTeamSynced, markMeetSynced };
+  const applyRef = useRef(applyFromSync);
+  applyRef.current = applyFromSync;
 
   const enabledRef = useRef(enabled);
   enabledRef.current = enabled;
@@ -92,39 +128,52 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   const inFlightRef = useRef(false);
 
   /**
-   * Documents the server refused as stale, and the `updatedAt` it refused.
+   * What the server and this device last agreed on, as objects.
    *
-   * Held back so a rejection doesn't become a retry loop, and so the rest of
-   * the season keeps syncing while one document is stuck. Keyed by version
-   * rather than by id: editing the document again is a new version and
-   * deserves a fresh attempt, which is exactly what the message tells the
-   * coach to do.
+   * Doubles as each object's real timestamp. The documents only have one
+   * between them, which is too coarse to merge on: a swimmer added here and a
+   * time recorded there have to be able to win independently.
    */
-  const divergedRef = useRef(new Map<string, number>());
+  const [baseline, setBaseline] = useState<SyncObject[]>([]);
+  const baselineRef = useRef(baseline);
+  baselineRef.current = baseline;
+  const cursorRef = useRef("");
+  /** Set when we want the server's news even with nothing of our own to send. */
+  const wantPullRef = useRef(true);
+  /**
+   * Until the stored baseline is read back, this device doesn't know what the
+   * server already has — and would push the whole season as though it were
+   * new. Nothing goes out before it lands.
+   */
+  const baselineLoadedRef = useRef(false);
+  const [baselineLoaded, setBaselineLoaded] = useState(false);
+  /** Which team the baseline describes, so switching seasons can't confuse it. */
+  const baselineTeamRef = useRef<string | null>(null);
+
   const failuresRef = useRef(0);
   const stoppedRef = useRef(false);
 
-  // The roster and every meet are separate documents, so "pending" means any
-  // one of them is behind — and only the ones behind get pushed.
-  const pendingCount =
-    (team.syncedAt !== team.updatedAt ? 1 : 0) +
-    syncable.filter((m) => m.syncedAt !== m.updatedAt).length;
-  const pending = pendingCount > 0;
-
   /**
-   * Which versions are waiting to go up, not just how many.
+   * What's waiting to go up, object by object.
    *
-   * Editing a document that's already pending leaves the count unchanged, so a
-   * scheduler watching the count alone would never wake for it — which matters
-   * most after a refused push, when the count is stuck at one and the coach's
-   * next edit is the thing that would resolve it.
+   * Compared against the baseline by content rather than by timestamp: the
+   * documents carry one timestamp between them, so a single lane tap would
+   * otherwise look like every time in the meet had changed.
    */
-  const pendingSignature = [
-    team.syncedAt !== team.updatedAt ? team.updatedAt : "",
-    ...syncable
-      .filter((m) => m.syncedAt !== m.updatedAt)
-      .map((m) => `${m.id}:${m.updatedAt}`),
-  ].join("|");
+  const outgoing = useMemo(() => {
+    if (!ready || !baselineLoaded || !hasSomethingToSay(team, syncable)) {
+      return [];
+    }
+    return changedObjects(baseline, toObjects(team, syncable));
+  }, [ready, baselineLoaded, team, syncable, baseline]);
+
+  const pendingCount = outgoing.length;
+  const pending = pendingCount > 0;
+  // Identity of what's waiting, so an edit to something already pending still
+  // wakes the scheduler — the count alone wouldn't change.
+  const pendingSignature = outgoing
+    .map((o) => `${o.type}:${o.id}:${o.updatedAt}`)
+    .join("|");
 
   // Declared up front so `schedule` can reach the latest pump without the two
   // callbacks depending on each other.
@@ -147,62 +196,75 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
       team: currentTeam,
       meets: currentMeets,
     } = docsRef.current;
-    if (!isReady) return;
-    const diverged = divergedRef.current;
-    const refusedAlready = (doc: { id: string; updatedAt: number }) =>
-      diverged.get(doc.id) === doc.updatedAt;
-    const staleTeam =
-      currentTeam.syncedAt !== currentTeam.updatedAt &&
-      !refusedAlready(currentTeam)
-        ? currentTeam
-        : null;
-    const staleMeets = currentMeets.filter(
-      (m) => m.syncedAt !== m.updatedAt && !refusedAlready(m),
-    );
-    if (!staleTeam && staleMeets.length === 0) return;
+    if (!isReady || !baselineLoadedRef.current) return;
+
+    const base = baselineRef.current;
+    const changes = hasSomethingToSay(currentTeam, currentMeets)
+      ? changedObjects(base, toObjects(currentTeam, currentMeets))
+      : [];
+
+    // Nothing to send and nothing asked for: don't wake the server up.
+    if (changes.length === 0 && !wantPullRef.current) return;
 
     inFlightRef.current = true;
     setPhase("syncing");
 
     try {
-      // Roster first: a meet's swimmer ids are meaningless to another device
-      // until the roster they point into has landed.
-      const refused: string[] = [];
+      const result = await exchange(
+        currentTeam.id,
+        cursorRef.current,
+        changes,
+      );
+      wantPullRef.current = false;
 
-      if (staleTeam) {
-        const sentAt = staleTeam.updatedAt;
-        // `applied: false` means the server's copy is newer. Marking it synced
-        // anyway would claim the roster is safely up there when it isn't.
-        const { applied } = await pushTeam(staleTeam);
-        if (applied) markRef.current.markTeamSynced(sentAt);
-        else {
-          diverged.set(staleTeam.id, sentAt);
-          refused.push("the roster");
-        }
-      }
-      for (const meet of staleMeets) {
-        // Remember what we're sending: edits made during the flight must stay
-        // pending rather than being marked as synced.
-        const sentAt = meet.updatedAt;
-        const { applied } = await pushMeet(meet);
-        if (applied) markRef.current.markMeetSynced(meet.id, sentAt);
-        else {
-          diverged.set(meet.id, sentAt);
-          refused.push(meet.name);
-        }
+      // What this device now believes, object by object: what it just sent,
+      // then whatever came back on top — newest edit wins, per object.
+      const sent = mergeObjects(base, changes);
+      const merged = mergeObjects(sent, result.changes);
+
+      // A refusal means the server's copy of that one object was edited more
+      // recently. Take its version rather than insisting on ours.
+      const settled =
+        result.refused.length > 0
+          ? mergeObjects(merged, result.refused)
+          : merged;
+
+      baselineRef.current = settled;
+      cursorRef.current = result.cursor;
+      setBaseline(settled);
+      void writeBaseline(settled);
+      void writeCursor(result.cursor);
+
+      // Only rebuild the season when something actually arrived — recomposing
+      // for nothing would churn every document on the screen.
+      if (result.changes.length > 0 || result.refused.length > 0) {
+        const { team: nextTeam, meets: nextMeets } = fromObjects(settled);
+        if (nextTeam) applyRef.current(nextTeam, nextMeets);
       }
 
       failuresRef.current = 0;
-      if (refused.length > 0) {
+      if (result.refused.length > 0) {
+        // Not a stalemate any more: the objects we lost were superseded, and
+        // we've just taken the newer versions. Worth saying, not worth
+        // blocking on.
         setPhase("diverged");
         setMessage(
-          `The server has a newer copy of ${refused.join(", ")}. Nothing was overwritten — restore from the server, or make a change here to push over it.`,
+          `The server had newer versions of ${result.refused.length} thing${
+            result.refused.length === 1 ? "" : "s"
+          }; this device has taken them.`,
         );
       } else {
         setPhase("idle");
         setMessage(undefined);
       }
       setLastSyncAt(Date.now());
+
+      // More pages waiting: keep going rather than waiting for an edit.
+      if (result.more) {
+        wantPullRef.current = true;
+        schedule(0);
+        return;
+      }
     } catch (error) {
       const status = error instanceof SyncRequestError ? error.status : -1;
       // A missing database or a rejected token won't fix itself; retrying
@@ -222,11 +284,10 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
 
     const now = docsRef.current;
     if (stoppedRef.current || !now.ready) return;
-    const unrefused = (doc: { id: string; updatedAt: number }) =>
-      divergedRef.current.get(doc.id) !== doc.updatedAt;
     const stillPending =
-      (now.team.syncedAt !== now.team.updatedAt && unrefused(now.team)) ||
-      now.meets.some((m) => m.syncedAt !== m.updatedAt && unrefused(m));
+      hasSomethingToSay(now.team, now.meets) &&
+      changedObjects(baselineRef.current, toObjects(now.team, now.meets))
+        .length > 0;
     if (stillPending) {
       const failures = failuresRef.current;
       schedule(
@@ -278,6 +339,88 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
     );
   }, [ready, pending, pendingSignature, schedule]);
 
+  // Pick up where the last session left off before anything is sent, or the
+  // first push would look like the whole season had just been written.
+  useEffect(() => {
+    if (!ready) return;
+    let cancelled = false;
+    (async () => {
+      const [stored, cursor] = await Promise.all([readBaseline(), readCursor()]);
+      if (cancelled) return;
+      baselineRef.current = stored;
+      cursorRef.current = cursor;
+      baselineTeamRef.current = docsRef.current.team.id;
+      baselineLoadedRef.current = true;
+      setBaseline(stored);
+      setBaselineLoaded(true);
+    })().catch(() => {
+      baselineLoadedRef.current = true;
+      setBaselineLoaded(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [ready]);
+
+  /**
+   * Taking on a different season throws the baseline away.
+   *
+   * It describes what the server holds for the team we *were* on. Diffing the
+   * new season against it would read every object of the old one as deleted,
+   * and try to say so — about a team this device no longer even holds.
+   */
+  useEffect(() => {
+    if (!baselineLoadedRef.current) return;
+    if (baselineTeamRef.current === team.id) return;
+    baselineTeamRef.current = team.id;
+    baselineRef.current = [];
+    cursorRef.current = "";
+    wantPullRef.current = true;
+    setBaseline([]);
+    void writeBaseline([]);
+    void writeCursor("");
+  }, [team.id]);
+
+  /**
+   * Ask for news on a timer while the tab is visible.
+   *
+   * Stops the moment the tab is hidden — a backgrounded device has nobody
+   * looking at it, and its timers get throttled to uselessness anyway.
+   */
+  useEffect(() => {
+    if (!ready || !enabled) return;
+
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const start = () => {
+      if (timer !== null) return;
+      timer = setInterval(() => {
+        if (stoppedRef.current || !enabledRef.current) return;
+        wantPullRef.current = true;
+        void pumpRef.current();
+      }, POLL_MS);
+    };
+
+    const stop = () => {
+      if (timer === null) return;
+      clearInterval(timer);
+      timer = null;
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") start();
+      else stop();
+    };
+
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [ready, enabled]);
+
   // Coming back from a dead zone, or back to the tab, is the moment most
   // worth retrying — waiting out the backoff would be silly.
   useEffect(() => {
@@ -285,6 +428,9 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
       if (stoppedRef.current || !enabledRef.current) return;
       if (!docsRef.current.ready) return;
       failuresRef.current = 0;
+      // Coming back to the tab is also the moment to find out what happened
+      // elsewhere while it was in the background — not just to retry our own.
+      wantPullRef.current = true;
       schedule(0);
     };
     const onVisible = () => {
@@ -324,9 +470,8 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   );
 
   const syncNow = useCallback(() => {
-    // A manual push is the user saying "try again" — give refused documents
-    // another go rather than leaving them stuck forever.
-    divergedRef.current.clear();
+    // A manual sync is also a request for the server's news.
+    wantPullRef.current = true;
     stoppedRef.current = false;
     failuresRef.current = 0;
     // A manual push works even with auto-sync switched off.

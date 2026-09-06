@@ -11,14 +11,17 @@ import {
 import { loadSyncToken, saveSyncToken } from "~/lib/storage";
 import {
   listMeets,
+  listTeams,
   pullMeet,
   pullTeam,
   pushMeet,
   pushTeam,
   syncStatus,
   type RemoteMeetSummary,
+  type RemoteTeamSummary,
 } from "~/lib/sync";
 import { useAppStore } from "~/state/app-store";
+import type { MeetDoc } from "~/types/meet";
 import { useSyncStatus } from "~/state/auto-sync";
 
 function relative(timestamp: number | null): string {
@@ -37,6 +40,7 @@ export function SyncPanel() {
     deletedMeets,
     getMeet,
     deleteMeet,
+    adoptSeason,
     replaceTeam,
     replaceMeet,
     markTeamSynced,
@@ -50,6 +54,9 @@ export function SyncPanel() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [remote, setRemote] = useState<RemoteMeetSummary[] | null>(null);
+  const [remoteTeams, setRemoteTeams] = useState<RemoteTeamSummary[] | null>(
+    null,
+  );
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
   const [confirmRestore, setConfirmRestore] = useState(false);
@@ -77,11 +84,37 @@ export function SyncPanel() {
 
   const handleList = () =>
     run(async () => {
-      const found = await listMeets();
+      const [foundTeams, found] = await Promise.all([
+        listTeams(),
+        listMeets(team.id),
+      ]);
+      setRemoteTeams(foundTeams);
       setRemote(found);
       return found.length
         ? `Found ${found.length} meet${found.length === 1 ? "" : "s"} on the server.`
         : "No meets on the server yet.";
+    });
+
+  /** Take on another season entirely — the team, and the meets that go with it. */
+  const adopt = (summary: RemoteTeamSummary) =>
+    run(async () => {
+      const pulled = await pullTeam(summary.id);
+      if (!pulled) throw new Error("That team has gone from the server.");
+
+      const summaries = await listMeets(summary.id);
+      const pulledMeets: MeetDoc[] = [];
+      for (const meetSummary of summaries) {
+        if (meetSummary.deletedAt) continue;
+        const meet = await pullMeet(meetSummary.id);
+        if (meet) pulledMeets.push({ ...meet, syncedAt: meet.updatedAt });
+      }
+
+      adoptSeason({ ...pulled, syncedAt: pulled.updatedAt }, pulledMeets);
+      setRemoteTeams(null);
+      setRemote(null);
+      return `Now working in ${pulled.name} — ${pulled.swimmers.length} swimmers and ${pulledMeets.length} meet${
+        pulledMeets.length === 1 ? "" : "s"
+      }.`;
     });
 
   const handlePushAll = () =>
@@ -119,11 +152,13 @@ export function SyncPanel() {
   /** Pull the roster and every meet the server has, roster first. */
   const doRestore = () =>
     run(async () => {
-      const remoteTeam = await pullTeam();
-      if (!remoteTeam) throw new Error("The server has no team yet.");
+      const remoteTeam = await pullTeam(team.id);
+      if (!remoteTeam) {
+        throw new Error("The server doesn't have this team yet — push first.");
+      }
       replaceTeam({ ...remoteTeam, syncedAt: remoteTeam.updatedAt });
 
-      const summaries = await listMeets();
+      const summaries = await listMeets(team.id);
       let restored = 0;
       let dropped = 0;
       for (const summary of summaries) {
@@ -246,6 +281,52 @@ export function SyncPanel() {
               ]}
             />
           </Field>
+        </div>
+      )}
+
+      {remoteTeams && remoteTeams.length > 0 && (
+        <div className="mt-4">
+          <h3 className="mb-1 text-sm font-bold text-slate-600 dark:text-slate-300">
+            Teams on the server
+          </h3>
+          <ul className="divide-y divide-slate-200 dark:divide-slate-800">
+            {remoteTeams.map((summary) => {
+              const mine = summary.id === team.id;
+              return (
+                <li
+                  key={summary.id}
+                  className="flex items-center justify-between gap-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate font-semibold">
+                      {summary.name}
+                      {summary.code && ` (${summary.code})`}
+                      {mine && (
+                        <span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-200">
+                          on this device
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {summary.season && `${summary.season} · `}
+                      {summary.swimmers} swimmer
+                      {summary.swimmers === 1 ? "" : "s"} · {summary.meets} meet
+                      {summary.meets === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  {!mine && (
+                    <Button
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => adopt(summary)}
+                    >
+                      Use this season
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         </div>
       )}
 
