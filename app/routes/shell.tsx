@@ -278,7 +278,8 @@ export default function Shell() {
     ? undefined
     : openMeet
       ? meetSubtitle(openMeet)
-      : location.pathname.startsWith("/team")
+      : location.pathname.startsWith("/team") ||
+          location.pathname.startsWith("/athletes")
         ? `${rosterFor(team, team.currentSeasonId).length} swimmers · ${currentSeason(team)?.name ?? ""}`
         : undefined;
 

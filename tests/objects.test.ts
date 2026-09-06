@@ -13,7 +13,7 @@ const s1 = makeSeason(base.id, "2026-27", { startDate: "2026-08-01", endDate: "2
 const team: TeamDoc = {
   ...base, code: "CHAP", headCoach: "M. Robinson", nameOrder: "first" as const,
   seasons: [s1], currentSeasonId: s1.id,
-  swimmers: [
+  athletes: [
     { id: "a1", firstName: "Avery", lastName: "Nguyen", gender: "F" as const, birthDate: "2009-03-14" },
     { id: "a2", firstName: "Marcus", lastName: "Hill", gender: "M" },
   ],
@@ -49,7 +49,7 @@ eq(back.team!.code, "CHAP", "code");
 eq(back.team!.headCoach, "M. Robinson", "head coach");
 eq(back.team!.currentSeasonId, s1.id, "current season");
 eq(back.team!.seasons, team.seasons, "seasons intact");
-eq(back.team!.swimmers, team.swimmers, "athletes intact");
+eq(back.team!.athletes, team.athletes, "athletes intact");
 eq(back.team!.enrollments, team.enrollments, "enrollments intact");
 
 const bm = back.meets.find((m) => m.id === meet.id)!;
@@ -76,7 +76,7 @@ const oneWatch = changedObjects(before, toObjects(team, [withWatch]));
 eq(oneWatch.length, 1, "adding a watch sends exactly one object");
 eq(oneWatch[0].type, "watch", "and it's the watch");
 
-const withSwimmer = { ...team, swimmers: [...team.swimmers, { id: "a3", firstName: "Jo", lastName: "Park", gender: "F" as const }], updatedAt: Date.now() };
+const withSwimmer = { ...team, athletes: [...team.athletes, { id: "a3", firstName: "Jo", lastName: "Park", gender: "F" as const }], updatedAt: Date.now() };
 const oneAthlete = changedObjects(before, toObjects(withSwimmer, [meet]));
 eq(oneAthlete.length, 1, "adding a swimmer sends exactly one object");
 eq(oneAthlete[0].type, "athlete", "and it's the athlete");
@@ -123,7 +123,7 @@ eq(bigWatches.length, 432, "432 watches in a 24-event meet with three timers a l
 const laptop = changedObjects(before, toObjects(withSwimmer, [meet]), 2000);
 const ipad = changedObjects(before, toObjects(team, [withWatch]), 2000);
 const both = fromObjects(mergeObjects(mergeObjects(before, laptop), ipad));
-eq(both.team!.swimmers.length, 3, "the laptop's swimmer survives");
+eq(both.team!.athletes.length, 3, "the laptop's swimmer survives");
 eq(both.meets[0].watches.length, 3, "and the iPad's watch does too");
 
 const older = { ...before[0], data: { ...(before[0].data as object), name: "Older" }, updatedAt: 1 };

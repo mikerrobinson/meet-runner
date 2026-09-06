@@ -11,7 +11,7 @@ import type {
   Enrollment,
   MeetDoc,
   Season,
-  Swimmer,
+  Athlete,
   TeamDoc,
 } from "~/types/meet";
 
@@ -66,7 +66,7 @@ export function enrollmentsIn(team: TeamDoc, seasonId: string): Enrollment[] {
   return team.enrollments.filter((e) => e.seasonId === seasonId);
 }
 
-/** Enrollments for a season keyed by athlete, for rows that need it per swimmer. */
+/** Enrollments for a season keyed by athlete, for rows that need it per athlete. */
 export function enrollmentIndex(
   team: TeamDoc,
   seasonId: string | undefined,
@@ -96,33 +96,22 @@ export function enrollmentFor(
 export function rosterFor(
   team: TeamDoc,
   seasonId: string | undefined,
-): Swimmer[] {
+): Athlete[] {
   if (!seasonId) return [];
   const active = new Set(
     team.enrollments
       .filter((e) => e.seasonId === seasonId && e.status === "active")
       .map((e) => e.athleteId),
   );
-  return team.swimmers.filter((s) => active.has(s.id));
+  return team.athletes.filter((s) => active.has(s.id));
 }
 
 /** Who's enterable in this meet: the roster of the season it falls in. */
 export function rosterForMeet(
   team: TeamDoc,
   meet: Pick<MeetDoc, "date">,
-): Swimmer[] {
+): Athlete[] {
   return rosterFor(team, seasonForMeet(team, meet)?.id);
-}
-
-/**
- * Everyone the team has ever had, whether or not they're on this season's
- * roster. Used where history matters — results, a swimmer's own page.
- */
-export function findAthlete(
-  team: TeamDoc,
-  athleteId: string | undefined,
-): Swimmer | undefined {
-  return team.swimmers.find((s) => s.id === athleteId);
 }
 
 /** Seasons an athlete has an enrollment in, most recent first. */

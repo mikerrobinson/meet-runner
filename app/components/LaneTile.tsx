@@ -4,7 +4,7 @@ import {
   type LaneLayout,
   type NameOrder,
   type Result,
-  type Swimmer,
+  type Athlete,
 } from "~/types/meet";
 
 /**
@@ -47,7 +47,7 @@ function tone(result: Result | undefined, running: boolean): string {
 
 export function LaneTile({
   lane,
-  swimmer,
+  athlete,
   result,
   running,
   clockRunning,
@@ -59,7 +59,7 @@ export function LaneTile({
   onAssign,
 }: {
   lane: number;
-  swimmer?: Swimmer;
+  athlete?: Athlete;
   result?: Result;
   running: boolean;
   clockRunning: boolean;
@@ -73,7 +73,7 @@ export function LaneTile({
   const height = laneTileHeight(laneCount, layout);
   const isList = layout !== "grid";
 
-  if (!swimmer) {
+  if (!athlete) {
     return (
       <button
         type="button"
@@ -114,7 +114,7 @@ export function LaneTile({
           Lane {lane}
         </span>
         <span className="min-w-0 flex-1 truncate text-lg font-bold leading-tight">
-          {displayName(swimmer, nameOrder)}
+          {displayName(athlete, nameOrder)}
         </span>
         <span className="shrink-0 text-2xl font-bold tabular-nums">{value}</span>
       </button>
@@ -129,7 +129,7 @@ export function LaneTile({
     >
       <span className="text-xs font-bold opacity-70">Lane {lane}</span>
       <span className="w-full truncate text-base font-bold leading-tight">
-        {displayName(swimmer, nameOrder)}
+        {displayName(athlete, nameOrder)}
       </span>
       <span className="mt-0.5 text-2xl font-bold leading-none tabular-nums">
         {value}

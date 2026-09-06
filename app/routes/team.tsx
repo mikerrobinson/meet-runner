@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import type { Route } from "./+types/team";
-import { SwimmerSheet } from "~/components/SwimmerSheet";
+import { AthleteSheet } from "~/components/AthleteSheet";
 import {
   Banner,
   Button,
@@ -15,11 +15,11 @@ import { currentSeason, enrollmentsIn } from "~/lib/roster";
 import { allResults } from "~/lib/timing";
 import { useAppStore, type RosterEntry } from "~/state/app-store";
 import {
-  bySwimmer,
+  byAthlete,
   displayName,
-  swimmerName,
+  athleteName,
   type Enrollment,
-  type Swimmer,
+  type Athlete,
 } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
@@ -41,15 +41,15 @@ export default function Team() {
   const [showArchived, setShowArchived] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  /** How many meets each swimmer has a time in — shown on the roster row. */
+  /** How many meets each athlete has a time in — shown on the roster row. */
   const swimCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const meet of meets) {
       const seen = new Set<string>();
       for (const result of allResults(meet)) {
-        if (seen.has(result.swimmerId)) continue;
-        seen.add(result.swimmerId);
-        counts.set(result.swimmerId, (counts.get(result.swimmerId) ?? 0) + 1);
+        if (seen.has(result.athleteId)) continue;
+        seen.add(result.athleteId);
+        counts.set(result.athleteId, (counts.get(result.athleteId) ?? 0) + 1);
       }
     }
     return counts;
@@ -70,8 +70,8 @@ export default function Team() {
   };
 
   const byId = useMemo(
-    () => new Map(team.swimmers.map((s) => [s.id, s] as const)),
-    [team.swimmers],
+    () => new Map(team.athletes.map((s) => [s.id, s] as const)),
+    [team.athletes],
   );
   const active = enrolled.filter((e) => e.status === "active");
   const inactive = enrolled.filter((e) => e.status !== "active");
@@ -79,13 +79,13 @@ export default function Team() {
   const visible = useMemo(() => {
     const query = search.trim().toLowerCase();
     return (showArchived ? enrolled : active)
-      .map((enrollment) => ({ enrollment, swimmer: byId.get(enrollment.athleteId) }))
+      .map((enrollment) => ({ enrollment, athlete: byId.get(enrollment.athleteId) }))
       .filter(
-        (row): row is { enrollment: Enrollment; swimmer: Swimmer } =>
-          row.swimmer !== undefined &&
-          (!query || swimmerName(row.swimmer).toLowerCase().includes(query)),
+        (row): row is { enrollment: Enrollment; athlete: Athlete } =>
+          row.athlete !== undefined &&
+          (!query || athleteName(row.athlete).toLowerCase().includes(query)),
       )
-      .sort((a, b) => bySwimmer(team.nameOrder)(a.swimmer, b.swimmer));
+      .sort((a, b) => byAthlete(team.nameOrder)(a.athlete, b.athlete));
   }, [enrolled, active, byId, showArchived, search, team.nameOrder]);
 
   return (
@@ -120,13 +120,13 @@ export default function Team() {
               className="mb-2"
             />
             <ul className="divide-y divide-slate-200 dark:divide-slate-800">
-              {visible.map(({ swimmer, enrollment }) => {
-                const swims = swimCounts.get(swimmer.id) ?? 0;
+              {visible.map(({ athlete, enrollment }) => {
+                const swims = swimCounts.get(athlete.id) ?? 0;
                 const off = enrollment.status !== "active";
                 return (
-                  <li key={swimmer.id}>
+                  <li key={athlete.id}>
                     <Link
-                      to={`/team/${swimmer.id}`}
+                      to={`/athletes/${athlete.id}`}
                       className="flex min-h-14 touch-manipulation items-center justify-between gap-3 py-2"
                     >
                       <span className="min-w-0">
@@ -135,7 +135,7 @@ export default function Team() {
                             off ? "text-slate-400" : ""
                           }`}
                         >
-                          {displayName(swimmer, team.nameOrder)}
+                          {displayName(athlete, team.nameOrder)}
                           {off && (
                             <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                               off roster
@@ -143,7 +143,7 @@ export default function Team() {
                           )}
                         </span>
                         <span className="block text-xs text-slate-500 dark:text-slate-400">
-                          {swimmer.gender}
+                          {athlete.gender}
                           {enrollment.year && ` · ${enrollment.year}`}
                           {enrollment.squad && ` · ${enrollment.squad}`}
                           {swims > 0 &&
@@ -257,11 +257,11 @@ export default function Team() {
       </Card>
 
       {adding && (
-        <SwimmerSheet
+        <AthleteSheet
           title="Add swimmer"
           onClose={() => setAdding(false)}
-          onSave={(swimmer, facts) => {
-            enrol([{ athlete: swimmer, ...facts }], "append");
+          onSave={(athlete, facts) => {
+            enrol([{ athlete: athlete, ...facts }], "append");
             setAdding(false);
           }}
         />

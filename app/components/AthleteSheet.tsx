@@ -6,16 +6,16 @@ import {
   todayIso,
   type Enrollment,
   type Gender,
-  type Swimmer,
+  type Athlete,
 } from "~/types/meet";
 
 /**
- * Add or edit one swimmer. Mount it only while it's open (or key it by swimmer
+ * Add or edit one athlete. Mount it only while it's open (or key it by athlete
  * id) so the fields start from the right values.
  */
-export function SwimmerSheet({
+export function AthleteSheet({
   title,
-  swimmer,
+  athlete,
   enrollment,
   onClose,
   onSave,
@@ -23,19 +23,19 @@ export function SwimmerSheet({
   deleteLabel = "Remove from roster",
 }: {
   title: string;
-  swimmer?: Swimmer;
+  athlete?: Athlete;
   /** This season's facts about them, edited alongside the person. */
   enrollment?: Pick<Enrollment, "year" | "squad">;
   onClose: () => void;
-  onSave: (swimmer: Swimmer, facts: { year: string; squad?: string }) => void;
+  onSave: (athlete: Athlete, facts: { year: string; squad?: string }) => void;
   onDelete?: () => void;
   deleteLabel?: string;
 }) {
-  const [firstName, setFirstName] = useState(swimmer?.firstName ?? "");
-  const [lastName, setLastName] = useState(swimmer?.lastName ?? "");
-  const [gender, setGender] = useState<Gender>(swimmer?.gender ?? "F");
+  const [firstName, setFirstName] = useState(athlete?.firstName ?? "");
+  const [lastName, setLastName] = useState(athlete?.lastName ?? "");
+  const [gender, setGender] = useState<Gender>(athlete?.gender ?? "F");
   const [year, setYear] = useState(enrollment?.year ?? "");
-  const [birthDate, setBirthDate] = useState(swimmer?.birthDate ?? "");
+  const [birthDate, setBirthDate] = useState(athlete?.birthDate ?? "");
   const [squad, setSquad] = useState(enrollment?.squad ?? "");
 
   const canSave = Boolean(firstName.trim() || lastName.trim());
@@ -45,7 +45,7 @@ export function SwimmerSheet({
     if (!canSave) return;
     onSave(
       {
-        id: swimmer?.id ?? generateId(),
+        id: athlete?.id ?? generateId(),
         firstName: firstName.trim(),
         lastName: lastName.trim(),
         gender,
@@ -63,7 +63,7 @@ export function SwimmerSheet({
             value={firstName}
             onChange={(e) => setFirstName(e.target.value)}
             autoCapitalize="words"
-            autoFocus={!swimmer}
+            autoFocus={!athlete}
           />
         </Field>
         <Field label="Last name">

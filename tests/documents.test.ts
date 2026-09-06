@@ -94,7 +94,7 @@ import { buildHeats } from "../app/lib/heats.ts";
     code: "CHAP",
     headCoach: "M. Robinson",
     nameOrder: "first" as const,
-    swimmers: [
+    athletes: [
       { id: "s1", firstName: "Avery", lastName: "Nguyen", gender: "F" as const, birthDate: "2009-03-14" },
       { id: "s2", firstName: "Marcus", lastName: "Hill", gender: "M" as const },
     ],
@@ -149,7 +149,7 @@ import { buildHeats } from "../app/lib/heats.ts";
   eq(reimportedMeet.watches.length, 2, "both timers' watches survive, not just one");
   eq(reimportedMeet.heats, meet.heats, "heats carry through verbatim");
   eq(reimportedMeet.entries, meet.entries, "entries carry through verbatim");
-  eq(reimportedTeam.swimmers[0].birthDate, "2009-03-14", "birth dates carry through");
+  eq(reimportedTeam.athletes[0].birthDate, "2009-03-14", "birth dates carry through");
   eq(reimportedTeam.enrollments, JSON.parse(JSON.stringify(team.enrollments)), "enrollments carry through verbatim");
   eq(reimportedTeam.seasons, JSON.parse(JSON.stringify(team.seasons)), "seasons carry through verbatim");
   eq(reimportedTeam.code, "CHAP", "team code carries through");

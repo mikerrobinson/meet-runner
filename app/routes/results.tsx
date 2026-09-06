@@ -7,7 +7,7 @@ import { formatTime } from "~/lib/time";
 import { enrollmentIndex, seasonForMeet } from "~/lib/roster";
 import { allResults, recordedCount } from "~/lib/timing";
 import { useAppStore } from "~/state/app-store";
-import { eventName, swimmerName, type Result } from "~/types/meet";
+import { eventName, athleteName, type Result } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Results · Meet Runner" }];
@@ -22,8 +22,8 @@ export default function Results() {
 
   // Names come from the roster, so a spelling fixed later shows up here too.
   const swimmers = useMemo(
-    () => new Map(team.swimmers.map((s) => [s.id, s] as const)),
-    [team.swimmers],
+    () => new Map(team.athletes.map((s) => [s.id, s] as const)),
+    [team.athletes],
   );
 
   // Squad as it was that season, not as it is now.
@@ -127,7 +127,7 @@ export default function Results() {
             {open && (
               <ol className="mt-3 divide-y divide-slate-200 dark:divide-slate-800">
                 {results.map((result, place) => {
-                  const swimmer = swimmers.get(result.swimmerId);
+                  const athlete = swimmers.get(result.athleteId);
                   return (
                     <li
                       key={`${result.heatId}:${result.lane}`}
@@ -138,12 +138,12 @@ export default function Results() {
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-semibold">
-                          {swimmer ? swimmerName(swimmer) : "(removed)"}
+                          {athlete ? athleteName(athlete) : "(removed)"}
                         </span>
                         <span className="block text-xs text-slate-500 dark:text-slate-400">
                           Lane {result.lane}
-                          {enrollments.get(result.swimmerId)?.squad &&
-                            ` · ${enrollments.get(result.swimmerId)?.squad}`}
+                          {enrollments.get(result.athleteId)?.squad &&
+                            ` · ${enrollments.get(result.athleteId)?.squad}`}
                           {result.manual && " · typed in"}
                         </span>
                       </span>

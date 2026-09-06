@@ -240,7 +240,7 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
         {relay && (
           <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
             Relays are timed like any other event — one clock per lane. Put one
-            swimmer in each relay's lane to stand for the squad; the four legs
+            athlete in each relay's lane to stand for the squad; the four legs
             aren&rsquo;t tracked separately.
           </p>
         )}

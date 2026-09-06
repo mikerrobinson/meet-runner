@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import type { Route } from "./+types/swimmer-detail";
-import { SwimmerSheet } from "~/components/SwimmerSheet";
+import type { Route } from "./+types/athlete-detail";
+import { AthleteSheet } from "~/components/AthleteSheet";
 import {
   Banner,
   Button,
@@ -17,14 +17,14 @@ import {
   ageOn,
   eventName,
   meetSubtitle,
-  swimmerName,
+  athleteName,
   todayIso,
   type MeetDoc,
   type Result,
 } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Swimmer · Meet Runner" }];
+  return [{ title: "Athlete · Meet Runner" }];
 }
 
 interface Swim {
@@ -37,26 +37,26 @@ interface Swim {
   best: boolean;
 }
 
-export default function SwimmerDetail() {
+export default function AthleteDetail() {
   const { team, meets, saveAthlete, setEnrollmentStatus } = useAppStore();
-  const { swimmerId } = useParams();
+  const { athleteId } = useParams();
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
 
-  const swimmer = team.swimmers.find((s) => s.id === swimmerId);
+  const athlete = team.athletes.find((s) => s.id === athleteId);
 
   /**
    * Every swim this person has, newest meet first, grouped by event so the
    * screen answers "how's their 100 Free going" rather than just listing times.
    */
   const byEvent = useMemo(() => {
-    if (!swimmer) return [];
+    if (!athlete) return [];
 
     const swims: Swim[] = [];
     for (const meet of meets) {
       const results = allResults(meet);
       for (const result of results) {
-        if (result.swimmerId !== swimmer.id) continue;
+        if (result.athleteId !== athlete.id) continue;
         const event = meet.events.find((e) => e.id === result.eventId);
         if (!event) continue;
 
@@ -110,9 +110,9 @@ export default function SwimmerDetail() {
         return { label, swims: sorted, bestMs };
       })
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [swimmer, meets]);
+  }, [athlete, meets]);
 
-  if (!swimmer) {
+  if (!athlete) {
     return (
       <EmptyState title="No such swimmer">
         <Link to="/team" className="font-semibold text-blue-600 underline">
@@ -123,9 +123,9 @@ export default function SwimmerDetail() {
   }
 
   const totalSwims = byEvent.reduce((sum, group) => sum + group.swims.length, 0);
-  const age = ageOn(swimmer, todayIso());
+  const age = ageOn(athlete, todayIso());
   const season = currentSeason(team);
-  const enrollment = enrollmentFor(team, swimmer.id, season?.id);
+  const enrollment = enrollmentFor(team, athlete.id, season?.id);
   const onRoster = enrollment?.status === "active";
 
   return (
@@ -138,11 +138,11 @@ export default function SwimmerDetail() {
             </Button>
           }
         >
-          {swimmerName(swimmer)}
+          {athleteName(athlete)}
         </SectionTitle>
         <dl className="grid grid-cols-4 gap-2">
           {[
-            { label: "Gender", value: swimmer.gender },
+            { label: "Gender", value: athlete.gender },
             { label: "Year", value: enrollment?.year || "—" },
             { label: "Age", value: age === null ? "—" : String(age) },
             { label: "Squad", value: enrollment?.squad || "—" },
@@ -158,9 +158,9 @@ export default function SwimmerDetail() {
             </div>
           ))}
         </dl>
-        {swimmer.birthDate && (
+        {athlete.birthDate && (
           <p className="mt-2 text-center text-xs text-slate-500 dark:text-slate-400">
-            Born {swimmer.birthDate}
+            Born {athlete.birthDate}
           </p>
         )}
         {!onRoster && (
@@ -241,7 +241,7 @@ export default function SwimmerDetail() {
         {!onRoster ? (
           <Button
             full
-            onClick={() => setEnrollmentStatus(swimmer.id, "active")}
+            onClick={() => setEnrollmentStatus(athlete.id, "active")}
           >
             Add to the {season?.name ?? "current"} roster
           </Button>
@@ -255,18 +255,18 @@ export default function SwimmerDetail() {
             <Button
               variant="ghost"
               full
-              onClick={() => setEnrollmentStatus(swimmer.id, "inactive")}
+              onClick={() => setEnrollmentStatus(athlete.id, "inactive")}
             >
-              Take {swimmerName(swimmer)} off the roster
+              Take {athleteName(athlete)} off the roster
             </Button>
           </>
         )}
       </Card>
 
       {editing && (
-        <SwimmerSheet
+        <AthleteSheet
           title="Edit swimmer"
-          swimmer={swimmer}
+          athlete={athlete}
           enrollment={enrollment}
           onClose={() => setEditing(false)}
           onSave={(next, facts) => {
@@ -274,7 +274,7 @@ export default function SwimmerDetail() {
             setEditing(false);
           }}
           onDelete={() => {
-            setEnrollmentStatus(swimmer.id, "inactive");
+            setEnrollmentStatus(athlete.id, "inactive");
             setEditing(false);
             navigate("/team");
           }}

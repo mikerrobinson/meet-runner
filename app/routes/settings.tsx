@@ -52,7 +52,7 @@ export default function Settings() {
   const season = currentSeason(team);
   const roster = rosterFor(team, season?.id);
   // Show the setting against a real name where there is one.
-  const sample = roster[0] ?? team.swimmers[0];
+  const sample = roster[0] ?? team.athletes[0];
   const example = sample
     ? displayName(sample, team.nameOrder)
     : displayName(
@@ -85,7 +85,7 @@ export default function Settings() {
       replaceTeam(nextTeam);
       for (const meet of nextMeets) replaceMeet(meet);
       setMessage(
-        `Restored ${nextTeam.swimmers.length} swimmers and ${nextMeets.length} meet${
+        `Restored ${nextTeam.athletes.length} swimmers and ${nextMeets.length} meet${
           nextMeets.length === 1 ? "" : "s"
         }.`,
       );
@@ -201,7 +201,7 @@ export default function Settings() {
         ) : (
           <div className="mt-3 space-y-2">
             <Banner tone="warn">
-              Carries {carrying.length - graduating.length} swimmer
+              Carries {carrying.length - graduating.length} athlete
               {carrying.length - graduating.length === 1 ? "" : "s"} into the
               new season with their year advanced
               {graduating.length > 0 &&

@@ -219,7 +219,7 @@ export function SyncPanel() {
                       )}
                     </p>
                     <p className="text-xs text-slate-500">
-                      {summary.athletes} swimmer
+                      {summary.athletes} athlete
                       {summary.athletes === 1 ? "" : "s"} · {summary.meets} meet
                       {summary.meets === 1 ? "" : "s"} · {summary.times} time
                       {summary.times === 1 ? "" : "s"}

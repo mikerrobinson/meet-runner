@@ -2,20 +2,20 @@ import { useMemo, useState } from "react";
 import { Sheet, TextInput } from "./ui";
 import { allResults } from "~/lib/timing";
 import {
-  bySwimmer,
+  byAthlete,
   displayName,
   eventName,
   isEligible,
-  swimmerName,
+  athleteName,
   type Enrollment,
   type Heat,
   type MeetDoc,
   type NameOrder,
-  type Swimmer,
+  type Athlete,
 } from "~/types/meet";
 
 interface Candidate {
-  swimmer: Swimmer;
+  athlete: Athlete;
   /** Where they already sit in this event, if anywhere. */
   seatedAt?: { heatNumber: number; lane: number };
   /** They've already swum this event, so they can't be moved into it again. */
@@ -23,8 +23,8 @@ interface Candidate {
 }
 
 /**
- * Pick a swimmer for an empty lane, mid-meet. Choosing one seats them and
- * enters them in the event in a single step — for the swimmer who decides to
+ * Pick a athlete for an empty lane, mid-meet. Choosing one seats them and
+ * enters them in the event in a single step — for the athlete who decides to
  * swim while walking up behind the blocks.
  */
 export function LaneAssignSheet({
@@ -39,13 +39,13 @@ export function LaneAssignSheet({
 }: {
   meet: MeetDoc;
   /** This meet's season roster — anyone off it can't be entered. */
-  roster: Swimmer[];
+  roster: Athlete[];
   /** Their year and squad this season, keyed by athlete id. */
   enrollments: Map<string, Enrollment>;
   nameOrder: NameOrder;
   heat: Heat;
   lane: number;
-  onAssign: (swimmerId: string) => void;
+  onAssign: (athleteId: string) => void;
   onClose: () => void;
 }) {
   const [search, setSearch] = useState("");
@@ -67,16 +67,16 @@ export function LaneAssignSheet({
     const swum = new Set(
       allResults(meet)
         .filter((r) => r.eventId === heat.eventId)
-        .map((r) => r.swimmerId),
+        .map((r) => r.athleteId),
     );
 
     const query = search.trim().toLowerCase();
 
     return roster
       .filter((s) => !event || isEligible(s, event))
-      .filter((s) => !query || swimmerName(s).toLowerCase().includes(query))
+      .filter((s) => !query || athleteName(s).toLowerCase().includes(query))
       .map((s) => ({
-        swimmer: s,
+        athlete: s,
         seatedAt: seats.get(s.id),
         swum: swum.has(s.id),
       }))
@@ -86,7 +86,7 @@ export function LaneAssignSheet({
         const aFree = a.seatedAt ? 1 : 0;
         const bFree = b.seatedAt ? 1 : 0;
         if (aFree !== bFree) return aFree - bFree;
-        return bySwimmer(nameOrder)(a.swimmer, b.swimmer);
+        return byAthlete(nameOrder)(a.athlete, b.athlete);
       });
   }, [roster, nameOrder, meet, heat.eventId, event, search]);
 
@@ -111,27 +111,27 @@ export function LaneAssignSheet({
         </p>
       ) : (
         <ul className="mt-2 max-h-[45vh] divide-y divide-slate-200 overflow-y-auto overscroll-contain dark:divide-slate-800">
-          {candidates.map(({ swimmer, seatedAt, swum }) => (
-            <li key={swimmer.id}>
+          {candidates.map(({ athlete, seatedAt, swum }) => (
+            <li key={athlete.id}>
               <button
                 type="button"
                 disabled={swum}
                 onClick={() => {
-                  onAssign(swimmer.id);
+                  onAssign(athlete.id);
                   onClose();
                 }}
                 className="flex min-h-14 w-full touch-manipulation items-center justify-between gap-3 px-1 py-2 text-left disabled:opacity-40"
               >
                 <span className="min-w-0">
                   <span className="block truncate font-semibold">
-                    {displayName(swimmer, nameOrder)}
+                    {displayName(athlete, nameOrder)}
                   </span>
                   <span className="block text-xs text-slate-500 dark:text-slate-400">
-                    {swimmer.gender}
-                    {enrollments.get(swimmer.id)?.year &&
-                      ` · ${enrollments.get(swimmer.id)?.year}`}
-                    {enrollments.get(swimmer.id)?.squad &&
-                      ` · ${enrollments.get(swimmer.id)?.squad}`}
+                    {athlete.gender}
+                    {enrollments.get(athlete.id)?.year &&
+                      ` · ${enrollments.get(athlete.id)?.year}`}
+                    {enrollments.get(athlete.id)?.squad &&
+                      ` · ${enrollments.get(athlete.id)?.squad}`}
                   </span>
                 </span>
 

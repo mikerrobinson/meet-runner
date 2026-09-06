@@ -5,7 +5,7 @@ export default [
     index("routes/home.tsx"),
 
     route("team", "routes/team.tsx"),
-    route("team/:swimmerId", "routes/swimmer-detail.tsx"),
+    route("athletes/:athleteId", "routes/athlete-detail.tsx"),
 
     route("meets", "routes/meets.tsx"),
     // Everything under a meet id runs against that one meet.

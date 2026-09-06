@@ -1,19 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import type { Route } from "./+types/registration";
-import { SwimmerSheet } from "~/components/SwimmerSheet";
+import { AthleteSheet } from "~/components/AthleteSheet";
 import { Button, EmptyState, TextInput } from "~/components/ui";
-import { enrollmentIndex, seasonForMeet } from "~/lib/roster";
-import { activeSwimmers, useAppStore } from "~/state/app-store";
+import { enrollmentIndex, rosterForMeet, seasonForMeet } from "~/lib/roster";
+import { useAppStore } from "~/state/app-store";
 import {
-  bySwimmer,
+  byAthlete,
   displayName,
   raceKey,
   shortStroke,
   type Gender,
   type MeetEvent,
   type Stroke,
-  type Swimmer,
+  type Athlete,
 } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
@@ -39,7 +39,7 @@ const ROW_TONES = [
   },
 ];
 
-/** Width of the pinned swimmer column. */
+/** Width of the pinned athlete column. */
 const NAME_COL = "9rem";
 /** Floor for a race column before the grid starts scrolling sideways. */
 const MIN_RACE_COL = "3.5rem";
@@ -64,7 +64,7 @@ interface Race {
   open?: MeetEvent;
 }
 
-/** The event in this race that a given swimmer would actually swim. */
+/** The event in this race that a given athlete would actually swim. */
 /** How a race reads in prose — diving has no distance worth printing. */
 function raceLabel(race: Race): string {
   return race.stroke === "Diving"
@@ -72,8 +72,8 @@ function raceLabel(race: Race): string {
     : `${race.distance} ${race.stroke}`;
 }
 
-function eventFor(race: Race, swimmer: Swimmer): MeetEvent | undefined {
-  const own = swimmer.gender === "F" ? race.girls : race.boys;
+function eventFor(race: Race, athlete: Athlete): MeetEvent | undefined {
+  const own = athlete.gender === "F" ? race.girls : race.boys;
   return own ?? race.open;
 }
 
@@ -100,14 +100,14 @@ export default function Registration() {
   const swimmers = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!meet) return [];
-    return activeSwimmers(team, meet)
+    return rosterForMeet(team, meet)
       .filter((s) => genderFilter === "all" || s.gender === genderFilter)
       .filter(
         (s) =>
           !query ||
           `${s.firstName} ${s.lastName}`.toLowerCase().includes(query),
       )
-      .sort(bySwimmer(team.nameOrder));
+      .sort(byAthlete(team.nameOrder));
   }, [team, genderFilter, search]);
 
   // Changing the filter changes which rows exist. Holding the old scroll
@@ -143,7 +143,7 @@ export default function Registration() {
     return [...byKey.values()];
   }, [meet?.events]);
 
-  /** Registration lookup as a set of "eventId|swimmerId" keys. */
+  /** Registration lookup as a set of "eventId|athleteId" keys. */
   const registered = useMemo(() => {
     const keys = new Set<string>();
     for (const [eventId, ids] of Object.entries(meet?.entries ?? {})) {
@@ -152,7 +152,7 @@ export default function Registration() {
     return keys;
   }, [meet?.entries]);
 
-  const perSwimmer = useMemo(() => {
+  const perAthlete = useMemo(() => {
     const counts = new Map<string, number>();
     for (const ids of Object.values(meet?.entries ?? {})) {
       for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
@@ -181,7 +181,7 @@ export default function Registration() {
   if (races.length === 0 || swimmers.length === 0) {
     return (
       <EmptyState title="Nothing to register yet">
-        {activeSwimmers(team, meet).length === 0 ? (
+        {rosterForMeet(team, meet).length === 0 ? (
           <>
             The team roster is empty.{" "}
             <Link to="/team" className="font-semibold text-blue-600 underline">
@@ -229,13 +229,13 @@ export default function Registration() {
               placeholder="Search swimmers"
             />
             <Button variant="primary" onClick={() => setAdding(true)}>
-              + Swimmer
+              + Athlete
             </Button>
           </div>
 
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Tap a cell to enter or scratch a swimmer. Greyed cells are races the
-            swimmer isn't eligible for.
+            Tap a cell to enter or scratch a athlete. Greyed cells are races the
+            athlete isn't eligible for.
           </p>
         </div>
       )}
@@ -261,7 +261,7 @@ export default function Registration() {
                 style={{ width: NAME_COL }}
                 className="sticky left-0 top-0 z-30 border-b border-r border-slate-300 bg-slate-100 px-2 py-1 text-left text-xs font-bold dark:border-slate-700 dark:bg-slate-800"
               >
-                Swimmer
+                Athlete
               </th>
               {races.map((race) => (
                 <th
@@ -286,32 +286,32 @@ export default function Registration() {
             </tr>
           </thead>
           <tbody>
-            {swimmers.map((swimmer, rowIndex) => {
+            {swimmers.map((athlete, rowIndex) => {
               const tone = ROW_TONES[rowIndex % ROW_TONES.length];
               return (
-                <tr key={swimmer.id}>
+                <tr key={athlete.id}>
                   <th
                     scope="row"
                     style={{ width: NAME_COL }}
                     className={`sticky left-0 z-10 border-b border-r border-slate-300 px-2 py-1 text-left dark:border-slate-700 ${tone.name}`}
                   >
                     <span className="block truncate text-sm font-semibold">
-                      {displayName(swimmer, team.nameOrder)}
+                      {displayName(athlete, team.nameOrder)}
                     </span>
                     <span className="block text-[11px] font-normal text-slate-500">
-                      {swimmer.gender}
-                      {enrollments.get(swimmer.id)?.year &&
-                        ` · ${enrollments.get(swimmer.id)?.year}`}{" "}
-                      · {perSwimmer.get(swimmer.id) ?? 0} ev
+                      {athlete.gender}
+                      {enrollments.get(athlete.id)?.year &&
+                        ` · ${enrollments.get(athlete.id)?.year}`}{" "}
+                      · {perAthlete.get(athlete.id) ?? 0} ev
                     </span>
                   </th>
                   {races.map((race) => {
-                    // The gendered event this swimmer belongs in; absent means
+                    // The gendered event this athlete belongs in; absent means
                     // the lineup has no version of this race for them.
-                    const event = eventFor(race, swimmer);
+                    const event = eventFor(race, athlete);
                     const isIn =
                       event !== undefined &&
-                      registered.has(`${event.id}|${swimmer.id}`);
+                      registered.has(`${event.id}|${athlete.id}`);
                     return (
                       <td
                         key={race.key}
@@ -321,9 +321,9 @@ export default function Registration() {
                           type="button"
                           disabled={event === undefined}
                           aria-pressed={isIn}
-                          aria-label={`${displayName(swimmer, team.nameOrder)} in ${raceLabel(race)}`}
+                          aria-label={`${displayName(athlete, team.nameOrder)} in ${raceLabel(race)}`}
                           onClick={() =>
-                            event && toggleEntry(meet.id, event.id, swimmer.id)
+                            event && toggleEntry(meet.id, event.id, athlete.id)
                           }
                           className={`flex h-12 w-full touch-manipulation items-center justify-center text-xl font-bold transition-colors ${
                             event === undefined
@@ -346,11 +346,11 @@ export default function Registration() {
       </div>
 
       {adding && (
-        <SwimmerSheet
+        <AthleteSheet
           title="Add swimmer"
           onClose={() => setAdding(false)}
-          onSave={(swimmer, facts) => {
-            enrol([{ athlete: swimmer, ...facts }], "append", seasonId);
+          onSave={(athlete, facts) => {
+            enrol([{ athlete: athlete, ...facts }], "append", seasonId);
             setAdding(false);
             setSearch("");
           }}

@@ -51,7 +51,7 @@ eq(r.timeMs, 27140, "three watches give the middle time");
 eq(r.status, "OK", "and no ruling means OK");
 eq(r.method, "median", "reported as a median");
 eq(r.watchCount, 3, "with the count that stood behind it");
-eq(r.swimmerId, "swimmerA", "attributed to whoever was in the lane");
+eq(r.athleteId, "swimmerA", "attributed to whoever was in the lane");
 eq(r.manual, false, "stopwatch times aren't manual");
 
 eq(resultForLane(meet([w(27130, "a", "typed")]), heat, 3)!.manual, true, "a typed time is manual");

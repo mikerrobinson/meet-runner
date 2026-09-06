@@ -18,7 +18,7 @@ import {
   type MeetDoc,
   type MeetOptions,
   type MeetType,
-  type Swimmer,
+  type Athlete,
   type TeamDoc,
 } from "~/types/meet";
 
@@ -33,7 +33,7 @@ export function createTeam(name = "My Team"): TeamDoc {
     nameOrder: "last",
     currentSeasonId: season.id,
     seasons: [season],
-    swimmers: [],
+    athletes: [],
     enrollments: [],
     updatedAt: Date.now(),
   };
@@ -94,7 +94,7 @@ export function createMeetDoc(teamId: string, patch: MeetPatch = {}): MeetDoc {
   };
 }
 
-export function normalizeSwimmer(raw: Partial<Swimmer>): Swimmer {
+export function normalizeAthlete(raw: Partial<Athlete>): Athlete {
   return {
     id: raw.id ?? generateId(),
     firstName: raw.firstName ?? "",
@@ -113,8 +113,12 @@ export function normalizeSwimmer(raw: Partial<Swimmer>): Swimmer {
  */
 export function parseTeamDoc(input: unknown): TeamDoc | null {
   if (!input || typeof input !== "object") return null;
-  const doc = input as Partial<TeamDoc>;
-  if (!doc.id || !Array.isArray(doc.swimmers)) return null;
+  const doc = input as Partial<TeamDoc> & { swimmers?: Athlete[] };
+  // Documents saved on a device before the roster field was renamed. Delete
+  // this once every device has opened the app once — nothing on the server
+  // uses the old name, since athletes sync as objects of their own.
+  const athletes = doc.athletes ?? doc.swimmers;
+  if (!doc.id || !Array.isArray(athletes)) return null;
 
   const seasons = doc.seasons ?? [];
   const currentSeasonId =
@@ -131,7 +135,7 @@ export function parseTeamDoc(input: unknown): TeamDoc | null {
     nameOrder: doc.nameOrder === "first" ? "first" : "last",
     currentSeasonId,
     seasons,
-    swimmers: doc.swimmers.map(normalizeSwimmer),
+    athletes: athletes.map(normalizeAthlete),
     enrollments: doc.enrollments ?? [],
     updatedAt: doc.updatedAt ?? Date.now(),
   };

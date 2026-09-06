@@ -8,14 +8,14 @@ import { useElapsed, useWakeLock } from "~/hooks/use-stopwatch";
 import { heatsForEvent } from "~/lib/heats";
 import { resultsForHeat, watchesForLane } from "~/lib/timing";
 import { formatClock, formatTime, parseTime } from "~/lib/time";
-import { enrollmentIndex, seasonForMeet } from "~/lib/roster";
-import { activeSwimmers, useAppStore } from "~/state/app-store";
+import { enrollmentIndex, rosterForMeet, seasonForMeet } from "~/lib/roster";
+import { useAppStore } from "~/state/app-store";
 import { useViewPrefs } from "~/state/view-prefs";
 import {
-  bySwimmer,
+  byAthlete,
   displayName,
   eventName,
-  findSwimmer,
+  findAthlete,
   isDiving,
   orderedLanes,
   type Heat,
@@ -23,7 +23,7 @@ import {
   type MeetEvent,
   type NameOrder,
   type Result,
-  type Swimmer,
+  type Athlete,
   type WatchTime,
 } from "~/types/meet";
 
@@ -43,7 +43,7 @@ export default function RunMeet() {
   const store = useAppStore();
   const { meetId } = useParams();
   const meet = store.meets.find((m) => m.id === meetId);
-  const roster = store.team.swimmers;
+  const roster = store.team.athletes;
 
   const [editingLane, setEditingLane] = useState<number | null>(null);
   const [assigningLane, setAssigningLane] = useState<number | null>(null);
@@ -205,7 +205,7 @@ export default function RunMeet() {
               <LaneTile
                 key={lane}
                 lane={lane}
-                swimmer={findSwimmer(roster, heat.lanes[lane - 1])}
+                athlete={findAthlete(roster, heat.lanes[lane - 1])}
                 result={resultsByLane.get(lane)}
                 running={running}
                 clockRunning={clockRunning}
@@ -321,7 +321,7 @@ export default function RunMeet() {
       {heat && assigningLane !== null && (
         <LaneAssignSheet
           meet={meet}
-          roster={activeSwimmers(store.team, meet)}
+          roster={rosterForMeet(store.team, meet)}
           enrollments={enrollmentIndex(
             store.team,
             seasonForMeet(store.team, meet)?.id,
@@ -329,8 +329,8 @@ export default function RunMeet() {
           nameOrder={store.team.nameOrder}
           heat={heat}
           lane={assigningLane}
-          onAssign={(swimmerId) =>
-            store.assignToLane(meet.id, heat.id, assigningLane, swimmerId)
+          onAssign={(athleteId) =>
+            store.assignToLane(meet.id, heat.id, assigningLane, athleteId)
           }
           onClose={() => setAssigningLane(null)}
         />
@@ -343,7 +343,7 @@ export default function RunMeet() {
           onClose={() => setEditingLane(null)}
           result={resultsByLane.get(editingLane)}
           swimmerLabel={(() => {
-            const s = findSwimmer(roster, heat.lanes[editingLane - 1]);
+            const s = findAthlete(roster, heat.lanes[editingLane - 1]);
             return s ? displayName(s, store.team.nameOrder) : `Lane ${editingLane}`;
           })()}
           watches={watchesForLane(meet, heat.id, editingLane)}
@@ -384,13 +384,13 @@ function DivingPanel({
 }: {
   meet: MeetDoc;
   event: MeetEvent;
-  roster: Swimmer[];
+  roster: Athlete[];
   nameOrder: NameOrder;
 }) {
   const divers = (meet.entries[event.id] ?? [])
-    .map((id) => findSwimmer(roster, id))
-    .filter((s): s is Swimmer => s !== undefined)
-    .sort(bySwimmer(nameOrder));
+    .map((id) => findAthlete(roster, id))
+    .filter((s): s is Athlete => s !== undefined)
+    .sort(byAthlete(nameOrder));
 
   return (
     <div className="rounded-2xl bg-sky-50 p-4 dark:bg-sky-950/40">

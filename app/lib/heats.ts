@@ -32,14 +32,14 @@ export function laneOrder(laneCount: LaneCount): number[] {
  */
 export function buildHeats(
   eventId: string,
-  swimmerIds: string[],
+  athleteIds: string[],
   laneCount: LaneCount,
 ): Heat[] {
-  if (swimmerIds.length === 0) return [];
+  if (athleteIds.length === 0) return [];
 
   const order = laneOrder(laneCount);
-  const heatCount = Math.ceil(swimmerIds.length / laneCount);
-  const remainder = swimmerIds.length % laneCount;
+  const heatCount = Math.ceil(athleteIds.length / laneCount);
+  const remainder = athleteIds.length % laneCount;
   const firstHeatSize = remainder === 0 ? laneCount : remainder;
 
   const heats: Heat[] = [];
@@ -47,12 +47,12 @@ export function buildHeats(
 
   for (let index = 0; index < heatCount; index++) {
     const size = index === 0 ? firstHeatSize : laneCount;
-    const group = swimmerIds.slice(cursor, cursor + size);
+    const group = athleteIds.slice(cursor, cursor + size);
     cursor += size;
 
     const lanes: (string | null)[] = new Array(laneCount).fill(null);
-    group.forEach((swimmerId, i) => {
-      lanes[order[i] - 1] = swimmerId;
+    group.forEach((athleteId, i) => {
+      lanes[order[i] - 1] = athleteId;
     });
 
     heats.push({ id: generateId(), eventId, index, lanes });

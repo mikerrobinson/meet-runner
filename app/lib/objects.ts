@@ -3,7 +3,7 @@
  *
  * Documents are what the app thinks in — a `TeamDoc` with a roster, a
  * `MeetDoc` with heats and times — and that doesn't change. What changes is
- * what goes over the wire: a swimmer added on the laptop and a time recorded
+ * what goes over the wire: a athlete added on the laptop and a time recorded
  * on the iPad are separate objects, so they merge instead of one clobbering
  * the other.
  *
@@ -19,7 +19,7 @@ import type {
   MeetEvent,
   Ruling,
   Season,
-  Swimmer,
+  Athlete,
   TeamDoc,
   WatchTime,
 } from "~/types/meet";
@@ -118,7 +118,7 @@ export function toObjects(team: TeamDoc, meets: MeetDoc[]): SyncObject[] {
       data: season,
     });
   }
-  for (const athlete of team.swimmers) {
+  for (const athlete of team.athletes) {
     objects.push({
       id: athlete.id,
       type: "athlete",
@@ -255,7 +255,7 @@ export function fromObjects(objects: SyncObject[]): {
     id: teamObject.id,
     ...teamObject.data,
     seasons: of<Season>("season").map((o) => o.data),
-    swimmers: of<Swimmer>("athlete").map((o) => o.data),
+    athletes: of<Athlete>("athlete").map((o) => o.data),
     enrollments: of<Enrollment>("enrollment").map((o) => o.data),
     updatedAt: teamObject.updatedAt,
   };
@@ -352,7 +352,7 @@ export function changedObjects(
   }
 
   // Anything that was there and isn't any more has been removed from its
-  // document — an un-entered swimmer, a discarded watch — so it's a deletion.
+  // document — an un-entered athlete, a discarded watch — so it's a deletion.
   for (const [k, old] of before) {
     if (seen.has(k) || old.deletedAt) continue;
     changes.push({ ...old, deletedAt: now, updatedAt: now });

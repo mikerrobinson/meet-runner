@@ -63,14 +63,14 @@ import type {
   MeetEvent,
   ResultStatus,
   Season,
-  Swimmer,
+  Athlete,
   TeamDoc,
   WatchTime,
 } from "~/types/meet";
 
 /** One row of an import: the person, plus what's true of them this season. */
 export interface RosterEntry {
-  athlete: Swimmer;
+  athlete: Athlete;
   year: string;
   squad?: string;
 }
@@ -108,7 +108,7 @@ interface AppStore {
   ) => void;
   /** Edit the person and their enrollment in one go — the form edits both. */
   saveAthlete: (
-    athlete: Swimmer,
+    athlete: Athlete,
     facts: { year: string; squad?: string },
     seasonId?: string,
   ) => void;
@@ -145,12 +145,12 @@ interface AppStore {
   updateEvent: (id: string, eventId: string, patch: Partial<MeetEvent>) => void;
   removeEvent: (id: string, eventId: string) => void;
   moveEvent: (id: string, eventId: string, direction: -1 | 1) => void;
-  toggleEntry: (id: string, eventId: string, swimmerId: string) => void;
+  toggleEntry: (id: string, eventId: string, athleteId: string) => void;
   assignToLane: (
     id: string,
     heatId: string,
     lane: number,
-    swimmerId: string,
+    athleteId: string,
   ) => void;
   clearLane: (id: string, heatId: string, lane: number) => void;
   ensureHeats: (id: string, eventId: string) => void;
@@ -404,7 +404,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const store = useMemo<AppStore>(() => {
     const liveMeets = meets.filter((m) => !isDeleted(m));
     const deletedMeets = meets.filter(isDeleted);
-    const swimmerById = new Map(team.swimmers.map((s) => [s.id, s] as const));
+    const athleteById = new Map(team.athletes.map((s) => [s.id, s] as const));
 
     /** Registered swimmers for an event, in roster order. */
     const entrantsFor = (meet: MeetDoc, eventId: string): string[] => {
@@ -479,7 +479,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       enrol: (entries, mode, seasonId) =>
         editTeam((t) => {
           const season = seasonId ?? t.currentSeasonId;
-          const athletes = [...t.swimmers];
+          const athletes = [...t.athletes];
           const enrollments =
             mode === "replace"
               ? t.enrollments.filter((e) => e.seasonId !== season)
@@ -501,16 +501,16 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
             );
           }
 
-          return { ...t, swimmers: athletes, enrollments };
+          return { ...t, athletes: athletes, enrollments };
         }),
 
       saveAthlete: (athlete, facts, seasonId) =>
         editTeam((t) => {
           const season = seasonId ?? t.currentSeasonId;
-          const known = t.swimmers.some((a) => a.id === athlete.id);
-          const swimmers = known
-            ? t.swimmers.map((a) => (a.id === athlete.id ? athlete : a))
-            : [...t.swimmers, athlete];
+          const known = t.athletes.some((a) => a.id === athlete.id);
+          const athletes = known
+            ? t.athletes.map((a) => (a.id === athlete.id ? athlete : a))
+            : [...t.athletes, athlete];
 
           const existing = t.enrollments.find(
             (e) => e.seasonId === season && e.athleteId === athlete.id,
@@ -526,7 +526,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
                 makeEnrollment(t.id, season, athlete.id, facts),
               ];
 
-          return { ...t, swimmers, enrollments };
+          return { ...t, athletes, enrollments };
         }),
 
       // Never a hard delete: live results reference athletes by id, so
@@ -713,9 +713,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           // Narrowing an event's gender has to un-enter whoever no longer
           // qualifies, or they'd be seeded into a heat they can't swim.
           const before = m.entries[eventId] ?? [];
-          const after = before.filter((swimmerId) => {
-            const swimmer = swimmerById.get(swimmerId);
-            return !swimmer || isEligible(swimmer, updated);
+          const after = before.filter((athleteId) => {
+            const athlete = athleteById.get(athleteId);
+            return !athlete || isEligible(athlete, updated);
           });
 
           const next = {
@@ -753,12 +753,12 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           return { ...m, events };
         }),
 
-      toggleEntry: (id, eventId, swimmerId) =>
+      toggleEntry: (id, eventId, athleteId) =>
         editMeet(id, (m) => {
           const current = m.entries[eventId] ?? [];
-          const next = current.includes(swimmerId)
-            ? current.filter((s) => s !== swimmerId)
-            : [...current, swimmerId];
+          const next = current.includes(athleteId)
+            ? current.filter((s) => s !== athleteId)
+            : [...current, athleteId];
           return invalidateHeats(
             { ...m, entries: { ...m.entries, [eventId]: next } },
             eventId,
@@ -766,11 +766,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         }),
 
       /**
-       * Seat a swimmer mid-meet, entering them in the event if needed.
+       * Seat a athlete mid-meet, entering them in the event if needed.
        * Deliberately not routed through `toggleEntry`: that invalidates the
        * event's heats, which would delete the heat being edited.
        */
-      assignToLane: (id, heatId, lane, swimmerId) =>
+      assignToLane: (id, heatId, lane, athleteId) =>
         editMeet(id, (m) => {
           const target = m.heats.find((h) => h.id === heatId);
           if (!target) return m;
@@ -783,21 +783,21 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
               if (h.eventId !== target.eventId) return h;
               // Nobody swims an event twice, so vacate whatever lane they
               // already held before seating them here.
-              const lanes = h.lanes.map((s) => (s === swimmerId ? null : s));
-              if (h.id === heatId) lanes[lane - 1] = swimmerId;
+              const lanes = h.lanes.map((s) => (s === athleteId ? null : s));
+              if (h.id === heatId) lanes[lane - 1] = athleteId;
               return { ...h, lanes };
             }),
-            entries: entered.includes(swimmerId)
+            entries: entered.includes(athleteId)
               ? m.entries
-              : { ...m.entries, [target.eventId]: [...entered, swimmerId] },
+              : { ...m.entries, [target.eventId]: [...entered, athleteId] },
           };
         }),
 
       clearLane: (id, heatId, lane) =>
         editMeet(id, (m) => {
           const target = m.heats.find((h) => h.id === heatId);
-          const swimmerId = target?.lanes[lane - 1];
-          if (!target || !swimmerId) return m;
+          const athleteId = target?.lanes[lane - 1];
+          if (!target || !athleteId) return m;
           // A lane with a time on it is history; clear the time first.
           if (m.watches.some((w) => w.heatId === heatId && w.lane === lane)) {
             return m;
@@ -813,15 +813,15 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           );
 
           const seededElsewhere = heats.some(
-            (h) => h.eventId === target.eventId && h.lanes.includes(swimmerId),
+            (h) => h.eventId === target.eventId && h.lanes.includes(athleteId),
           );
-          // Was this swimmer already timed in this event, in some other lane?
+          // Was this athlete already timed in this event, in some other lane?
           const timedElsewhere = m.heats.some(
             (h) =>
               h.eventId === target.eventId &&
               h.lanes.some(
                 (id, i) =>
-                  id === swimmerId &&
+                  id === athleteId &&
                   m.watches.some((w) => w.heatId === h.id && w.lane === i + 1),
               ),
           );
@@ -835,7 +835,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
                 : {
                     ...m.entries,
                     [target.eventId]: (m.entries[target.eventId] ?? []).filter(
-                      (s) => s !== swimmerId,
+                      (s) => s !== athleteId,
                     ),
                   },
           };
@@ -964,7 +964,3 @@ export function useAppStore(): AppStore {
   return store;
 }
 
-/** Everyone enterable in this meet: the roster of the season it falls in. */
-export function activeSwimmers(team: TeamDoc, meet: MeetDoc): Swimmer[] {
-  return rosterForMeet(team, meet);
-}

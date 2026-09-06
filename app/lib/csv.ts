@@ -4,10 +4,10 @@ import { enrollmentFor, seasonForMeet } from "./roster";
 import { allResults } from "./timing";
 import {
   eventName,
-  swimmerName,
+  athleteName,
   type Gender,
   type MeetDoc,
-  type Swimmer,
+  type Athlete,
   type TeamDoc,
 } from "~/types/meet";
 import type { RosterEntry } from "~/state/app-store";
@@ -268,7 +268,7 @@ export function toCsv(rows: Array<Array<string | number>>): string {
  * finish place.
  */
 export function resultsToCsv(meet: MeetDoc, team: TeamDoc): string {
-  const swimmers = new Map(team.swimmers.map((s) => [s.id, s] as const));
+  const byId = new Map(team.athletes.map((a) => [a.id, a] as const));
   // Their year and squad as of this meet, not as of today.
   const seasonId = seasonForMeet(team, meet)?.id;
   const heats = new Map(meet.heats.map((h) => [h.id, h] as const));
@@ -279,7 +279,7 @@ export function resultsToCsv(meet: MeetDoc, team: TeamDoc): string {
       "Event",
       "Heat",
       "Lane",
-      "Swimmer",
+      "Athlete",
       "Gender",
       "Year",
       "Squad",
@@ -312,15 +312,15 @@ export function resultsToCsv(meet: MeetDoc, team: TeamDoc): string {
     });
 
     for (const result of ordered) {
-      const swimmer = swimmers.get(result.swimmerId);
-      const enrolled = enrollmentFor(team, result.swimmerId, seasonId);
+      const athlete = byId.get(result.athleteId);
+      const enrolled = enrollmentFor(team, result.athleteId, seasonId);
       rows.push([
         eventIndex + 1,
         eventName(event),
         (heats.get(result.heatId)?.index ?? 0) + 1,
         result.lane,
-        swimmer ? swimmerName(swimmer) : "(unknown)",
-        swimmer?.gender ?? "",
+        athlete ? athleteName(athlete) : "(unknown)",
+        athlete?.gender ?? "",
         enrolled?.year ?? "",
         enrolled?.squad ?? "",
         result.status === "OK" ? formatTime(result.timeMs) : result.status,

@@ -9,7 +9,7 @@
 
 import { parseMeetDoc, parseTeamDoc } from "./documents";
 import type { SyncObject } from "./objects";
-import type { MeetDoc, Swimmer, TeamDoc } from "~/types/meet";
+import type { MeetDoc, Athlete, TeamDoc } from "~/types/meet";
 
 const DB_NAME = "meet-runner";
 const DB_VERSION = 1;

@@ -9,7 +9,7 @@ const legacy = parseTeamDoc({
   id: "t1", name: "Cactus Shadows", code: "CHAP", nameOrder: "first",
   currentSeasonId: "s1",
   seasons: [{ id: "s1", teamId: "t1", name: "2026-27" }],
-  swimmers: [
+  athletes: [
     { id: "a1", firstName: "Avery", lastName: "Nguyen", gender: "F", birthDate: "2009-03-14" },
     { id: "a2", firstName: "Marcus", lastName: "Hill", gender: "M" },
     { id: "a3", firstName: "Jo", lastName: "Park", gender: "F" },
@@ -25,14 +25,14 @@ const legacy = parseTeamDoc({
 eq(legacy.seasons.length, 1, "the season survives");
 eq(legacy.currentSeasonId, "s1", "and is the current one");
 eq(legacy.enrollments.length, 3, "enrollments survive");
-const strayKeys = legacy.swimmers.flatMap((s) =>
+const strayKeys = legacy.athletes.flatMap((s) =>
   ["year", "squad", "archived"].filter((k) => k in s),
 );
 eq(strayKeys, [], "athletes carry nothing seasonal");
 eq(enrollmentFor(legacy, "a1", "s1")?.year, "10", "grade lives on the enrollment");
 eq(enrollmentFor(legacy, "a1", "s1")?.squad, "Blue", "so does squad");
 eq(enrollmentFor(legacy, "a3", "s1")?.status, "inactive", "and whether they're still on it");
-eq(legacy.swimmers.find((s) => s.id === "a1")?.birthDate, "2009-03-14", "birth dates survive");
+eq(legacy.athletes.find((s) => s.id === "a1")?.birthDate, "2009-03-14", "birth dates survive");
 eq(legacy.updatedAt, 1756000000000, "updatedAt untouched");
 eq(rosterFor(legacy, "s1").map((s) => s.id), ["a1", "a2"], "the roster excludes the inactive swimmer");
 eq(parseTeamDoc(JSON.parse(JSON.stringify(legacy))), legacy, "checking it twice changes nothing");

@@ -56,7 +56,7 @@ export const DIVING_DISTANCE = 1;
 /**
  * Relays are timed exactly like any other event: one lane, one clock, one
  * time. The app doesn't model the four legs — a relay lane is held by a single
- * swimmer standing in for the squad, usually whoever leads off.
+ * athlete standing in for the squad, usually whoever leads off.
  */
 export function isRelay(event: Pick<MeetEvent, "stroke">): boolean {
   return event.stroke.endsWith("Relay");
@@ -110,7 +110,7 @@ export function orderedLanes(laneCount: number, layout: LaneLayout): number[] {
  * athletes by id forever. What changes season to season (their grade, their
  * squad, whether they're still on the roster) belongs to an `Enrollment`.
  */
-export interface Swimmer {
+export interface Athlete {
   id: string;
   firstName: string;
   lastName: string;
@@ -144,9 +144,9 @@ export interface Season {
 }
 
 /**
- * On the roster, but only for a while. Everything seasonal about a swimmer
+ * On the roster, but only for a while. Everything seasonal about a athlete
  * lives here rather than on the athlete, so last year's sophomore is this
- * year's junior without anyone editing anything, and a swimmer who moves
+ * year's junior without anyone editing anything, and a athlete who moves
  * between a club and a school team is one person with two enrollments.
  */
 export interface Enrollment {
@@ -198,7 +198,7 @@ export interface TeamDoc {
   currentSeasonId: string;
   seasons: Season[];
   /** The people. Everyone who has ever been on the team, active or not. */
-  swimmers: Swimmer[];
+  athletes: Athlete[];
   enrollments: Enrollment[];
   updatedAt: number;
 }
@@ -219,10 +219,10 @@ export function normalizeTeamCode(value: string): string {
  * touches a timezone.
  */
 export function ageOn(
-  swimmer: Pick<Swimmer, "birthDate">,
+  athlete: Pick<Athlete, "birthDate">,
   isoDate: string,
 ): number | null {
-  const born = parseIsoDate(swimmer.birthDate);
+  const born = parseIsoDate(athlete.birthDate);
   const on = parseIsoDate(isoDate);
   if (!born || !on) return null;
 
@@ -300,7 +300,7 @@ export interface MeetEvent {
   name?: string;
 }
 
-/** eventId -> swimmerIds registered in that event. */
+/** eventId -> athleteIds registered in that event. */
 export type Entries = Record<string, string[]>;
 
 export interface Heat {
@@ -378,7 +378,7 @@ export function rulingId(heatId: string, lane: number): string {
 export interface Result {
   eventId: string;
   heatId: string;
-  swimmerId: string;
+  athleteId: string;
   /** 1-based lane number. */
   lane: number;
   /** Elapsed time in milliseconds. */
@@ -426,7 +426,7 @@ export interface Progress {
 export interface MeetDoc {
   version: number;
   id: string;
-  /** The team whose roster this meet's swimmer ids belong to. */
+  /** The team whose roster this meet's athlete ids belong to. */
   teamId: string;
   name: string;
   /** ISO date (yyyy-mm-dd). */
@@ -480,7 +480,7 @@ export interface MeetSummary {
 
 /* ------------------------------------------------------------------ naming */
 
-export function swimmerName(s: Swimmer): string {
+export function athleteName(s: Athlete): string {
   return `${s.firstName} ${s.lastName}`.trim();
 }
 
@@ -492,8 +492,8 @@ export function swimmerName(s: Swimmer): string {
  * Display-only: the stored roster keeps its import order, so sorting never
  * churns the document or the sync.
  */
-export function bySwimmer(order: NameOrder = "last") {
-  return (a: Swimmer, b: Swimmer): number =>
+export function byAthlete(order: NameOrder = "last") {
+  return (a: Athlete, b: Athlete): number =>
     order === "first"
       ? a.firstName.localeCompare(b.firstName) ||
         a.lastName.localeCompare(b.lastName)
@@ -506,7 +506,7 @@ export function bySwimmer(order: NameOrder = "last") {
  * first: "Aaronson, Avery" under a surname sort, "Avery Aaronson" under a
  * given-name one. Always both names in full — no initials.
  */
-export function displayName(s: Swimmer, order: NameOrder = "last"): string {
+export function displayName(s: Athlete, order: NameOrder = "last"): string {
   if (order === "first") return `${s.firstName} ${s.lastName}`.trim();
   const first = s.firstName.trim();
   return first ? `${s.lastName}, ${first}` : s.lastName;
@@ -534,25 +534,26 @@ export function raceKey(event: Pick<MeetEvent, "distance" | "stroke">): string {
   return `${event.distance}|${event.stroke}`;
 }
 
-/** Whether a swimmer is eligible for an event, given its gender restriction. */
-export function isEligible(swimmer: Swimmer, event: MeetEvent): boolean {
-  return event.gender === "Open" || event.gender === swimmer.gender;
+/** Whether a athlete is eligible for an event, given its gender restriction. */
+export function isEligible(athlete: Athlete, event: MeetEvent): boolean {
+  return event.gender === "Open" || event.gender === athlete.gender;
 }
 
 /**
- * Resolve a swimmer id against the roster. Results from past meets can point
- * at archived swimmers, so this deliberately looks through the whole roster
- * rather than just the active part.
+ * Someone by id, from anywhere in the team's history.
+ *
+ * Results from past meets point at people who may have left the roster since,
+ * so this looks through everyone rather than just this season's.
  */
-export function findSwimmer(
-  swimmers: Swimmer[],
+export function findAthlete(
+  athletes: Athlete[],
   id: string | null | undefined,
-): Swimmer | undefined {
+): Athlete | undefined {
   if (!id) return undefined;
-  return swimmers.find((s) => s.id === id);
+  return athletes.find((a) => a.id === id);
 }
 
-/** A placeholder for a swimmer id no longer in the roster at all. */
-export function missingSwimmerLabel(id: string): string {
+/** A placeholder for a athlete id no longer in the roster at all. */
+export function missingAthleteLabel(id: string): string {
   return `(removed ${id.slice(0, 4)})`;
 }

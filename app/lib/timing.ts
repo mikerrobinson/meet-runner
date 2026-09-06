@@ -94,8 +94,8 @@ export function resultForLane(
   heat: Heat,
   lane: number,
 ): Result | null {
-  const swimmerId = heat.lanes[lane - 1];
-  if (!swimmerId) return null;
+  const athleteId = heat.lanes[lane - 1];
+  if (!athleteId) return null;
 
   const watches = watchesForLane(meet, heat.id, lane);
   const ruling = rulingForLane(meet, heat.id, lane);
@@ -106,7 +106,7 @@ export function resultForLane(
   const base = {
     eventId: heat.eventId,
     heatId: heat.id,
-    swimmerId,
+    athleteId,
     lane,
   };
 

@@ -71,7 +71,7 @@ export interface SyncStatus {
  * it, and adopting the real team quietly replaces it.
  */
 function hasSomethingToSay(team: TeamDoc, meets: MeetDoc[]): boolean {
-  return team.swimmers.length > 0 || meets.length > 0;
+  return team.athletes.length > 0 || meets.length > 0;
 }
 
 /** Quiet period before a push. Long enough to swallow a burst of lane taps. */
@@ -131,7 +131,7 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
    * What the server and this device last agreed on, as objects.
    *
    * Doubles as each object's real timestamp. The documents only have one
-   * between them, which is too coarse to merge on: a swimmer added here and a
+   * between them, which is too coarse to merge on: a athlete added here and a
    * time recorded there have to be able to win independently.
    */
   const [baseline, setBaseline] = useState<SyncObject[]>([]);
