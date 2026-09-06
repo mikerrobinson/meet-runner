@@ -89,7 +89,6 @@ export default function Setup() {
 function EventsTab({ meet }: { meet: MeetDoc }) {
   const {
     addEvent,
-    updateEvent,
     removeEvent,
     moveEvent,
     setEvents,
@@ -142,20 +141,6 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
                     {isRelay(event) ? "lanes filled" : "entered"}
                   </p>
                 </div>
-                <Select
-                  aria-label={`Gender for ${eventName(event)}`}
-                  value={event.gender}
-                  onChange={(e) =>
-                    updateEvent(meet.id, event.id, {
-                      gender: e.target.value as EventGender,
-                    })
-                  }
-                  className="!w-24 !min-h-10 !text-sm"
-                >
-                  <option value="Open">Open</option>
-                  <option value="F">Girls</option>
-                  <option value="M">Boys</option>
-                </Select>
                 <div className="flex shrink-0 flex-col">
                   <button
                     type="button"

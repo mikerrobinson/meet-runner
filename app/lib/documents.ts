@@ -113,12 +113,8 @@ export function normalizeAthlete(raw: Partial<Athlete>): Athlete {
  */
 export function parseTeamDoc(input: unknown): TeamDoc | null {
   if (!input || typeof input !== "object") return null;
-  const doc = input as Partial<TeamDoc> & { swimmers?: Athlete[] };
-  // Documents saved on a device before the roster field was renamed. Delete
-  // this once every device has opened the app once — nothing on the server
-  // uses the old name, since athletes sync as objects of their own.
-  const athletes = doc.athletes ?? doc.swimmers;
-  if (!doc.id || !Array.isArray(athletes)) return null;
+  const doc = input as Partial<TeamDoc>;
+  if (!doc.id || !Array.isArray(doc.athletes)) return null;
 
   const seasons = doc.seasons ?? [];
   const currentSeasonId =
@@ -135,7 +131,7 @@ export function parseTeamDoc(input: unknown): TeamDoc | null {
     nameOrder: doc.nameOrder === "first" ? "first" : "last",
     currentSeasonId,
     seasons,
-    athletes: athletes.map(normalizeAthlete),
+    athletes: doc.athletes.map(normalizeAthlete),
     enrollments: doc.enrollments ?? [],
     updatedAt: doc.updatedAt ?? Date.now(),
   };

@@ -49,7 +49,6 @@ import {
   isDeleted,
   isDiving,
   rulingId,
-  isEligible,
   normalizeTeamCode,
   todayIso,
 } from "~/types/meet";
@@ -142,7 +141,6 @@ interface AppStore {
   setIncludeDiving: (id: string, includeDiving: boolean) => void;
   setEvents: (id: string, events: MeetEvent[]) => void;
   addEvent: (id: string, event: MeetEvent) => void;
-  updateEvent: (id: string, eventId: string, patch: Partial<MeetEvent>) => void;
   removeEvent: (id: string, eventId: string) => void;
   moveEvent: (id: string, eventId: string, direction: -1 | 1) => void;
   toggleEntry: (id: string, eventId: string, athleteId: string) => void;
@@ -404,7 +402,6 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const store = useMemo<AppStore>(() => {
     const liveMeets = meets.filter((m) => !isDeleted(m));
     const deletedMeets = meets.filter(isDeleted);
-    const athleteById = new Map(team.athletes.map((s) => [s.id, s] as const));
 
     /** Registered swimmers for an event, in roster order. */
     const entrantsFor = (meet: MeetDoc, eventId: string): string[] => {
@@ -701,32 +698,6 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
       addEvent: (id, event) =>
         editMeet(id, (m) => ({ ...m, events: [...m.events, event] })),
-
-      updateEvent: (id, eventId, patch) =>
-        editMeet(id, (m) => {
-          const events = m.events.map((e) =>
-            e.id === eventId ? { ...e, ...patch } : e,
-          );
-          const updated = events.find((e) => e.id === eventId);
-          if (!updated) return m;
-
-          // Narrowing an event's gender has to un-enter whoever no longer
-          // qualifies, or they'd be seeded into a heat they can't swim.
-          const before = m.entries[eventId] ?? [];
-          const after = before.filter((athleteId) => {
-            const athlete = athleteById.get(athleteId);
-            return !athlete || isEligible(athlete, updated);
-          });
-
-          const next = {
-            ...m,
-            events,
-            entries: { ...m.entries, [eventId]: after },
-          };
-          return after.length === before.length
-            ? next
-            : invalidateHeats(next, eventId);
-        }),
 
       removeEvent: (id, eventId) =>
         editMeet(id, (m) => {
