@@ -40,7 +40,7 @@ export function SyncPanel() {
     deletedMeets,
     getMeet,
     deleteMeet,
-    adoptSeason,
+    chooseTeam,
     replaceTeam,
     replaceMeet,
     markTeamSynced,
@@ -95,26 +95,13 @@ export function SyncPanel() {
         : "No meets on the server yet.";
     });
 
-  /** Take on another season entirely — the team, and the meets that go with it. */
+  /** Take on another season entirely — the same path a new device uses. */
   const adopt = (summary: RemoteTeamSummary) =>
     run(async () => {
-      const pulled = await pullTeam(summary.id);
-      if (!pulled) throw new Error("That team has gone from the server.");
-
-      const summaries = await listMeets(summary.id);
-      const pulledMeets: MeetDoc[] = [];
-      for (const meetSummary of summaries) {
-        if (meetSummary.deletedAt) continue;
-        const meet = await pullMeet(meetSummary.id);
-        if (meet) pulledMeets.push({ ...meet, syncedAt: meet.updatedAt });
-      }
-
-      adoptSeason({ ...pulled, syncedAt: pulled.updatedAt }, pulledMeets);
+      await chooseTeam(summary.id);
       setRemoteTeams(null);
       setRemote(null);
-      return `Now working in ${pulled.name} — ${pulled.swimmers.length} swimmers and ${pulledMeets.length} meet${
-        pulledMeets.length === 1 ? "" : "s"
-      }.`;
+      return `Now working in ${summary.name}.`;
     });
 
   const handlePushAll = () =>
@@ -308,10 +295,10 @@ export function SyncPanel() {
                       )}
                     </p>
                     <p className="text-xs text-slate-500">
-                      {summary.season && `${summary.season} · `}
-                      {summary.swimmers} swimmer
-                      {summary.swimmers === 1 ? "" : "s"} · {summary.meets} meet
-                      {summary.meets === 1 ? "" : "s"}
+                      {summary.athletes} swimmer
+                      {summary.athletes === 1 ? "" : "s"} · {summary.meets} meet
+                      {summary.meets === 1 ? "" : "s"} · {summary.times} time
+                      {summary.times === 1 ? "" : "s"}
                     </p>
                   </div>
                   {!mine && (

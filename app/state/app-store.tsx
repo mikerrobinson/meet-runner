@@ -30,7 +30,13 @@ import {
   nextYear,
   rosterForMeet,
 } from "~/lib/roster";
-import { listMeets, listTeams, pullMeet, pullTeam } from "~/lib/sync";
+import {
+  exchange,
+  listTeams,
+  type RemoteTeamSummary,
+} from "~/lib/sync";
+import { fromObjects, type SyncObject } from "~/lib/objects";
+import { writeBaseline, writeCursor } from "~/lib/db";
 import {
   convertDistances,
   orderByLeadGender,
@@ -78,6 +84,13 @@ interface AppStore {
   ready: boolean;
   /** Set when on-device storage couldn't be opened at all. */
   storageError: string | null;
+  /**
+   * Seasons on the server, when a device with no data of its own found more
+   * than one and can't tell which it belongs to.
+   */
+  teamChoices: RemoteTeamSummary[] | null;
+  /** Take on one of them. */
+  chooseTeam: (teamId: string) => Promise<void>;
   team: TeamDoc;
   /** Live meets, for everything on screen. */
   meets: MeetDoc[];
@@ -219,47 +232,71 @@ function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
  * Returns null when there's nothing to adopt or the server can't be reached,
  * in which case the caller starts fresh.
  */
-async function adoptSeasonFromServer(): Promise<{
+export async function adoptTeam(teamId: string): Promise<{
   team: TeamDoc;
   meets: MeetDoc[];
 } | null> {
-  let candidates: Awaited<ReturnType<typeof listTeams>>;
+  const objects: SyncObject[] = [];
+  let cursor = "";
+
+  // Page through the whole season. Objects, not documents: the old document
+  // tables stopped being the truth when syncing moved to objects.
+  for (let page = 0; page < 100; page++) {
+    const result = await exchange(teamId, cursor, []);
+    objects.push(...result.changes);
+    cursor = result.cursor;
+    if (!result.more) break;
+  }
+
+  const { team, meets } = fromObjects(objects);
+  if (!team) return null;
+
+  // Seed the baseline, or this device's first sync would push the season
+  // straight back as though it had just written all of it.
+  await writeBaseline(objects);
+  await writeCursor(cursor);
+
+  return { team, meets };
+}
+
+/**
+ * Pull the season onto a device that has none.
+ *
+ * Exactly one team is unambiguous and gets adopted. Several is a choice only
+ * a person can make, so the candidates are handed back for the UI to ask
+ * about — guessing is what let an empty team shadow a real roster before.
+ */
+async function adoptSeasonFromServer(): Promise<
+  | { kind: "adopted"; team: TeamDoc; meets: MeetDoc[] }
+  | { kind: "choose"; candidates: RemoteTeamSummary[] }
+  | null
+> {
+  let candidates: RemoteTeamSummary[];
   try {
     candidates = await withTimeout(listTeams(), ADOPT_TIMEOUT_MS);
   } catch {
     return null;
   }
-  if (candidates.length !== 1) return null;
+  if (candidates.length === 0) return null;
+  if (candidates.length > 1) return { kind: "choose", candidates };
 
-  let team: TeamDoc | null;
   try {
-    team = await withTimeout(pullTeam(candidates[0].id), ADOPT_TIMEOUT_MS);
+    const adopted = await withTimeout(
+      adoptTeam(candidates[0].id),
+      ADOPT_TIMEOUT_MS,
+    );
+    return adopted ? { kind: "adopted", ...adopted } : null;
   } catch {
     return null;
   }
-  if (!team) return null;
-
-  const meets: MeetDoc[] = [];
-  try {
-    const summaries = await withTimeout(
-      listMeets(team.id),
-      ADOPT_TIMEOUT_MS,
-    );
-    for (const summary of summaries) {
-      if (summary.deletedAt) continue;
-      const meet = await pullMeet(summary.id);
-      if (meet) meets.push({ ...meet, syncedAt: meet.updatedAt });
-    }
-  } catch {
-    // The roster is the part that matters; meets can arrive on the next sync.
-  }
-
-  return { team: { ...team, syncedAt: team.updatedAt }, meets };
 }
 
 export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [teamChoices, setTeamChoices] = useState<RemoteTeamSummary[] | null>(
+    null,
+  );
   const [team, setTeam] = useState<TeamDoc>(() => createTeam());
   const [meets, setMeets] = useState<MeetDoc[]>([]);
 
@@ -284,7 +321,12 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         // genuinely has none (or can't be reached).
         if (!loadedTeam) {
           const fromServer = await adoptSeasonFromServer();
-          if (fromServer && !cancelled) {
+          if (fromServer?.kind === "choose" && !cancelled) {
+            // Several seasons up there and nothing here to say which is ours.
+            // Ask rather than guess, and rather than show an empty app.
+            setTeamChoices(fromServer.candidates);
+          }
+          if (fromServer?.kind === "adopted" && !cancelled) {
             loadedTeam = fromServer.team;
             loadedMeets = fromServer.meets;
             await writeTeam(loadedTeam);
@@ -443,6 +485,15 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     return {
       ready,
       storageError,
+      teamChoices,
+      chooseTeam: async (teamId) => {
+        const adopted = await adoptTeam(teamId);
+        if (!adopted) throw new Error("That season has gone from the server.");
+        persistedTeam.current = null;
+        setTeam(adopted.team);
+        setMeets(adopted.meets);
+        setTeamChoices(null);
+      },
       team,
       meets: liveMeets,
       deletedMeets,
@@ -966,7 +1017,16 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           watches: m.watches.filter((w) => w.id !== watchId),
         })),
     };
-  }, [ready, storageError, team, meets, editTeam, editMeet, editMeetQuietly]);
+  }, [
+    ready,
+    storageError,
+    teamChoices,
+    team,
+    meets,
+    editTeam,
+    editMeet,
+    editMeetQuietly,
+  ]);
 
   return (
     <AppStoreContext.Provider value={store}>{children}</AppStoreContext.Provider>

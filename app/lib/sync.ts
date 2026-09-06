@@ -111,9 +111,10 @@ export interface RemoteTeamSummary {
   id: string;
   name: string;
   code: string;
-  season: string;
-  swimmers: number;
+  athletes: number;
   meets: number;
+  /** Recorded times — the surest sign of which season is the real one. */
+  times: number;
   updatedAt: number;
 }
 

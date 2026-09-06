@@ -247,6 +247,67 @@ export async function pullObjects(
   };
 }
 
+export interface TeamChoice {
+  id: string;
+  name: string;
+  code: string;
+  athletes: number;
+  meets: number;
+  times: number;
+  updatedAt: number;
+}
+
+/**
+ * The teams the object store knows about, with enough detail to tell them
+ * apart.
+ *
+ * Read from the objects rather than the old documents table, which stopped
+ * being the truth the moment syncing moved to objects — a device adopting
+ * from it would take on a season frozen at conversion time.
+ */
+export async function listTeamChoices(db: D1Database): Promise<TeamChoice[]> {
+  await ensureObjectStore(db);
+
+  const { results } = await db
+    .prepare(
+      `SELECT team_id,
+              SUM(CASE WHEN type = 'athlete' AND deleted_at IS NULL THEN 1 ELSE 0 END) AS athletes,
+              SUM(CASE WHEN type = 'meet'    AND deleted_at IS NULL THEN 1 ELSE 0 END) AS meets,
+              SUM(CASE WHEN type = 'watch'   AND deleted_at IS NULL THEN 1 ELSE 0 END) AS times,
+              MAX(updated_at) AS updated_at
+       FROM objects GROUP BY team_id`,
+    )
+    .all<{
+      team_id: string;
+      athletes: number;
+      meets: number;
+      times: number;
+      updated_at: number;
+    }>();
+
+  const { results: names } = await db
+    .prepare(
+      "SELECT id, data FROM objects WHERE type = 'team' AND deleted_at IS NULL",
+    )
+    .all<{ id: string; data: string }>();
+  const byId = new Map(
+    names.map((r) => [r.id, JSON.parse(r.data) as { name: string; code: string }]),
+  );
+
+  return results
+    .filter((row) => byId.has(row.team_id))
+    .map((row) => ({
+      id: row.team_id,
+      name: byId.get(row.team_id)!.name,
+      code: byId.get(row.team_id)!.code ?? "",
+      athletes: row.athletes,
+      meets: row.meets,
+      times: row.times,
+      updatedAt: row.updated_at,
+    }))
+    .sort((a, b) => b.times - a.times || b.meets - a.meets);
+}
+
 /**
  * Fill the object store from the old document tables, once.
  *

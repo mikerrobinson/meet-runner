@@ -2,11 +2,11 @@ import type { Route } from "./+types/api.teams";
 import {
   errorResponse,
   json,
-  listTeams,
   requireAuth,
   requireDb,
   type SyncEnv,
 } from "~/lib/meets.server";
+import { listTeamChoices } from "~/lib/sync.server";
 
 /**
  * Every team the server holds.
@@ -19,7 +19,7 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env as SyncEnv;
   try {
     requireAuth(request, env);
-    return json({ teams: await listTeams(requireDb(env)) });
+    return json({ teams: await listTeamChoices(requireDb(env)) });
   } catch (error) {
     return errorResponse(error);
   }

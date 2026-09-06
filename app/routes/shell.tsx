@@ -172,7 +172,8 @@ function layoutOptions(
 }
 
 export default function Shell() {
-  const { ready, storageError, team, meets } = useAppStore();
+  const { ready, storageError, teamChoices, chooseTeam, team, meets } =
+    useAppStore();
   const status = useSyncStatus();
   const { laneLayout, setLaneLayout } = useViewPrefs();
   const location = useLocation();
@@ -190,6 +191,44 @@ export default function Shell() {
             Nothing has been lost — the season is still on this device and on
             the server.
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Several seasons on the server and nothing here to say which is ours.
+  // Showing an empty roster would look like the data had been lost.
+  if (teamChoices && teamChoices.length > 0) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-6">
+        <div className="w-full max-w-md">
+          <h1 className="text-lg font-bold">Which season is this device for?</h1>
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+            The server has more than one, and this device is new. Nothing has
+            been lost — pick the one you work with.
+          </p>
+          <ul className="mt-4 space-y-2">
+            {teamChoices.map((choice) => (
+              <li key={choice.id}>
+                <button
+                  type="button"
+                  onClick={() => void chooseTeam(choice.id)}
+                  className="w-full touch-manipulation rounded-2xl border border-slate-200 p-4 text-left active:bg-slate-100 dark:border-slate-800 dark:active:bg-slate-800"
+                >
+                  <span className="block font-semibold">
+                    {choice.name}
+                    {choice.code && ` (${choice.code})`}
+                  </span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400">
+                    {choice.athletes} swimmer{choice.athletes === 1 ? "" : "s"} ·{" "}
+                    {choice.meets} meet{choice.meets === 1 ? "" : "s"} ·{" "}
+                    {choice.times} recorded time
+                    {choice.times === 1 ? "" : "s"}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
     );

@@ -363,22 +363,36 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   }, [ready]);
 
   /**
-   * Taking on a different season throws the baseline away.
+   * Taking on a different season re-reads the baseline rather than assuming.
    *
-   * It describes what the server holds for the team we *were* on. Diffing the
-   * new season against it would read every object of the old one as deleted,
-   * and try to say so — about a team this device no longer even holds.
+   * The one in memory describes the team we *were* on: diffing the new season
+   * against it would read every object of the old one as deleted. Adopting a
+   * season writes a fresh baseline as it pulls, so the right move is to pick
+   * that up — otherwise the device would push the whole season straight back
+   * and be told, object by object, that the server already had it.
    */
   useEffect(() => {
     if (!baselineLoadedRef.current) return;
     if (baselineTeamRef.current === team.id) return;
     baselineTeamRef.current = team.id;
-    baselineRef.current = [];
-    cursorRef.current = "";
-    wantPullRef.current = true;
-    setBaseline([]);
-    void writeBaseline([]);
-    void writeCursor("");
+
+    let cancelled = false;
+    (async () => {
+      const [stored, cursor] = await Promise.all([readBaseline(), readCursor()]);
+      if (cancelled) return;
+      baselineRef.current = stored;
+      cursorRef.current = cursor;
+      wantPullRef.current = true;
+      setBaseline(stored);
+    })().catch(() => {
+      baselineRef.current = [];
+      cursorRef.current = "";
+      setBaseline([]);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [team.id]);
 
   /**
