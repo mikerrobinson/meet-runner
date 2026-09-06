@@ -24,7 +24,4 @@ export default [
   route("api/sync-status", "routes/api.sync-status.ts"),
   route("api/sync", "routes/api.sync.ts"),
   route("api/teams", "routes/api.teams.ts"),
-  route("api/teams/:teamId", "routes/api.team.$teamId.ts"),
-  route("api/meets", "routes/api.meets.ts"),
-  route("api/meets/:id", "routes/api.meet.ts"),
 ] satisfies RouteConfig;

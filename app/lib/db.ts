@@ -7,13 +7,7 @@
  * here, at the cost of an async API.
  */
 
-import {
-  createTeam,
-  migrateMeet,
-  migrateTeam,
-  normalizeSwimmer,
-} from "./documents";
-import { makeEnrollment } from "./roster";
+import { migrateMeet, migrateTeam } from "./documents";
 import type { SyncObject } from "./objects";
 import type { MeetDoc, Swimmer, TeamDoc } from "~/types/meet";
 
@@ -35,8 +29,6 @@ const CURSOR_KEY = "sync:cursor";
 /** There's one team per install; this is its fixed key in the team store. */
 const TEAM_KEY = "team";
 
-const LEGACY_MEET_KEY = "meet-runner:meet";
-const MIGRATED_FLAG = "meet-runner:migrated-to-idb";
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -129,69 +121,6 @@ export async function wipe(): Promise<void> {
 }
 
 /* --------------------------------------------------------------- migration */
-
-/**
- * Split the old single-meet localStorage document into a team plus its first
- * meet. Runs once; the flag is left behind so a later visit doesn't resurrect
- * a meet the coach has since deleted.
- */
-export async function migrateFromLocalStorage(): Promise<{
-  team: TeamDoc;
-  meets: MeetDoc[];
-} | null> {
-  if (typeof localStorage === "undefined") return null;
-  if (localStorage.getItem(MIGRATED_FLAG)) return null;
-
-  const raw = localStorage.getItem(LEGACY_MEET_KEY);
-  if (!raw) {
-    localStorage.setItem(MIGRATED_FLAG, "1");
-    return null;
-  }
-
-  try {
-    const legacy = JSON.parse(raw) as Partial<MeetDoc> & {
-      swimmers?: Array<
-        Partial<Swimmer> & { active?: boolean; year?: string; squad?: string }
-      >;
-    };
-
-    const team = createTeam("My Team");
-    // The pre-roster save had one flat list of swimmers; they all join the
-    // team's first season, and "active" meant on the roster.
-    const season = team.currentSeasonId;
-    for (const raw of legacy.swimmers ?? []) {
-      const athlete = normalizeSwimmer(raw);
-      team.swimmers.push(athlete);
-      team.enrollments.push(
-        makeEnrollment(team.id, season, athlete.id, {
-          year: raw.year,
-          squad: raw.squad,
-          status: raw.active === false ? "inactive" : "active",
-        }),
-      );
-    }
-
-    const meet = migrateMeet(legacy, team.id);
-    if (!meet) {
-      localStorage.setItem(MIGRATED_FLAG, "1");
-      return null;
-    }
-    // The old model had no notion of who you were racing.
-    meet.type = "intersquad";
-    // Force a re-push: these are new documents as far as the server knows.
-    team.syncedAt = null;
-    meet.syncedAt = null;
-
-    await writeTeam(team);
-    await writeMeet(meet);
-    localStorage.setItem(MIGRATED_FLAG, "1");
-    return { team, meets: [meet] };
-  } catch (error) {
-    console.error("Could not migrate the saved meet:", error);
-    localStorage.setItem(MIGRATED_FLAG, "1");
-    return null;
-  }
-}
 
 /* --------------------------------------------------------------- sync state */
 

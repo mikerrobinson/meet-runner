@@ -8,9 +8,7 @@
  * index instead of scanning.
  */
 
-import { migrateMeet, migrateTeam } from "./documents";
-import { toObjects, type SyncObject } from "./objects";
-import type { MeetDoc, TeamDoc } from "~/types/meet";
+import type { SyncObject } from "./objects";
 
 /**
  * `updated_at` is the editing device's clock and decides who wins a contest
@@ -306,42 +304,4 @@ export async function listTeamChoices(db: D1Database): Promise<TeamChoice[]> {
       updatedAt: row.updated_at,
     }))
     .sort((a, b) => b.times - a.times || b.meets - a.meets);
-}
-
-/**
- * Fill the object store from the old document tables, once.
- *
- * A straight conversion rather than a compatibility layer: the documents are
- * read, decomposed, and written as objects, and after that nothing reads the
- * old tables. They're left in place as a fallback until the next deploy
- * proves this out.
- */
-export async function convertDocuments(
-  db: D1Database,
-): Promise<{ teams: number; meets: number; objects: number }> {
-  await ensureObjectStore(db);
-
-  const { results: teamRows } = await db
-    .prepare("SELECT data FROM teams")
-    .all<{ data: string }>();
-  const { results: meetRows } = await db
-    .prepare("SELECT data FROM meets")
-    .all<{ data: string }>();
-
-  const teams = teamRows
-    .map((r) => migrateTeam(JSON.parse(r.data)))
-    .filter((t): t is TeamDoc => t !== null);
-  const meets = meetRows
-    .map((r) => migrateMeet(JSON.parse(r.data)))
-    .filter((m): m is MeetDoc => m !== null);
-
-  let objects = 0;
-  for (const team of teams) {
-    const mine = meets.filter((m) => m.teamId === team.id);
-    const batch = toObjects(team, mine);
-    await pushObjects(db, batch);
-    objects += batch.length;
-  }
-
-  return { teams: teams.length, meets: meets.length, objects };
 }

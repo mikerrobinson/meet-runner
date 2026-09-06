@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  migrateFromLocalStorage,
   readMeets,
   readTeam,
   removeMeet,
@@ -127,17 +126,10 @@ interface AppStore {
   createMeet: (patch?: MeetPatch) => MeetDoc;
   deleteMeet: (id: string) => void;
   getMeet: (id: string) => MeetDoc | undefined;
-  updateMeet: (id: string, updater: MeetUpdater) => void;
   replaceTeam: (team: TeamDoc) => void;
   replaceMeet: (meet: MeetDoc) => void;
-  /** Take on a whole season from the server: this team, and only its meets. */
-  adoptSeason: (team: TeamDoc, meets: MeetDoc[]) => void;
-  /** Accept a deletion made on another device, without pushing it back. */
-  applyRemoteDeletion: (id: string, deletedAt: number) => void;
   /** Take on what a sync brought back, keeping this device's own view of things. */
   applyFromSync: (team: TeamDoc, meets: MeetDoc[]) => void;
-  markTeamSynced: (updatedAt: number) => void;
-  markMeetSynced: (id: string, updatedAt: number) => void;
 
   /* Meet detail — all scoped to an explicit meet id */
   setMeetInfo: (
@@ -310,9 +302,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
     (async () => {
       try {
-        const migrated = await migrateFromLocalStorage();
-        let loadedTeam = migrated?.team ?? (await readTeam());
-        let loadedMeets = migrated?.meets ?? (await readMeets());
+        let loadedTeam = await readTeam();
+        let loadedMeets = await readMeets();
 
         // A device with nothing on it must not invent a team. The season very
         // likely already exists on the server, and minting a second one would
@@ -339,9 +330,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         const nextTeam = loadedTeam ?? createTeam();
         setTeam(nextTeam);
         setMeets(loadedMeets);
-        // A team we adopted, migrated, or read back is already on disk; only a
-        // freshly created one still needs its first write. Meets are on disk in
-        // every one of those paths.
+        // A team we adopted or read back is already on disk; only a freshly
+        // created one still needs its first write.
         persistedTeam.current = loadedTeam ? nextTeam : null;
         persistedMeets.current = new Map(loadedMeets.map((m) => [m.id, m]));
       } catch (error) {
@@ -645,33 +635,10 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
       getMeet: (id) => liveMeets.find((m) => m.id === id),
 
-      updateMeet: (id, updater) => editMeet(id, updater),
-
       replaceTeam: (next) => {
         persistedTeam.current = null;
         setTeam(next);
       },
-
-      // Switching seasons replaces the lot. Meets belonging to a team this
-      // device is no longer holding would otherwise linger in the schedule
-      // with nobody on their roster.
-      adoptSeason: (nextTeam, nextMeets) => {
-        persistedTeam.current = null;
-        setTeam(nextTeam);
-        setMeets(nextMeets);
-      },
-
-      // The server says this meet was deleted elsewhere. Recording it as an
-      // already-synced tombstone rather than a fresh delete keeps it from
-      // bouncing back up as though this device had decided it.
-      applyRemoteDeletion: (id, deletedAt) =>
-        setMeets((current) =>
-          current.map((m) =>
-            m.id === id && !isDeleted(m)
-              ? { ...tombstone(m), deletedAt, updatedAt: deletedAt, syncedAt: deletedAt }
-              : m,
-          ),
-        ),
 
       // The merged season, recomposed from objects. Where the device has a
       // view of its own — which event it's sitting on — that's kept: it was
@@ -695,16 +662,6 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           copy[index] = next;
           return copy;
         }),
-
-      // Marking synced deliberately bypasses `editTeam`/`editMeet` so it
-      // doesn't bump updatedAt and re-dirty the document it just cleaned.
-      markTeamSynced: (updatedAt) =>
-        setTeam((current) => ({ ...current, syncedAt: updatedAt })),
-
-      markMeetSynced: (id, updatedAt) =>
-        setMeets((current) =>
-          current.map((m) => (m.id === id ? { ...m, syncedAt: updatedAt } : m)),
-        ),
 
       setMeetInfo: (id, patch) => editMeet(id, (m) => ({ ...m, ...patch })),
 

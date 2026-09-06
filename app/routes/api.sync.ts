@@ -7,7 +7,7 @@ import {
   requireDb,
   type SyncEnv,
 } from "~/lib/meets.server";
-import { convertDocuments, pullObjects, pushObjects } from "~/lib/sync.server";
+import { pullObjects, pushObjects } from "~/lib/sync.server";
 import type { SyncObject } from "~/lib/objects";
 
 /**
@@ -54,24 +54,6 @@ export async function action({ request, context }: Route.ActionArgs) {
       applied: pushed.applied,
       refused: pushed.refused,
     });
-  } catch (error) {
-    return errorResponse(error);
-  }
-}
-
-/**
- * One-off: fill the object store from the old document tables. Safe to repeat
- * — the objects it writes are the same ones each time.
- */
-export async function loader({ request, context }: Route.LoaderArgs) {
-  const env = context.cloudflare.env as SyncEnv;
-  try {
-    requireAuth(request, env);
-    const url = new URL(request.url);
-    if (url.searchParams.get("convert") !== "1") {
-      throw new SyncError("POST to sync, or ?convert=1 to import documents", 400);
-    }
-    return json(await convertDocuments(requireDb(env)));
   } catch (error) {
     return errorResponse(error);
   }

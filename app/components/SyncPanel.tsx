@@ -9,19 +9,8 @@ import {
   TextInput,
 } from "./ui";
 import { loadSyncToken, saveSyncToken } from "~/lib/storage";
-import {
-  listMeets,
-  listTeams,
-  pullMeet,
-  pullTeam,
-  pushMeet,
-  pushTeam,
-  syncStatus,
-  type RemoteMeetSummary,
-  type RemoteTeamSummary,
-} from "~/lib/sync";
+import { listTeams, syncStatus, type RemoteTeamSummary } from "~/lib/sync";
 import { useAppStore } from "~/state/app-store";
-import type { MeetDoc } from "~/types/meet";
 import { useSyncStatus } from "~/state/auto-sync";
 
 function relative(timestamp: number | null): string {
@@ -33,19 +22,16 @@ function relative(timestamp: number | null): string {
   return new Date(timestamp).toLocaleString();
 }
 
+/**
+ * Sync, as far as anyone needs to see it.
+ *
+ * Almost all of it happens on its own now: changes go up and come down within
+ * seconds, object by object. What's left here is the handful of things a
+ * person might actually want — nudge it, see which season this device is on,
+ * switch to another, or start this one over from the server.
+ */
 export function SyncPanel() {
-  const {
-    team,
-    meets,
-    deletedMeets,
-    getMeet,
-    deleteMeet,
-    chooseTeam,
-    replaceTeam,
-    replaceMeet,
-    markTeamSynced,
-    markMeetSynced,
-  } = useAppStore();
+  const { team, chooseTeam } = useAppStore();
   const auto = useSyncStatus();
 
   const [available, setAvailable] = useState<boolean | null>(null);
@@ -53,13 +39,10 @@ export function SyncPanel() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [remote, setRemote] = useState<RemoteMeetSummary[] | null>(null);
-  const [remoteTeams, setRemoteTeams] = useState<RemoteTeamSummary[] | null>(
-    null,
-  );
+  const [teams, setTeams] = useState<RemoteTeamSummary[] | null>(null);
+  const [confirmReload, setConfirmReload] = useState(false);
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
-  const [confirmRestore, setConfirmRestore] = useState(false);
 
   useEffect(() => {
     setToken(loadSyncToken());
@@ -69,111 +52,52 @@ export function SyncPanel() {
     });
   }, []);
 
-  const run = useCallback(async (action: () => Promise<string>) => {
+  const run = useCallback(async (work: () => Promise<string>) => {
     setBusy(true);
     setError(null);
     setMessage(null);
     try {
-      setMessage(await action());
+      setMessage(await work());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      setError(err instanceof Error ? err.message : "Something went wrong.");
     } finally {
       setBusy(false);
     }
   }, []);
 
-  const handleList = () =>
+  const showTeams = () =>
     run(async () => {
-      const [foundTeams, found] = await Promise.all([
-        listTeams(),
-        listMeets(team.id),
-      ]);
-      setRemoteTeams(foundTeams);
-      setRemote(found);
-      return found.length
-        ? `Found ${found.length} meet${found.length === 1 ? "" : "s"} on the server.`
-        : "No meets on the server yet.";
+      const found = await listTeams();
+      setTeams(found);
+      return found.length === 1
+        ? "One season on the server."
+        : `${found.length} seasons on the server.`;
     });
 
-  /** Take on another season entirely — the same path a new device uses. */
-  const adopt = (summary: RemoteTeamSummary) =>
+  /**
+   * Take this season again from scratch.
+   *
+   * The same path a new device uses, pointed at the team already open — which
+   * makes it the answer to "this device looks wrong, start it over" without
+   * needing a separate restore mechanism.
+   */
+  const reload = () =>
+    run(async () => {
+      await chooseTeam(team.id);
+      setConfirmReload(false);
+      return "Reloaded this season from the server.";
+    });
+
+  const useSeason = (summary: RemoteTeamSummary) =>
     run(async () => {
       await chooseTeam(summary.id);
-      setRemoteTeams(null);
-      setRemote(null);
+      setTeams(null);
       return `Now working in ${summary.name}.`;
-    });
-
-  const handlePushAll = () =>
-    run(async () => {
-      let pushed = 0;
-      // Roster first: a meet's swimmer ids mean nothing to another device
-      // until the roster they point into has landed.
-      if (team.syncedAt !== team.updatedAt) {
-        const sentAt = team.updatedAt;
-        await pushTeam(team);
-        markTeamSynced(sentAt);
-        pushed += 1;
-      }
-      for (const meet of [...meets, ...deletedMeets]) {
-        if (meet.syncedAt === meet.updatedAt) continue;
-        const sentAt = meet.updatedAt;
-        const { applied } = await pushMeet(meet);
-        // A refused push means the server is ahead; saying "pushed" would be
-        // a lie, and marking it synced would bury the divergence.
-        if (!applied) {
-          throw new Error(
-            `The server has a newer copy of ${meet.name}. Nothing was overwritten — restore from the server first.`,
-          );
-        }
-        markMeetSynced(meet.id, sentAt);
-        pushed += 1;
-      }
-      // Clears any backoff the background sync had settled into.
-      auto.syncNow();
-      return pushed === 0
-        ? "Everything was already up to date."
-        : `Pushed ${pushed} document${pushed === 1 ? "" : "s"}.`;
-    });
-
-  /** Pull the roster and every meet the server has, roster first. */
-  const doRestore = () =>
-    run(async () => {
-      const remoteTeam = await pullTeam(team.id);
-      if (!remoteTeam) {
-        throw new Error("The server doesn't have this team yet — push first.");
-      }
-      replaceTeam({ ...remoteTeam, syncedAt: remoteTeam.updatedAt });
-
-      const summaries = await listMeets(team.id);
-      let restored = 0;
-      let dropped = 0;
-      for (const summary of summaries) {
-        // A tombstone is news too: this device may still be holding the meet
-        // that another one deleted.
-        if (summary.deletedAt) {
-          if (getMeet(summary.id)) {
-            deleteMeet(summary.id);
-            dropped += 1;
-          }
-          continue;
-        }
-        const meet = await pullMeet(summary.id);
-        if (!meet) continue;
-        replaceMeet({ ...meet, syncedAt: meet.updatedAt });
-        restored += 1;
-      }
-      setConfirmRestore(false);
-      const removals =
-        dropped > 0 ? `, and removed ${dropped} deleted elsewhere` : "";
-      return `Restored ${remoteTeam.swimmers.length} swimmers and ${restored} meet${
-        restored === 1 ? "" : "s"
-      }${removals}.`;
     });
 
   const handleSaveToken = () => {
     saveSyncToken(token.trim());
-    setRemote(null);
+    setTeams(null);
     setMessage("Sync token saved on this device.");
     syncStatus().then((status) => {
       setAvailable(status.enabled);
@@ -187,23 +111,23 @@ export function SyncPanel() {
     }
     if (!auto.enabled) {
       return auto.pendingCount > 0
-        ? `Auto-sync is off. ${auto.pendingCount} document${
+        ? `Auto-sync is off. ${auto.pendingCount} change${
             auto.pendingCount === 1 ? "" : "s"
           } the server doesn't have.`
-        : `Auto-sync is off. Last pushed ${relative(auto.lastSyncAt)}.`;
+        : `Auto-sync is off. Last synced ${relative(auto.lastSyncAt)}.`;
     }
     if (auto.phase === "diverged") {
-      return auto.message ?? "The server has a newer copy than this device.";
+      return auto.message ?? "The server had newer versions of something.";
     }
     if (auto.phase === "error") {
       return `Couldn't reach the server, retrying. Last synced ${relative(auto.lastSyncAt)}.`;
     }
     if (auto.pending || auto.phase === "syncing") {
-      return `Saving ${auto.pendingCount} document${
+      return `Sending ${auto.pendingCount} change${
         auto.pendingCount === 1 ? "" : "s"
-      } to the server…`;
+      }…`;
     }
-    return `Saved to the server ${relative(auto.lastSyncAt)}. Changes sync on their own.`;
+    return `Synced ${relative(auto.lastSyncAt)}. Changes go both ways on their own.`;
   };
 
   return (
@@ -211,8 +135,8 @@ export function SyncPanel() {
       <SectionTitle
         action={
           available === true ? (
-            <Button size="sm" variant="ghost" onClick={handleList} disabled={busy}>
-              Browse
+            <Button size="sm" variant="ghost" onClick={showTeams} disabled={busy}>
+              Seasons
             </Button>
           ) : undefined
         }
@@ -220,64 +144,64 @@ export function SyncPanel() {
         Sync
       </SectionTitle>
 
-      {available === false && (
-        <Banner tone="warn">
-          Server sync is unavailable{reason ? `: ${reason}` : ""}. The season is
-          still saved on this device and everything works offline.
-        </Banner>
-      )}
-
       <p className="text-sm text-slate-600 dark:text-slate-300">{statusLine()}</p>
 
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <Button variant="primary" onClick={handlePushAll} disabled={busy}>
-          Push now
-        </Button>
-        <Button onClick={() => setConfirmRestore(true)} disabled={busy}>
-          Restore from server
-        </Button>
-      </div>
+      {available === false && (
+        <div className="mt-3">
+          <Banner tone="warn">
+            {reason ?? "The server isn't set up for syncing."}
+          </Banner>
+        </div>
+      )}
 
-      {confirmRestore && (
+      {available === true && (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <Button
+            variant="primary"
+            onClick={() => auto.syncNow()}
+            disabled={busy}
+          >
+            Sync now
+          </Button>
+          <Button onClick={() => setConfirmReload(true)} disabled={busy}>
+            Reload from server
+          </Button>
+        </div>
+      )}
+
+      {confirmReload && (
         <div className="mt-3 space-y-2">
           <Banner tone="warn">
-            This replaces the roster and every meet on this device with the
-            server's copy. Anything here that hasn't been pushed would be lost.
+            Takes this season again from the server. Anything on this device
+            that hasn&rsquo;t synced yet would be lost.
           </Banner>
           <div className="grid grid-cols-2 gap-2">
-            <Button variant="danger" onClick={doRestore} disabled={busy}>
-              Replace local
+            <Button variant="danger" onClick={reload} disabled={busy}>
+              Reload
             </Button>
-            <Button onClick={() => setConfirmRestore(false)}>Cancel</Button>
+            <Button onClick={() => setConfirmReload(false)}>Cancel</Button>
           </div>
         </div>
       )}
 
-      {auto.phase !== "unavailable" && (
-        <div className="mt-4">
-          <Field
-            label="Auto-sync"
-            hint="On: this device backs the season up a couple of seconds after each change. Off: nothing leaves the device until you tap Push now. Set per device."
-          >
-            <Segmented
-              value={auto.enabled ? "on" : "off"}
-              onChange={(value) => auto.setEnabled(value === "on")}
-              options={[
-                { value: "on", label: "On" },
-                { value: "off", label: "Off" },
-              ]}
-            />
-          </Field>
+      {message && (
+        <div className="mt-3">
+          <Banner tone="success">{message}</Banner>
+        </div>
+      )}
+      {error && (
+        <div className="mt-3">
+          <Banner tone="error">{error}</Banner>
         </div>
       )}
 
-      {remoteTeams && remoteTeams.length > 0 && (
+      {teams && teams.length > 0 && (
         <div className="mt-4">
           <h3 className="mb-1 text-sm font-bold text-slate-600 dark:text-slate-300">
-            Teams on the server
+            Seasons on the server
           </h3>
           <ul className="divide-y divide-slate-200 dark:divide-slate-800">
-            {remoteTeams.map((summary) => {
+            {teams.map((summary) => {
               const mine = summary.id === team.id;
               return (
                 <li
@@ -290,7 +214,7 @@ export function SyncPanel() {
                       {summary.code && ` (${summary.code})`}
                       {mine && (
                         <span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-200">
-                          on this device
+                          this device
                         </span>
                       )}
                     </p>
@@ -305,7 +229,7 @@ export function SyncPanel() {
                     <Button
                       size="sm"
                       disabled={busy}
-                      onClick={() => adopt(summary)}
+                      onClick={() => useSeason(summary)}
                     >
                       Use this season
                     </Button>
@@ -317,88 +241,42 @@ export function SyncPanel() {
         </div>
       )}
 
-      {remote && remote.length > 0 && (
-        <div className="mt-4">
-          <h3 className="mb-1 text-sm font-bold text-slate-600 dark:text-slate-300">
-            On the server
-          </h3>
-          <ul className="divide-y divide-slate-200 dark:divide-slate-800">
-            {remote
-              .filter((summary) => !summary.deletedAt)
-              .map((summary) => {
-                const here = meets.some((m) => m.id === summary.id);
-                return (
-                  <li
-                    key={summary.id}
-                    className="flex items-center justify-between gap-3 py-2"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate font-semibold">
-                        {summary.name}
-                        {here && (
-                          <span className="ml-2 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-200">
-                            on this device
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {summary.date} · saved {relative(summary.updatedAt)}
-                      </p>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant={here ? "secondary" : "primary"}
-                      disabled={busy}
-                      onClick={() =>
-                        run(async () => {
-                          const meet = await pullMeet(summary.id);
-                          if (!meet) throw new Error("That meet is gone.");
-                          replaceMeet({ ...meet, syncedAt: meet.updatedAt });
-                          return `Pulled "${meet.name}".`;
-                        })
-                      }
-                    >
-                      {here ? "Reload" : "Pull"}
-                    </Button>
-                  </li>
-                );
-              })}
-          </ul>
-        </div>
-      )}
-
-      <div className="mt-3">
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => setShowToken((v) => !v)}
+      <div className="mt-4">
+        <Field
+          label="Auto-sync"
+          hint="On: this device sends changes a couple of seconds after each one, and picks up other devices' changes while you're looking at it. Off: nothing moves until you tap Sync now. Set per device."
         >
-          {showToken ? "Hide sync token" : "Sync token"}
-        </Button>
+          <Segmented
+            value={auto.enabled ? "on" : "off"}
+            onChange={(value) => auto.setEnabled(value === "on")}
+            options={[
+              { value: "on", label: "On" },
+              { value: "off", label: "Off" },
+            ]}
+          />
+        </Field>
       </div>
 
-      {showToken && (
-        <div className="mt-2 flex gap-2">
-          <TextInput
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="Sync token (if your worker requires one)"
-            autoComplete="off"
-          />
-          <Button onClick={handleSaveToken}>Save</Button>
-        </div>
-      )}
-
-      {message && (
-        <div className="mt-3">
-          <Banner tone="success">{message}</Banner>
-        </div>
-      )}
-      {error && (
-        <div className="mt-3">
-          <Banner tone="error">{error}</Banner>
-        </div>
-      )}
+      <div className="mt-3">
+        <Button size="sm" variant="ghost" onClick={() => setShowToken((v) => !v)}>
+          {showToken ? "Hide sync token" : "Sync token"}
+        </Button>
+        {showToken && (
+          <div className="mt-2 space-y-2">
+            <Field
+              label="Token"
+              hint="Only needed if the server is set up to require one."
+            >
+              <TextInput
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="Paste the shared token"
+              />
+            </Field>
+            <Button onClick={handleSaveToken}>Save</Button>
+          </div>
+        )}
+      </div>
     </Card>
   );
 }

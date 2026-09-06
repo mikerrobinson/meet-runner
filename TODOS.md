@@ -22,6 +22,18 @@ In a split lineup, adding "100 Fly" nearly always means adding both girls' and
 boys'. Right now you add one and repeat. Could add the pair in lead order from
 one tap.
 
+### Live updates while a heat is on the clock
+Devices poll every ten seconds, which is fine for registration and setup but
+not for three timers watching each other's watches land. Either a much shorter
+interval while a heat is running, or real server push — which on Workers means
+Durable Objects. The object model underneath is already right for either.
+
+### Tombstone retention
+Deleted objects stay in the table forever; every un-entered swimmer leaves a
+row. Harmless for a long while, but it wants a rule eventually — and you can't
+safely purge until every device has seen the deletion, which is an argument for
+tracking device cursors.
+
 ### SD3 import and export
 The plan: read the standard `.sd3` files Hy-Tek, SwimTopia and Commit export, so
 an opponent's lineup can be imported rather than typed, and write results back
@@ -84,17 +96,6 @@ pointing at swimmers no longer listed. Matching incoming rows on name and
 reusing the existing id would preserve history. Archive-and-add is the safe path
 mid-season today.
 
-### Stale pushes are marked synced
-When the server rejects a push as stale (`applied: false`), the client still
-marks it synced. It stops a retry loop, but a genuine divergence passes quietly.
-
-### Deletes don't sync
-Deleting a meet on one device leaves it on the server and on other devices.
-
-### Orphaned team rows
-The duplicate-team bug left a stray empty team row in D1. It loses the tiebreak
-permanently so it's harmless, but a cleanup on push would tidy it.
-
 ---
 
 ## Smaller polish
@@ -113,9 +114,6 @@ permanently so it's harmless, but a cleanup on push would tidy it.
   retype.
 - **Dead search box.** The registration search filter is still in the row
   expression but unreachable while `SHOW_ROSTER_CONTROLS` is `false`.
-- **Sync payload size.** Each push sends the whole document (~80–150KB for a
-  full meet). Fine on wifi, less so on cellular. Deltas would fix it at a real
-  cost in complexity.
 - **Diving is display-only.** By design — it shows on registration and holds
   its place in the running order, but carries no scores, so it never appears on
   the Results screen or in the CSV export. If dual-meet scoring lands, diving

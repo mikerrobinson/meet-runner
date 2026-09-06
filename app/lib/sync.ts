@@ -1,16 +1,5 @@
-import { migrateMeet, migrateTeam } from "./documents";
 import { loadSyncToken } from "./storage";
 import type { SyncObject } from "./objects";
-import type { MeetDoc, TeamDoc } from "~/types/meet";
-
-export interface RemoteMeetSummary {
-  /** Set when the meet was deleted; the summary is a tombstone. */
-  deletedAt?: number | null;
-  id: string;
-  name: string;
-  date: string;
-  updatedAt: number;
-}
 
 /**
  * Resolve an API path against the router basename, so the same code works at
@@ -65,65 +54,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-/** Push the local meet to the server. Server keeps whichever copy is newer. */
-export async function pushMeet(
-  meet: MeetDoc,
-): Promise<{ updatedAt: number; applied: boolean }> {
-  return request(`/api/meets/${meet.id}`, {
-    method: "PUT",
-    body: JSON.stringify(meet),
-  });
-}
-
-/** Fetch a meet by id. Returns null if the server doesn't have it. */
-export async function pullMeet(id: string): Promise<MeetDoc | null> {
-  const body = await request<{ meet: unknown | null }>(`/api/meets/${id}`);
-  return body.meet ? migrateMeet(body.meet) : null;
-}
-
-export async function listMeets(
-  teamId?: string,
-): Promise<RemoteMeetSummary[]> {
-  const query = teamId ? `?teamId=${encodeURIComponent(teamId)}` : "";
-  const body = await request<{ meets: RemoteMeetSummary[] }>(
-    `/api/meets${query}`,
-  );
-  return body.meets;
-}
-
-/** Push the season roster and team settings. */
-export async function pushTeam(
-  team: TeamDoc,
-): Promise<{ updatedAt: number; applied: boolean }> {
-  return request(`/api/teams/${team.id}`, {
-    method: "PUT",
-    body: JSON.stringify(team),
-  });
-}
-
-/** Fetch one team by id. Null when the server has never seen it. */
-export async function pullTeam(id: string): Promise<TeamDoc | null> {
-  const body = await request<{ team: unknown | null }>(`/api/teams/${id}`);
-  return body.team ? migrateTeam(body.team) : null;
-}
-
-export interface RemoteTeamSummary {
-  id: string;
-  name: string;
-  code: string;
-  athletes: number;
-  meets: number;
-  /** Recorded times — the surest sign of which season is the real one. */
-  times: number;
-  updatedAt: number;
-}
-
-/** Every team on the server, for a device deciding which season it's joining. */
-export async function listTeams(): Promise<RemoteTeamSummary[]> {
-  const body = await request<{ teams: RemoteTeamSummary[] }>("/api/teams");
-  return body.teams;
-}
-
 export interface SyncExchange {
   cursor: string;
   changes: SyncObject[];
@@ -146,6 +76,23 @@ export async function exchange(
     method: "POST",
     body: JSON.stringify({ teamId, cursor, changes }),
   });
+}
+
+export interface RemoteTeamSummary {
+  id: string;
+  name: string;
+  code: string;
+  athletes: number;
+  meets: number;
+  /** Recorded times — the surest sign of which season is the real one. */
+  times: number;
+  updatedAt: number;
+}
+
+/** Every season on the server, for a device deciding which one it belongs to. */
+export async function listTeams(): Promise<RemoteTeamSummary[]> {
+  const body = await request<{ teams: RemoteTeamSummary[] }>("/api/teams");
+  return body.teams;
 }
 
 /** Whether the server has sync configured at all (i.e. a D1 binding exists). */
