@@ -6,7 +6,7 @@ import {
   requireAuth,
   requireDb,
   type SyncEnv,
-} from "~/lib/meets.server";
+} from "~/lib/api.server";
 import { pullObjects, pushObjects } from "~/lib/sync.server";
 import type { SyncObject } from "~/lib/objects";
 

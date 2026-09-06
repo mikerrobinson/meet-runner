@@ -1,9 +1,10 @@
 /**
- * Document shapes, defaults, and version migrations.
+ * Making documents, and checking the ones that arrive.
  *
- * Pure and environment-free on purpose: the browser storage layer and the
- * Cloudflare Worker both need these, and the worker shouldn't be dragging
- * IndexedDB code into its bundle to get them.
+ * `createTeam`/`createMeetDoc` build them; `parseTeamDoc`/`parseMeetDoc` take
+ * something off the wire or out of a backup file and either return a complete
+ * document or nothing. Pure and environment-free, so the worker can use them
+ * without dragging IndexedDB into its bundle.
  */
 
 import { generateId } from "./id";
@@ -35,7 +36,6 @@ export function createTeam(name = "My Team"): TeamDoc {
     swimmers: [],
     enrollments: [],
     updatedAt: Date.now(),
-    syncedAt: null,
   };
 }
 
@@ -77,7 +77,6 @@ export function createMeetDoc(teamId: string, patch: MeetPatch = {}): MeetDoc {
     progress: { eventIndex: 0, heatIndex: 0 },
     timer: null,
     updatedAt: Date.now(),
-    syncedAt: null,
   };
   const doc: MeetDoc = {
     ...defaults,
@@ -112,7 +111,7 @@ export function normalizeSwimmer(raw: Partial<Swimmer>): Swimmer {
  * once, and the app writes only this one. What's left is making sure a
  * document off the wire or out of a backup file has everything it should.
  */
-export function migrateTeam(input: unknown): TeamDoc | null {
+export function parseTeamDoc(input: unknown): TeamDoc | null {
   if (!input || typeof input !== "object") return null;
   const doc = input as Partial<TeamDoc>;
   if (!doc.id || !Array.isArray(doc.swimmers)) return null;
@@ -135,7 +134,6 @@ export function migrateTeam(input: unknown): TeamDoc | null {
     swimmers: doc.swimmers.map(normalizeSwimmer),
     enrollments: doc.enrollments ?? [],
     updatedAt: doc.updatedAt ?? Date.now(),
-    syncedAt: doc.syncedAt ?? null,
   };
 }
 
@@ -147,8 +145,8 @@ const MEET_TYPES = new Set<MeetType>([
   "time-trial",
 ]);
 
-/** Check and fill in a meet document. See `migrateTeam`. */
-export function migrateMeet(input: unknown, teamId?: string): MeetDoc | null {
+/** Check and fill in a meet document. See `parseTeamDoc`. */
+export function parseMeetDoc(input: unknown, teamId?: string): MeetDoc | null {
   if (!input || typeof input !== "object") return null;
   const doc = input as Partial<MeetDoc>;
   if (!doc.id || !Array.isArray(doc.events)) return null;
@@ -182,7 +180,6 @@ export function migrateMeet(input: unknown, teamId?: string): MeetDoc | null {
     // was never deleted is byte-for-byte what it always was.
     deletedAt: doc.deletedAt || undefined,
     updatedAt: doc.updatedAt ?? Date.now(),
-    syncedAt: doc.syncedAt ?? null,
   };
 }
 
@@ -201,6 +198,5 @@ export function tombstone(meet: MeetDoc): MeetDoc {
     }),
     deletedAt: Date.now(),
     updatedAt: Date.now(),
-    syncedAt: meet.syncedAt,
   };
 }

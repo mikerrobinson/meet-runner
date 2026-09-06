@@ -12,7 +12,7 @@ import {
   TextInput,
 } from "~/components/ui";
 import { downloadFile } from "~/lib/csv";
-import { migrateMeet, migrateTeam } from "~/lib/documents";
+import { parseMeetDoc, parseTeamDoc } from "~/lib/documents";
 import {
   currentSeason,
   enrollmentsIn,
@@ -73,16 +73,17 @@ export default function Settings() {
     setMessage(null);
     try {
       const parsed = JSON.parse(await file.text()) as Partial<Backup>;
-      const nextTeam = migrateTeam(parsed.team);
+      const nextTeam = parseTeamDoc(parsed.team);
       if (!nextTeam) throw new Error("That file has no team in it.");
 
       const nextMeets = (parsed.meets ?? [])
-        .map((m) => migrateMeet(m, nextTeam.id))
+        .map((m) => parseMeetDoc(m, nextTeam.id))
         .filter((m): m is MeetDoc => m !== null);
 
-      // Treat everything as unsynced so the restored copy gets pushed up.
-      replaceTeam({ ...nextTeam, syncedAt: null });
-      for (const meet of nextMeets) replaceMeet({ ...meet, syncedAt: null });
+      // Nothing to mark: the next sync compares the season against what the
+      // server last agreed to, and an imported document differs by content.
+      replaceTeam(nextTeam);
+      for (const meet of nextMeets) replaceMeet(meet);
       setMessage(
         `Restored ${nextTeam.swimmers.length} swimmers and ${nextMeets.length} meet${
           nextMeets.length === 1 ? "" : "s"

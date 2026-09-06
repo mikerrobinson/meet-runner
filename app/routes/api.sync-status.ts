@@ -1,5 +1,5 @@
 import type { Route } from "./+types/api.sync-status";
-import { errorResponse, json, requireAuth, type SyncEnv } from "~/lib/meets.server";
+import { errorResponse, json, requireAuth, type SyncEnv } from "~/lib/api.server";
 
 export async function loader({ request, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env as SyncEnv;

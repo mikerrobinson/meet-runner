@@ -7,7 +7,7 @@
  * here, at the cost of an async API.
  */
 
-import { migrateMeet, migrateTeam } from "./documents";
+import { parseMeetDoc, parseTeamDoc } from "./documents";
 import type { SyncObject } from "./objects";
 import type { MeetDoc, Swimmer, TeamDoc } from "~/types/meet";
 
@@ -88,7 +88,7 @@ export async function readTeam(): Promise<TeamDoc | null> {
   const raw = await run<unknown>(TEAM_STORE, "readonly", (store) =>
     store.get(TEAM_KEY),
   );
-  return migrateTeam(raw);
+  return parseTeamDoc(raw);
 }
 
 export async function readMeets(): Promise<MeetDoc[]> {
@@ -96,7 +96,7 @@ export async function readMeets(): Promise<MeetDoc[]> {
     store.getAll(),
   );
   return raw
-    .map((item) => migrateMeet(item))
+    .map((item) => parseMeetDoc(item))
     .filter((meet): meet is MeetDoc => meet !== null)
     .sort((a, b) => b.date.localeCompare(a.date) || b.updatedAt - a.updatedAt);
 }

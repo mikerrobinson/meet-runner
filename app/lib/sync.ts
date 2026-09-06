@@ -1,3 +1,9 @@
+/**
+ * Talking to the sync endpoint. One request carries this device's changes up
+ * and brings back everything that changed elsewhere; see `objects.ts` for what
+ * a change is, and `auto-sync.tsx` for when this gets called.
+ */
+
 import { loadSyncToken } from "./storage";
 import type { SyncObject } from "./objects";
 

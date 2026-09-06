@@ -201,7 +201,6 @@ export interface TeamDoc {
   swimmers: Swimmer[];
   enrollments: Enrollment[];
   updatedAt: number;
-  syncedAt: number | null;
 }
 
 export const TEAM_DOC_VERSION = 3;
@@ -459,8 +458,6 @@ export interface MeetDoc {
   deletedAt?: number | null;
   /** Local last-modified time, used to resolve sync conflicts. */
   updatedAt: number;
-  /** `updatedAt` as of the last successful sync, or null if never synced. */
-  syncedAt: number | null;
 }
 
 export const MEET_DOC_VERSION = 5;

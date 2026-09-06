@@ -258,7 +258,6 @@ export function fromObjects(objects: SyncObject[]): {
     swimmers: of<Swimmer>("athlete").map((o) => o.data),
     enrollments: of<Enrollment>("enrollment").map((o) => o.data),
     updatedAt: teamObject.updatedAt,
-    syncedAt: teamObject.updatedAt,
   };
 
   const byMeet = new Map<string, MeetDoc>();
@@ -275,7 +274,6 @@ export function fromObjects(objects: SyncObject[]): {
       rulings: [],
       progress: { eventIndex: 0, heatIndex: 0 },
       updatedAt: object.updatedAt,
-      syncedAt: object.updatedAt,
     });
   }
 

@@ -5,7 +5,7 @@ import {
   requireAuth,
   requireDb,
   type SyncEnv,
-} from "~/lib/meets.server";
+} from "~/lib/api.server";
 import { listTeamChoices } from "~/lib/sync.server";
 
 /**

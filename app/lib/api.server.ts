@@ -1,10 +1,8 @@
 /**
- * Server side of sync. The whole meet is stored as one JSON blob — it's a few
- * hundred KB at most, only one person edits it, and keeping it as a document
- * means the client and server never disagree about shape.
+ * Shared plumbing for the API routes: the shared-secret check, the database
+ * binding, and the two response shapes. The syncing itself lives in
+ * `sync.server.ts`.
  */
-
-import type { MeetDoc, TeamDoc } from "~/types/meet";
 
 export interface SyncEnv {
   DB?: D1Database;

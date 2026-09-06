@@ -401,28 +401,6 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  /**
-   * Save without claiming the document changed.
-   *
-   * Some of what a meet holds isn't about the meet at all — where this device
-   * has scrolled to in the running order is the obvious one. It's worth
-   * remembering across a reload, so it's written to disk, but leaving
-   * `updatedAt` alone keeps it from dirtying the document: tapping through
-   * events on the deck shouldn't queue a push, least of all over pool wifi.
-   * The position still travels with the next real edit.
-   */
-  const editMeetQuietly = useCallback((id: string, updater: MeetUpdater) => {
-    setMeets((current) => {
-      const index = current.findIndex((m) => m.id === id);
-      if (index < 0) return current;
-      const next = updater(current[index]);
-      if (next === current[index]) return current;
-      const copy = [...current];
-      copy[index] = next;
-      return copy;
-    });
-  }, []);
-
   const store = useMemo<AppStore>(() => {
     const liveMeets = meets.filter((m) => !isDeleted(m));
     const deletedMeets = meets.filter(isDeleted);
@@ -883,19 +861,16 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           timer: null,
         })),
 
-      // Moving through the running order is this device's business, so it
-      // saves without dirtying the document. Walking away from a live clock
-      // isn't — that stops the heat, which every device needs to know.
-      setProgress: (id, eventIndex, heatIndex) => {
-        const stopsAClock = meets.find((m) => m.id === id)?.timer != null;
-        const edit = stopsAClock ? editMeet : editMeetQuietly;
-        edit(id, (m) => ({
+      // Where this device sits in the running order isn't synced at all — it
+      // never becomes an object — so moving through events costs nothing on
+      // the wire. Stopping a live clock does change the meet, and says so.
+      setProgress: (id, eventIndex, heatIndex) =>
+        editMeet(id, (m) => ({
           ...m,
           progress: { eventIndex, heatIndex },
           // Never carry a running clock across a heat change.
           timer: null,
-        }));
-      },
+        })),
 
       startTimer: (id, heatId) =>
         editMeet(id, (m) => ({
@@ -974,16 +949,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           watches: m.watches.filter((w) => w.id !== watchId),
         })),
     };
-  }, [
-    ready,
-    storageError,
-    teamChoices,
-    team,
-    meets,
-    editTeam,
-    editMeet,
-    editMeetQuietly,
-  ]);
+  }, [ready, storageError, teamChoices, team, meets, editTeam, editMeet]);
 
   return (
     <AppStoreContext.Provider value={store}>{children}</AppStoreContext.Provider>
