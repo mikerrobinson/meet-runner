@@ -8,6 +8,7 @@ import { LANE_LAYOUTS, type LaneLayout } from "~/types/meet";
 
 const AUTO_SYNC_KEY = "meet-runner:auto-sync";
 const TOKEN_KEY = "meet-runner:sync-token";
+const SESSION_KEY = "meet-runner:session";
 const LANE_LAYOUT_KEY = "meet-runner:lane-layout";
 const TIMER_ID_KEY = "meet-runner:timer-id";
 
@@ -37,6 +38,29 @@ export function saveSyncToken(token: string): void {
   if (typeof localStorage === "undefined") return;
   if (token) localStorage.setItem(TOKEN_KEY, token);
   else localStorage.removeItem(TOKEN_KEY);
+}
+
+/**
+ * Proof of who is signed in on this device.
+ *
+ * Kept alongside the other device preferences rather than in a cookie: every
+ * call the app makes is a `fetch` it controls, so a header is simpler than a
+ * cookie and can't be sent by anything else — which is the whole of CSRF gone
+ * rather than defended against.
+ *
+ * It survives a reload and a closed lid on purpose. A coach signs in once on
+ * the iPad in the swim bag; being asked again at the start of a meet, on pool
+ * wifi, is the failure this exists to avoid.
+ */
+export function loadSessionToken(): string {
+  if (typeof localStorage === "undefined") return "";
+  return localStorage.getItem(SESSION_KEY) ?? "";
+}
+
+export function saveSessionToken(token: string): void {
+  if (typeof localStorage === "undefined") return;
+  if (token) localStorage.setItem(SESSION_KEY, token);
+  else localStorage.removeItem(SESSION_KEY);
 }
 
 /**

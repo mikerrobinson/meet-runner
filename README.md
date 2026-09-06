@@ -212,21 +212,15 @@ The team and each meet are separate documents, and only the ones actually behind
 get pushed. The roster always goes first: a meet's swimmer ids mean nothing to
 another device until the roster they point into has landed.
 
-**A device with no local data adopts the season rather than starting one.** On
-first run it asks the server for the team (and its meets) before creating
-anything, falling back to a fresh local team only if the server has none or
-can't be reached within a few seconds. Without that, opening the app on a second
-device would mint an empty team, push it, and shadow the real roster — the
-second device would look empty while cheerfully reporting "Synced".
+**A device with no local data adopts the season rather than starting one.** It
+never invents a team: signing in says which team this person is on, and the
+device fetches that one. Without that, opening the app on a second device would
+mint an empty team, push it, and shadow the real roster — the second device
+would look empty while cheerfully reporting "Synced".
 
 For the same reason auto-sync stays parked until the store has finished reading
 storage: before that, the in-memory team is a throwaway placeholder, and pushing
 it would put an empty roster on the server ahead of the real one.
-
-If a database somehow ends up with more than one team row, `getTeam` doesn't
-just take the newest — the newest is typically the empty one that caused the
-problem. It prefers the team the meets actually belong to, then the one with a
-roster, and only then recency.
 
 `app/state/auto-sync.tsx` pushes on its own, and is built to stay off the render
 path:
@@ -257,13 +251,68 @@ One consequence worth knowing: whichever device last touched a meet wins. That
 was true of the manual push too, but automatic pushing makes it easier to hit if
 you leave the app open on a second device.
 
-| Route                   | Purpose                                    |
-| ----------------------- | ------------------------------------------ |
-| `GET /api/sync-status`  | Whether a D1 binding exists                |
-| `GET` / `PUT /api/team` | Fetch or push the roster and team settings |
-| `GET /api/meets`        | List meets on the server                   |
-| `GET /api/meets/:id`    | Fetch one meet                             |
-| `PUT /api/meets/:id`    | Push a meet                                |
+| Route                            | Purpose                                              |
+| -------------------------------- | ---------------------------------------------------- |
+| `GET /api/sync-status`           | Whether a D1 binding exists                          |
+| `POST /api/sync`                 | Send changed objects, take back what changed elsewhere |
+| `GET /api/teams`                 | The seasons the signed-in person may switch between  |
+| `POST /api/auth/start`           | Send a login code to an email or mobile              |
+| `POST /api/auth/verify`          | Trade the code for a session                         |
+| `GET`/`PATCH`/`DELETE /api/auth/session` | Who's signed in; record where they are; sign out |
+| `GET`/`POST`/`PATCH`/`DELETE /api/memberships` | Who's on a team, and who wants to be |
+| `GET`/`POST /api/invites`        | Inspect or mint a one-time invitation link           |
+
+## Accounts
+
+Identity is a contact — an email address or a mobile number — and nothing else.
+There's no password and no separate sign-up: a code goes to whatever was typed,
+and a contact nobody has used before becomes an account when someone reads it.
+The email carries a link with the code already in it as well as the code
+itself, since a link only works when mail is read in the same browser and a
+code always works.
+
+The session token is stored on the device and sent as a bearer header, so it
+survives a reload and a closed lid — a coach signs in once on the iPad that
+lives in the swim bag. Tokens and codes are both stored hashed.
+
+**Local data wins over the session.** A device that already holds the season
+keeps working with no network and no session, which is the state a phone is in
+when pool wifi drops mid-meet. Signing in is how a season gets *onto* a device
+and how the server knows whose it is — not a gate in front of a stopwatch.
+
+Roles are `head_coach`, `coach`, `athlete`, `parent`, `viewer`; only coaches can
+admit people or hand out invitations, and only an active membership carries any
+power at all. Timers are deliberately not a role — they'll hold a meet-scoped
+grant instead, so they can work without giving a name.
+
+**Claiming a team.** A team with no members is unclaimed, and the first person
+to ask becomes its head coach; after that everyone else waits for approval.
+That's the one-time bootstrap for seasons that predate accounts, so claim yours
+promptly after deploying.
+
+### Who can touch what
+
+One question, asked once, in `canUseTeam`: **are you an active member of this
+team, or is the team unclaimed?** Members get the season; everyone else gets a
+403. There is no permission matrix.
+
+That's on purpose. The risk worth spending code on here is *disclosure* — this
+endpoint hands back an entire roster of minors, with birth dates, to anyone who
+can name a team id, and no amount of hiding buttons in the UI would fix that.
+Tampering by a signed-in member of your own team is a social problem, not a
+technical one.
+
+**What a member may do once they have the season is the app's business.** The
+session payload carries each membership's role, and the UI reads it: an
+athlete or a parent simply isn't shown the buttons. Only the two endpoints that
+change *other people's* access — inviting, and admitting a join request —
+enforce coach-ness on the server, because those are the ones that would
+otherwise let someone let themselves in.
+
+This will need revisiting exactly once: when athletes and parents start
+editing their own meet entries, which is a per-object question ("is this your
+entry?") rather than a per-team one, and wants a different mechanism than a
+role check.
 
 ## Running it
 
@@ -275,7 +324,9 @@ npm run build
 ```
 
 `wrangler dev` creates a local D1 automatically, so sync works in development
-with no setup.
+with no setup. `.dev.vars` sets `AUTH_DEV_CODES=1`, which hands the login code
+straight back to the browser so you can sign in with no email or SMS provider
+configured. It is gitignored, and must never be set on a deployed worker.
 
 ### Deploying
 
@@ -294,7 +345,22 @@ with no setup.
    npx wrangler secret put SYNC_TOKEN
    ```
 
-3. `npm run deploy`
+3. Codes have to reach people somehow. Set whichever channels you want; a
+   channel with nothing configured logs the code on the worker instead of
+   sending it, and says so on screen rather than failing silently.
+
+   ```sh
+   npx wrangler secret put RESEND_API_KEY     # email
+   npx wrangler secret put AUTH_FROM_EMAIL    # e.g. Meet Runner <meets@example.com>
+   npx wrangler secret put TWILIO_ACCOUNT_SID # text messages
+   npx wrangler secret put TWILIO_AUTH_TOKEN
+   npx wrangler secret put TWILIO_FROM        # the sending number, in E.164
+   ```
+
+4. `npm run deploy`
+
+5. Sign in, and claim the team — the first person to ask for an unclaimed team
+   becomes its head coach.
 
 Without step 1 the app still deploys and runs; only the sync buttons report
 themselves unavailable.

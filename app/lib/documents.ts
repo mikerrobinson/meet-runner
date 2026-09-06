@@ -22,8 +22,12 @@ import {
   type TeamDoc,
 } from "~/types/meet";
 
-export function createTeam(name = "My Team"): TeamDoc {
-  const id = generateId();
+/**
+ * The id is a parameter because a coach starting a new team registers the id
+ * with the server first, so the team is owned before it exists. The season
+ * inside points back at it, which is why it can't simply be overwritten after.
+ */
+export function createTeam(name = "My Team", id = generateId()): TeamDoc {
   const season = makeSeason(id, defaultSeasonName());
   return {
     version: TEAM_DOC_VERSION,

@@ -1,6 +1,11 @@
 import { type RouteConfig, index, route, layout } from "@react-router/dev/routes";
 
 export default [
+  // Signing in and finding a team sit outside the shell: there's no team to
+  // put in its header and nowhere for its tabs to go.
+  route("sign-in", "routes/sign-in.tsx"),
+  route("join", "routes/join.tsx"),
+
   layout("routes/shell.tsx", [
     index("routes/home.tsx"),
 
@@ -24,4 +29,11 @@ export default [
   route("api/sync-status", "routes/api.sync-status.ts"),
   route("api/sync", "routes/api.sync.ts"),
   route("api/teams", "routes/api.teams.ts"),
+
+  // Accounts and membership.
+  route("api/auth/start", "routes/api.auth.start.ts"),
+  route("api/auth/verify", "routes/api.auth.verify.ts"),
+  route("api/auth/session", "routes/api.auth.session.ts"),
+  route("api/memberships", "routes/api.memberships.ts"),
+  route("api/invites", "routes/api.invites.ts"),
 ] satisfies RouteConfig;

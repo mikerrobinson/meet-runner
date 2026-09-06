@@ -29,11 +29,7 @@ import {
   nextYear,
   rosterForMeet,
 } from "~/lib/roster";
-import {
-  exchange,
-  listTeams,
-  type RemoteTeamSummary,
-} from "~/lib/sync";
+import { exchange } from "~/lib/sync";
 import { fromObjects, type SyncObject } from "~/lib/objects";
 import { writeBaseline, writeCursor } from "~/lib/db";
 import {
@@ -83,12 +79,16 @@ interface AppStore {
   /** Set when on-device storage couldn't be opened at all. */
   storageError: string | null;
   /**
-   * Seasons on the server, when a device with no data of its own found more
-   * than one and can't tell which it belongs to.
+   * Whether this device actually holds a season, as opposed to the empty
+   * placeholder it starts with. A device with one keeps working offline and
+   * signed out; a device without one has to be told which season it's for.
    */
-  teamChoices: RemoteTeamSummary[] | null;
-  /** Take on one of them. */
+  hasLocalData: boolean;
+  /** Take a season from the server, replacing whatever is here. */
   chooseTeam: (teamId: string) => Promise<void>;
+  /** Start a season from nothing, under an id the server has already agreed
+   *  belongs to this coach. */
+  startFreshTeam: (name: string, id: string) => void;
   team: TeamDoc;
   /** Live meets, for everything on screen. */
   meets: MeetDoc[];
@@ -198,29 +198,11 @@ interface AppStore {
 
 const AppStoreContext = createContext<AppStore | null>(null);
 
-/** How long a brand-new device waits on the server before setting up alone. */
-const ADOPT_TIMEOUT_MS = 6000;
-
-function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    work,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error("timed out")), ms),
-    ),
-  ]);
-}
-
 /**
- * Pull the season onto a device that has none.
+ * Pull a season onto a device.
  *
- * Asks what teams exist rather than letting the server decide what this
- * device probably meant. Exactly one team is unambiguous, so it's adopted;
- * several means a choice only a person can make, and the device waits to be
- * told in Settings rather than guessing and possibly starting a second copy
- * of the season.
- *
- * Returns null when there's nothing to adopt or the server can't be reached,
- * in which case the caller starts fresh.
+ * Which season is no longer a guess: it's the team the signed-in coach belongs
+ * to, decided by the server. This device only has to fetch it.
  */
 export async function adoptTeam(teamId: string): Promise<{
   team: TeamDoc;
@@ -249,44 +231,10 @@ export async function adoptTeam(teamId: string): Promise<{
   return { team, meets };
 }
 
-/**
- * Pull the season onto a device that has none.
- *
- * Exactly one team is unambiguous and gets adopted. Several is a choice only
- * a person can make, so the candidates are handed back for the UI to ask
- * about — guessing is what let an empty team shadow a real roster before.
- */
-async function adoptSeasonFromServer(): Promise<
-  | { kind: "adopted"; team: TeamDoc; meets: MeetDoc[] }
-  | { kind: "choose"; candidates: RemoteTeamSummary[] }
-  | null
-> {
-  let candidates: RemoteTeamSummary[];
-  try {
-    candidates = await withTimeout(listTeams(), ADOPT_TIMEOUT_MS);
-  } catch {
-    return null;
-  }
-  if (candidates.length === 0) return null;
-  if (candidates.length > 1) return { kind: "choose", candidates };
-
-  try {
-    const adopted = await withTimeout(
-      adoptTeam(candidates[0].id),
-      ADOPT_TIMEOUT_MS,
-    );
-    return adopted ? { kind: "adopted", ...adopted } : null;
-  } catch {
-    return null;
-  }
-}
-
 export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [storageError, setStorageError] = useState<string | null>(null);
-  const [teamChoices, setTeamChoices] = useState<RemoteTeamSummary[] | null>(
-    null,
-  );
+  const [hasLocalData, setHasLocalData] = useState(false);
   const [team, setTeam] = useState<TeamDoc>(() => createTeam());
   const [meets, setMeets] = useState<MeetDoc[]>([]);
 
@@ -300,37 +248,23 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
     (async () => {
       try {
-        let loadedTeam = await readTeam();
-        let loadedMeets = await readMeets();
-
-        // A device with nothing on it must not invent a team. The season very
-        // likely already exists on the server, and minting a second one would
-        // both hide the real roster and leave this device looking empty but
-        // "synced". Ask the server first; only fall back to a fresh team if it
-        // genuinely has none (or can't be reached).
-        if (!loadedTeam) {
-          const fromServer = await adoptSeasonFromServer();
-          if (fromServer?.kind === "choose" && !cancelled) {
-            // Several seasons up there and nothing here to say which is ours.
-            // Ask rather than guess, and rather than show an empty app.
-            setTeamChoices(fromServer.candidates);
-          }
-          if (fromServer?.kind === "adopted" && !cancelled) {
-            loadedTeam = fromServer.team;
-            loadedMeets = fromServer.meets;
-            await writeTeam(loadedTeam);
-            await Promise.all(loadedMeets.map((m) => writeMeet(m)));
-          }
-        }
-
+        const loadedTeam = await readTeam();
+        const loadedMeets = await readMeets();
         if (cancelled) return;
 
+        // A device with nothing on it must not invent a team: the season very
+        // likely already exists on the server under an id this device can't
+        // guess, and minting a second one would both hide the real roster and
+        // leave the device looking empty but "synced". The placeholder here is
+        // never persisted or pushed — the shell sends you to sign in instead,
+        // and whoever you turn out to be decides which season to fetch.
         const nextTeam = loadedTeam ?? createTeam();
         setTeam(nextTeam);
         setMeets(loadedMeets);
-        // A team we adopted or read back is already on disk; only a freshly
-        // created one still needs its first write.
-        persistedTeam.current = loadedTeam ? nextTeam : null;
+        setHasLocalData(loadedTeam !== null);
+        // A team read back is already on disk; the placeholder isn't, and
+        // must not be written just because it exists.
+        persistedTeam.current = nextTeam;
         persistedMeets.current = new Map(loadedMeets.map((m) => [m.id, m]));
       } catch (error) {
         console.error("Could not open local storage:", error);
@@ -450,15 +384,28 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     return {
       ready,
       storageError,
-      teamChoices,
+      hasLocalData,
+
       chooseTeam: async (teamId) => {
         const adopted = await adoptTeam(teamId);
         if (!adopted) throw new Error("That season has gone from the server.");
         persistedTeam.current = null;
         setTeam(adopted.team);
         setMeets(adopted.meets);
-        setTeamChoices(null);
+        setHasLocalData(true);
       },
+
+      // The id comes from the caller because the server has already been told
+      // this coach owns it — minting a different one here would leave the
+      // device working in a season nobody owns.
+      startFreshTeam: (name, id) => {
+        const fresh = createTeam(name, id);
+        persistedTeam.current = null;
+        setTeam(fresh);
+        setMeets([]);
+        setHasLocalData(true);
+      },
+
       team,
       meets: liveMeets,
       deletedMeets,
@@ -920,7 +867,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           watches: m.watches.filter((w) => w.id !== watchId),
         })),
     };
-  }, [ready, storageError, teamChoices, team, meets, editTeam, editMeet]);
+  }, [ready, storageError, hasLocalData, team, meets, editTeam, editMeet]);
 
   return (
     <AppStoreContext.Provider value={store}>{children}</AppStoreContext.Provider>

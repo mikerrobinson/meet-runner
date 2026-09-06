@@ -1,7 +1,9 @@
-import { Link, NavLink, Outlet, useLocation, useParams } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { currentSeason, rosterFor } from "~/lib/roster";
 import { useAppStore } from "~/state/app-store";
 import { syncLabel, useSyncStatus } from "~/state/auto-sync";
+import { useSession } from "~/state/session";
 import { useViewPrefs } from "~/state/view-prefs";
 import { LANE_LAYOUTS, meetSubtitle, type LaneLayout } from "~/types/meet";
 
@@ -171,9 +173,85 @@ function layoutOptions(
   }));
 }
 
+/**
+ * Make sure this device is holding the right season, and send it somewhere
+ * useful when it isn't.
+ *
+ * The rule is that local data wins. A device that already has the season keeps
+ * working with no network and no session — which is the state a phone is in
+ * when the pool wifi drops mid-meet, and no time to be asked to sign in. Only
+ * a device holding nothing has to be told who it belongs to.
+ *
+ * Returns what to show while that's being settled, or null to carry on.
+ */
+function useSeasonForSession(): string | null {
+  const { ready, hasLocalData, chooseTeam, team } = useAppStore();
+  const session = useSession();
+  const navigate = useNavigate();
+  const [error, setError] = useState<string | null>(null);
+  // One adoption at a time, and never the same team twice: `chooseTeam`
+  // changes the store, which re-runs this effect.
+  const adopting = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!ready || session.status === "loading") return;
+
+    if (!hasLocalData) {
+      if (session.status === "out") {
+        navigate("/sign-in", { replace: true });
+        return;
+      }
+      if (!session.openTeamId) {
+        navigate("/join", { replace: true });
+        return;
+      }
+    }
+
+    const wanted = session.openTeamId;
+    if (!wanted || wanted === team.id || adopting.current === wanted) return;
+
+    // A device already working in a season this person belongs to stays put.
+    // Following `openTeamId` here would drag a coach off the team they're
+    // standing beside every time they opened the app on a second one.
+    const belongsHere = session.memberships.some(
+      (m) => m.teamId === team.id && m.status === "active",
+    );
+    if (hasLocalData && belongsHere) return;
+
+    adopting.current = wanted;
+    chooseTeam(wanted)
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : "Couldn't load that season."),
+      )
+      .finally(() => {
+        adopting.current = null;
+      });
+  }, [ready, hasLocalData, session, team.id, chooseTeam, navigate]);
+
+  // Keep the account's idea of where this person is up to date, so their next
+  // device opens the same place. Guarded by what was last sent rather than by
+  // what came back, since recording it updates the session and would otherwise
+  // set this off again.
+  const remembered = useRef<string | null>(null);
+  useEffect(() => {
+    if (!ready || !hasLocalData || session.status !== "in") return;
+    if (!session.memberships.some((m) => m.teamId === team.id && m.status === "active")) {
+      return;
+    }
+    const place = `${team.id}:${team.currentSeasonId}`;
+    if (remembered.current === place) return;
+    remembered.current = place;
+    session.rememberPlace(team.id, team.currentSeasonId);
+  }, [ready, hasLocalData, session, team.id, team.currentSeasonId]);
+
+  if (error) return error;
+  if (!hasLocalData) return "";
+  return null;
+}
+
 export default function Shell() {
-  const { ready, storageError, teamChoices, chooseTeam, team, meets } =
-    useAppStore();
+  const { ready, storageError, team, meets } = useAppStore();
+  const settling = useSeasonForSession();
   const status = useSyncStatus();
   const { laneLayout, setLaneLayout } = useViewPrefs();
   const location = useLocation();
@@ -196,48 +274,29 @@ export default function Shell() {
     );
   }
 
-  // Several seasons on the server and nothing here to say which is ours.
-  // Showing an empty roster would look like the data had been lost.
-  if (teamChoices && teamChoices.length > 0) {
-    return (
-      <div className="flex min-h-screen items-center justify-center p-6">
-        <div className="w-full max-w-md">
-          <h1 className="text-lg font-bold">Which season is this device for?</h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-            The server has more than one, and this device is new. Nothing has
-            been lost — pick the one you work with.
-          </p>
-          <ul className="mt-4 space-y-2">
-            {teamChoices.map((choice) => (
-              <li key={choice.id}>
-                <button
-                  type="button"
-                  onClick={() => void chooseTeam(choice.id)}
-                  className="w-full touch-manipulation rounded-2xl border border-slate-200 p-4 text-left active:bg-slate-100 dark:border-slate-800 dark:active:bg-slate-800"
-                >
-                  <span className="block font-semibold">
-                    {choice.name}
-                    {choice.code && ` (${choice.code})`}
-                  </span>
-                  <span className="block text-xs text-slate-500 dark:text-slate-400">
-                    {choice.athletes} swimmer{choice.athletes === 1 ? "" : "s"} ·{" "}
-                    {choice.meets} meet{choice.meets === 1 ? "" : "s"} ·{" "}
-                    {choice.times} recorded time
-                    {choice.times === 1 ? "" : "s"}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
-    );
-  }
-
   if (!ready) {
     return (
       <div className="flex min-h-screen items-center justify-center text-slate-400">
         Loading…
+      </div>
+    );
+  }
+
+  // This device has no season yet — either it's on its way, or fetching it
+  // failed and there's something to say about that.
+  if (settling !== null) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-6 text-center">
+        {settling ? (
+          <div className="max-w-sm">
+            <p className="text-lg font-bold">Couldn&rsquo;t open that season</p>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+              {settling}
+            </p>
+          </div>
+        ) : (
+          <p className="text-slate-400">Loading…</p>
+        )}
       </div>
     );
   }

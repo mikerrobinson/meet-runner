@@ -10,6 +10,7 @@ import {
 import type { Route } from "./+types/root";
 import { AutoSyncProvider } from "./state/auto-sync";
 import { AppStoreProvider } from "./state/app-store";
+import { SessionProvider } from "./state/session";
 import { ViewPrefsProvider } from "./state/view-prefs";
 import "./app.css";
 
@@ -69,14 +70,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  // Session sits outside the store: who you are decides which season the store
+  // is asked to load, so it has to be settled first.
   return (
-    <AppStoreProvider>
-      <AutoSyncProvider>
-        <ViewPrefsProvider>
-          <Outlet />
-        </ViewPrefsProvider>
-      </AutoSyncProvider>
-    </AppStoreProvider>
+    <SessionProvider>
+      <AppStoreProvider>
+        <AutoSyncProvider>
+          <ViewPrefsProvider>
+            <Outlet />
+          </ViewPrefsProvider>
+        </AutoSyncProvider>
+      </AppStoreProvider>
+    </SessionProvider>
   );
 }
 

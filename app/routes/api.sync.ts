@@ -1,12 +1,14 @@
 import type { Route } from "./+types/api.sync";
 import {
   SyncError,
+  currentUser,
   errorResponse,
   json,
   requireAuth,
   requireDb,
   type SyncEnv,
 } from "~/lib/api.server";
+import { canUseTeam } from "~/lib/auth.server";
 import { pullObjects, pushObjects } from "~/lib/sync.server";
 import type { SyncObject } from "~/lib/objects";
 
@@ -18,6 +20,11 @@ import type { SyncObject } from "~/lib/objects";
  *
  * Pushing and pulling in one round trip is what makes this usable on pool
  * wifi, where the cost is the round trip rather than the bytes.
+ *
+ * One access check, for the whole exchange: this endpoint hands over an entire
+ * roster, so the question worth asking is whether the caller belongs to the
+ * team. Which *parts* a member may change is the app's business, not this
+ * endpoint's.
  */
 export async function action({ request, context }: Route.ActionArgs) {
   const env = context.cloudflare.env as SyncEnv;
@@ -43,6 +50,10 @@ export async function action({ request, context }: Route.ActionArgs) {
     if (foreign) {
       throw new SyncError("That batch mixes teams", 400);
     }
+
+    const user = await currentUser(request, env);
+    const allowed = await canUseTeam(db, user?.id ?? null, body.teamId);
+    if (!allowed.ok) throw new SyncError(allowed.reason, 403);
 
     const pushed = await pushObjects(db, changes);
     const pulled = await pullObjects(db, body.teamId, body.cursor);

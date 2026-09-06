@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { Route } from "./+types/settings";
+import { AccountPanel } from "~/components/AccountPanel";
 import { SyncPanel } from "~/components/SyncPanel";
 import {
   Banner,
@@ -234,6 +235,8 @@ export default function Settings() {
           </div>
         )}
       </Card>
+
+      <AccountPanel />
 
       <SyncPanel />
 

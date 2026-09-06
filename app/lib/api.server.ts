@@ -1,10 +1,13 @@
 /**
- * Shared plumbing for the API routes: the shared-secret check, the database
- * binding, and the two response shapes. The syncing itself lives in
- * `sync.server.ts`.
+ * Shared plumbing for the API routes: the database binding, the two response
+ * shapes, and the two ways a caller can prove who it is. The syncing itself
+ * lives in `sync.server.ts`, and accounts in `auth.server.ts`.
  */
 
-export interface SyncEnv {
+import { bearerToken, userForToken, type User } from "./auth.server";
+import type { NotifyEnv } from "./notify.server";
+
+export interface SyncEnv extends NotifyEnv {
   DB?: D1Database;
   SYNC_TOKEN?: string;
 }
@@ -53,4 +56,44 @@ export function requireDb(env: SyncEnv): D1Database {
     );
   }
   return env.DB;
+}
+
+/** Whoever is signed in on this request, or null. */
+export async function currentUser(
+  request: Request,
+  env: SyncEnv,
+): Promise<User | null> {
+  if (!env.DB) return null;
+  return userForToken(env.DB, bearerToken(request));
+}
+
+export async function requireUser(request: Request, env: SyncEnv): Promise<User> {
+  const user = await currentUser(request, env);
+  if (!user) throw new SyncError("Sign in first", 401);
+  return user;
+}
+
+export async function readJson<T>(request: Request): Promise<T> {
+  const body = (await request.json().catch(() => null)) as T | null;
+  if (!body || typeof body !== "object") {
+    throw new SyncError("Expected a JSON body", 400);
+  }
+  return body;
+}
+
+/**
+ * Where the app lives, worked out from the request rather than from anything
+ * the caller said.
+ *
+ * This ends up in an emailed link, so it must not be something a caller can
+ * choose — otherwise asking for a code to someone else's address would be a
+ * way to send them a link to your own site. The API path is a known suffix, so
+ * removing it leaves the base: `/projects/meet-runner/` in production and `/`
+ * in dev, with no config to keep in step.
+ */
+export function appBaseUrl(request: Request): string {
+  const url = new URL(request.url);
+  const cut = url.pathname.lastIndexOf("/api/");
+  const base = cut >= 0 ? url.pathname.slice(0, cut) : "";
+  return `${url.origin}${base}/`;
 }

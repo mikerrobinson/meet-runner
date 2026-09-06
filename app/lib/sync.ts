@@ -4,61 +4,10 @@
  * a change is, and `auto-sync.tsx` for when this gets called.
  */
 
-import { loadSyncToken } from "./storage";
+import { request } from "./http";
 import type { SyncObject } from "./objects";
 
-/**
- * Resolve an API path against the router basename, so the same code works at
- * `/` in dev and `/projects/meet-runner/` in production.
- */
-function apiUrl(path: string): string {
-  if (typeof document === "undefined") return path;
-  const base = document.querySelector("base")?.getAttribute("href");
-  const prefix = (base ?? import.meta.env.BASE_URL ?? "/").replace(/\/$/, "");
-  return `${prefix}${path}`;
-}
-
-/** Carries the HTTP status so callers can tell "misconfigured" from "offline". */
-export class SyncRequestError extends Error {
-  constructor(
-    message: string,
-    /** 0 when the request never reached the server. */
-    readonly status: number,
-  ) {
-    super(message);
-    this.name = "SyncRequestError";
-  }
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = loadSyncToken();
-
-  let response: Response;
-  try {
-    response = await fetch(apiUrl(path), {
-      ...init,
-      headers: {
-        "content-type": "application/json",
-        ...(token ? { "x-sync-token": token } : {}),
-        ...init?.headers,
-      },
-    });
-  } catch {
-    // No network, DNS failure, request aborted — nothing reached the server.
-    throw new SyncRequestError("Couldn't reach the server", 0);
-  }
-
-  const body = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    const message =
-      (body as { error?: string } | null)?.error ??
-      `Request failed (${response.status})`;
-    throw new SyncRequestError(message, response.status);
-  }
-
-  return body as T;
-}
+export { ApiError as SyncRequestError } from "./http";
 
 export interface SyncExchange {
   cursor: string;

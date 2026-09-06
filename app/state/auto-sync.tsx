@@ -267,9 +267,10 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
       }
     } catch (error) {
       const status = error instanceof SyncRequestError ? error.status : -1;
-      // A missing database or a rejected token won't fix itself; retrying
-      // would just burn battery on the deck.
-      if (status === 503 || status === 401) {
+      // A missing database, a rejected token, or a season that isn't this
+      // person's won't fix itself; retrying would just burn battery on the
+      // deck.
+      if (status === 503 || status === 401 || status === 403) {
         stoppedRef.current = true;
         setPhase("unavailable");
         setMessage(error instanceof Error ? error.message : undefined);
