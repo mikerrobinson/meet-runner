@@ -14,7 +14,7 @@ Two long-lived things: **the team** (the roster, which lasts the season) and
 **meets** (one document per meet, each with its own events, entries and times).
 Meets reference swimmers by id, so the roster is the single source of truth —
 fixing a spelling in March fixes January's results too, and removing someone
-*archives* them rather than deleting, since live results still point at their id.
+_archives_ them rather than deleting, since live results still point at their id.
 
 The bottom bar changes with where you are. At the top level it's **Team /
 Meets / Settings**; open a meet and it becomes that meet's modes with a way
@@ -177,7 +177,7 @@ React Router 7 (framework mode) on a Cloudflare Worker, Tailwind 4, served under
 
 - `app/types/meet.ts` — `TeamDoc` and `MeetDoc`, both plain JSON (no
   `Map`/`Set`/`Date`) so the same value round-trips through IndexedDB and the
-  server unchanged. `MeetDoc` holds swimmer *ids* only.
+  server unchanged. `MeetDoc` holds swimmer _ids_ only.
 - `app/lib/documents.ts` — defaults and version migrations, deliberately pure so
   the worker can share them without pulling in browser storage code.
 - `app/lib/db.ts` — IndexedDB. A season outgrows localStorage (~150KB a meet
@@ -245,7 +245,7 @@ path:
 - **Push only.** Auto-pulling would let the server overwrite deck work behind
   your back, so pulling stays a deliberate button.
 - **Switchable per device.** Sync → Auto-sync turns it off, after which nothing
-  leaves the device until you tap *Push now*; the header falls back to
+  leaves the device until you tap _Push now_; the header falls back to
   Synced / Not synced. The preference lives in localStorage rather than in the
   meet, so switching it off on the phone doesn't switch it off on the iPad —
   and doesn't itself become a change that needs syncing. Turning it back on
@@ -257,13 +257,13 @@ One consequence worth knowing: whichever device last touched a meet wins. That
 was true of the manual push too, but automatic pushing makes it easier to hit if
 you leave the app open on a second device.
 
-| Route | Purpose |
-| --- | --- |
-| `GET /api/sync-status` | Whether a D1 binding exists |
+| Route                   | Purpose                                    |
+| ----------------------- | ------------------------------------------ |
+| `GET /api/sync-status`  | Whether a D1 binding exists                |
 | `GET` / `PUT /api/team` | Fetch or push the roster and team settings |
-| `GET /api/meets` | List meets on the server |
-| `GET /api/meets/:id` | Fetch one meet |
-| `PUT /api/meets/:id` | Push a meet |
+| `GET /api/meets`        | List meets on the server                   |
+| `GET /api/meets/:id`    | Fetch one meet                             |
+| `PUT /api/meets/:id`    | Push a meet                                |
 
 ## Running it
 
@@ -307,3 +307,11 @@ themselves unavailable.
   next step if you want a running score during an inter-squad meet.
 - Seed times, so heats are seeded in roster order rather than by speed.
   "Reseed lanes" in Run mode reshuffles at random.
+
+## Random dev notes/chat history
+
+- backup D1 data
+  ```sh
+  npx wrangler d1 export meet-runner --remote --output meet-runner-pre-deploy.sql
+  ``
+  ```

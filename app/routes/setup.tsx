@@ -123,22 +123,12 @@ function EventsTab({ meet }: { meet: MeetDoc }) {
                   {index + 1}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-semibold">
-                    {eventName(event)}
-                    {isRelay(event) && (
-                      <span className="ml-2 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-800 dark:bg-violet-950 dark:text-violet-200">
-                        relay
-                      </span>
-                    )}
-                    {isDiving(event) && (
-                      <span className="ml-2 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-800 dark:bg-sky-950 dark:text-sky-200">
-                        not timed here
-                      </span>
-                    )}
-                  </p>
+                  <p className="truncate font-semibold">{eventName(event)}</p>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    {(meet.entries[event.id] ?? []).length}{" "}
-                    {isRelay(event) ? "lanes filled" : "entered"}
+                    {(meet.entries[event.id] ?? []).length}
+                    {(meet.entries[event.id] ?? []).length == 1
+                      ? " entry"
+                      : " entries"}
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-col">
