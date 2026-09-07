@@ -6,6 +6,11 @@ export default [
   route("sign-in", "routes/sign-in.tsx"),
   route("join", "routes/join.tsx"),
 
+  // The timer's whole world: a scanned link, and the stopwatch it opens.
+  // Outside the shell — no team header, no tab bar, nothing to wander into.
+  route("t/:token", "routes/timer-claim.tsx"),
+  route("timer", "routes/timer.tsx"),
+
   layout("routes/shell.tsx", [
     index("routes/home.tsx"),
 
@@ -36,4 +41,9 @@ export default [
   route("api/auth/session", "routes/api.auth.session.ts"),
   route("api/memberships", "routes/api.memberships.ts"),
   route("api/invites", "routes/api.invites.ts"),
+
+  // Timers. A meet-scoped grant, not an account.
+  route("api/timer/grant", "routes/api.timer.grant.ts"),
+  route("api/timer/meet", "routes/api.timer.meet.ts"),
+  route("api/timer/watch", "routes/api.timer.watch.ts"),
 ] satisfies RouteConfig;

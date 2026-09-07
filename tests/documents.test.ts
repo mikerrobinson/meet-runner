@@ -10,7 +10,7 @@ import { buildHeats } from "../app/lib/heats.ts";
   eq(fresh.course, "SCY", "new meets default to SCY");
   eq(fresh.options.laneCount, 6, "new meets default to 6 lanes");
   eq("opponent" in fresh, false, "opponent is gone");
-  eq(fresh.version, 5, "doc version bumped");
+  eq(fresh.version, 6, "doc version bumped");
 
   // A partial options patch keeps the other defaults.
   const wide = createMeetDoc("team1", { options: { laneCount: 10 } });

@@ -11,6 +11,7 @@
  * same season back, which is the property the tests pin down.
  */
 
+import { MEET_DOC_VERSION, TEAM_DOC_VERSION } from "~/types/meet";
 import type {
   Enrollment,
   Entries,
@@ -69,6 +70,7 @@ interface MeetCore {
   type: MeetDoc["type"];
   course: MeetDoc["course"];
   location?: string;
+  teams?: string[];
   options: MeetDoc["options"];
   timer: MeetDoc["timer"];
 }
@@ -156,6 +158,7 @@ function meetObjects(meet: MeetDoc): SyncObject[] {
       type: meet.type,
       course: meet.course,
       location: meet.location,
+      teams: meet.teams,
       options: meet.options,
       timer: null,
     };
@@ -176,6 +179,7 @@ function meetObjects(meet: MeetDoc): SyncObject[] {
     type: meet.type,
     course: meet.course,
     location: meet.location,
+    teams: meet.teams,
     options: meet.options,
     timer: meet.timer,
   };
@@ -322,8 +326,8 @@ export function fromObjects(objects: SyncObject[]): {
 }
 
 /** Document versions the recomposed documents claim. Kept in step with the model. */
-const TEAM_VERSION = 3;
-const MEET_VERSION = 5;
+const TEAM_VERSION = TEAM_DOC_VERSION;
+const MEET_VERSION = MEET_DOC_VERSION;
 
 /* ------------------------------------------------------------------ diffing */
 

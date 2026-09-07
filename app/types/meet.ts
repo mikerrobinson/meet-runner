@@ -121,6 +121,15 @@ export interface Athlete {
    * carry it on every athlete record.
    */
   birthDate?: string;
+  /**
+   * Which team they swim for, when it isn't this one.
+   *
+   * Absent means ours. A visiting swimmer typed in by a timer gets a label
+   * here and no enrollment, which is what keeps them out of the roster screen
+   * while still making them selectable at every future meet — the second time
+   * you race Horizon, their swimmers are already in the list.
+   */
+  team?: string;
 }
 
 /**
@@ -203,7 +212,7 @@ export interface TeamDoc {
   updatedAt: number;
 }
 
-export const TEAM_DOC_VERSION = 3;
+export const TEAM_DOC_VERSION = 4;
 
 /** Team codes are short and upper-case wherever they're exchanged. */
 export function normalizeTeamCode(value: string): string {
@@ -340,6 +349,26 @@ export interface WatchTime {
   recordedAt: number;
   /** How it arrived: a stopwatch tap, or typed in afterwards. */
   source: "stopwatch" | "typed";
+  /**
+   * Who this timer says was actually in the lane, when that isn't who the heat
+   * has there — an exhibition swim, a swimmer in the wrong lane, a late entry.
+   *
+   * Deliberately a property of the *watch* and not of the heat. A timer
+   * correcting what they saw must never rewrite the lineup: the coach's
+   * running order is the coach's, and two timers disagreeing about lane 4 is
+   * information worth keeping rather than a fight to settle.
+   */
+  athleteId?: string;
+  /**
+   * When the watch was started and stopped, on the timer's own clock.
+   *
+   * Nothing reads these yet. They're recorded because they can't be recovered
+   * afterwards, and because reconciling six lanes timed on six phones
+   * eventually needs to know whether two watches were even running at the same
+   * moment.
+   */
+  startedAt?: number;
+  stoppedAt?: number;
 }
 
 export function watchId(heatId: string, lane: number, timerId: string): string {
@@ -436,6 +465,15 @@ export interface MeetDoc {
   course: MeetCourse;
   /** Where it's being swum, free text — e.g. "Cactus Aquatic Center". */
   location?: string;
+  /**
+   * The teams racing, as short labels — e.g. ["CHAP", "Horizon"].
+   *
+   * Only used to give a timer adding an unlisted swimmer two or three buttons
+   * to tap instead of a text field. That sounds slight, and isn't: a typed
+   * team name is how "Horizon", "horizon" and "Horzion" become three teams and
+   * the picker's grouping stops working.
+   */
+  teams?: string[];
   options: MeetOptions;
   /** Order of this array is the order events are swum. */
   events: MeetEvent[];
@@ -460,7 +498,7 @@ export interface MeetDoc {
   updatedAt: number;
 }
 
-export const MEET_DOC_VERSION = 5;
+export const MEET_DOC_VERSION = 6;
 
 export function isDeleted(meet: Pick<MeetDoc, "deletedAt">): boolean {
   return meet.deletedAt != null;

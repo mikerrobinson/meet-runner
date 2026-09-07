@@ -133,7 +133,7 @@ interface AppStore {
   /* Meet detail — all scoped to an explicit meet id */
   setMeetInfo: (
     id: string,
-    patch: Partial<Pick<MeetDoc, "name" | "date" | "type" | "location">>,
+    patch: Partial<Pick<MeetDoc, "name" | "date" | "type" | "location" | "teams">>,
   ) => void;
   setCourse: (id: string, course: MeetCourse) => void;
   setLaneCount: (id: string, laneCount: LaneCount) => void;

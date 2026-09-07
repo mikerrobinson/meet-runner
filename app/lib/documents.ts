@@ -105,6 +105,7 @@ export function normalizeAthlete(raw: Partial<Athlete>): Athlete {
     lastName: raw.lastName ?? "",
     gender: raw.gender === "M" ? "M" : "F",
     birthDate: raw.birthDate || undefined,
+    team: raw.team || undefined,
   };
 }
 
@@ -166,6 +167,7 @@ export function parseMeetDoc(input: unknown, teamId?: string): MeetDoc | null {
     type: doc.type && MEET_TYPES.has(doc.type) ? doc.type : "dual",
     course: isMeetCourse(doc.course) ? doc.course : "SCY",
     location: doc.location || undefined,
+    teams: doc.teams?.length ? doc.teams : undefined,
     options: {
       laneCount: isLaneCount(laneCount) ? laneCount : 6,
       leadGender: doc.options?.leadGender === "M" ? "M" : "F",

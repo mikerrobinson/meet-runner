@@ -443,7 +443,7 @@ function EventOrder({
 /* ----------------------------------------------------------------- options */
 
 function OptionsTab({ meet }: { meet: MeetDoc }) {
-  const { setMeetInfo, setCourse, setLaneCount } = useAppStore();
+  const { setMeetInfo, setCourse, setLaneCount, team } = useAppStore();
   const { laneCount } = meet.options;
 
   return (
@@ -524,6 +524,24 @@ function OptionsTab({ meet }: { meet: MeetDoc }) {
                 setMeetInfo(meet.id, { location: e.target.value || undefined })
               }
               placeholder="Cactus Aquatic Center"
+              autoCapitalize="words"
+            />
+          </Field>
+          <Field
+            label="Teams racing"
+            hint="Separated by commas. Timers tap one of these when they add a swimmer nobody entered, which is what stops the same school being typed three different ways."
+          >
+            <TextInput
+              value={(meet.teams ?? []).join(", ")}
+              onChange={(e) =>
+                setMeetInfo(meet.id, {
+                  teams: e.target.value
+                    .split(",")
+                    .map((name) => name.trim())
+                    .filter(Boolean),
+                })
+              }
+              placeholder={`${team.code || team.name}, Horizon`}
               autoCapitalize="words"
             />
           </Field>

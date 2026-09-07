@@ -16,6 +16,8 @@ const team: TeamDoc = {
   athletes: [
     { id: "a1", firstName: "Avery", lastName: "Nguyen", gender: "F" as const, birthDate: "2009-03-14" },
     { id: "a2", firstName: "Marcus", lastName: "Hill", gender: "M" },
+    // A visiting swimmer a timer typed in: a label, and no enrollment.
+    { id: "a9", firstName: "Dana", lastName: "Reyes", gender: "F" as const, team: "Horizon" },
   ],
   enrollments: [
     makeEnrollment(base.id, s1.id, "a1", { year: "10", squad: "Blue" }),
@@ -28,6 +30,7 @@ const events = defaultEvents({ course: "SCY" });
 const heats = buildHeats(events[2].id, ["a1", "a2"], 6);
 const meet = createMeetDoc(team.id, {
   name: "vs Central", date: "2026-11-14", course: "SCY", location: "Cactus Aquatic Center",
+  teams: ["CHAP", "Horizon"],
   options: { laneCount: 8, leadGender: "M" },
   events,
   entries: { [events[2].id]: ["a1", "a2"], [events[3].id]: ["a2"] },
@@ -35,6 +38,8 @@ const meet = createMeetDoc(team.id, {
   watches: [
     { id: `${heats[0].id}:3:tA`, eventId: events[2].id, heatId: heats[0].id, lane: 3, timerId: "tA", timeMs: 71270, recordedAt: 1757000000005, source: "stopwatch" },
     { id: `${heats[0].id}:3:tB`, eventId: events[2].id, heatId: heats[0].id, lane: 3, timerId: "tB", timeMs: 71310, recordedAt: 1757000000006, source: "typed" },
+    // A timer saying the lane held someone other than the lineup's swimmer.
+    { id: `${heats[0].id}:6:tA`, eventId: events[2].id, heatId: heats[0].id, lane: 6, timerId: "tA", timeMs: 68120, recordedAt: 1757000000009, source: "stopwatch", athleteId: "a9", startedAt: 1757000000000, stoppedAt: 1757000068120 },
   ],
   rulings: [{ id: `${heats[0].id}:4`, eventId: events[2].id, heatId: heats[0].id, lane: 4, status: "DQ" as const, decidedAt: 1757000000007 }],
   timer: null, updatedAt: 1757000000100,
@@ -60,6 +65,15 @@ eq(bm.events, meet.events, "lineup keeps its order");
 eq(bm.entries, meet.entries, "entries intact");
 eq(bm.heats, meet.heats, "heats intact");
 eq(bm.watches, meet.watches, "every timer's watch intact");
+eq(bm.teams, ["CHAP", "Horizon"], "the meet's teams survive the wire");
+eq(back.team!.athletes.find((a) => a.id === "a9")?.team, "Horizon", "a visiting swimmer keeps their team");
+eq(
+  bm.watches.find((w) => w.lane === 6)?.athleteId,
+  "a9",
+  "a timer's correction rides on the watch, not the lineup",
+);
+eq(bm.heats, meet.heats, "and the lineup itself is untouched by it");
+eq(bm.watches.find((w) => w.lane === 6)?.startedAt, 1757000000000, "start/stop timestamps survive");
 eq(bm.rulings, meet.rulings, "rulings intact");
 eq(back.meets.some((m) => m.id === dead.id), false, "a deleted meet doesn't come back live");
 eq(objects.filter((o) => o.id === dead.id && o.deletedAt).length, 1, "its tombstone is in the set");
@@ -123,8 +137,12 @@ eq(bigWatches.length, 432, "432 watches in a 24-event meet with three timers a l
 const laptop = changedObjects(before, toObjects(withSwimmer, [meet]), 2000);
 const ipad = changedObjects(before, toObjects(team, [withWatch]), 2000);
 const both = fromObjects(mergeObjects(mergeObjects(before, laptop), ipad));
-eq(both.team!.athletes.length, 3, "the laptop's swimmer survives");
-eq(both.meets[0].watches.length, 3, "and the iPad's watch does too");
+eq(both.team!.athletes.length, team.athletes.length + 1, "the laptop's swimmer survives");
+eq(
+  both.meets[0].watches.length,
+  meet.watches.length + 1,
+  "and the iPad's watch does too",
+);
 
 const older = { ...before[0], data: { ...(before[0].data as object), name: "Older" }, updatedAt: 1 };
 const newer = { ...before[0], data: { ...(before[0].data as object), name: "Newer" }, updatedAt: 9 };

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import type { Route } from "./+types/meet-overview";
 import { Banner, Button, Card, SectionTitle } from "~/components/ui";
+import { TimerAccess } from "~/components/TimerAccess";
 import { downloadFile, resultsToCsv } from "~/lib/csv";
 import { recordedCount } from "~/lib/timing";
 import { useAppStore } from "~/state/app-store";
@@ -105,6 +106,8 @@ export default function MeetOverview() {
           </Link>
         ))}
       </div>
+
+      <TimerAccess meet={meet} />
 
       <Card>
         <SectionTitle>Export</SectionTitle>

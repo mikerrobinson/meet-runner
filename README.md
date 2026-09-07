@@ -1,8 +1,8 @@
 # Meet Runner
 
-A phone/iPad app for managing a high-school swim team through a season: one
-roster that carries across the year, a schedule of meets, and a multi-lane
-stopwatch for running each one.
+A phone/iPad app for managing a high-school swim team and high-school swim meets:
+ability to add edit teams and their rosters (which carry across the years), ability to manage schedule of meets/entries, ability to run a meet including individual timer and coach's multi-lane
+stopwatch.
 
 Local-first. Everything lives on the device, so the app keeps working on a pool
 deck with no signal. It backs itself up to the server in the background as you
@@ -201,6 +201,10 @@ React Router 7 (framework mode) on a Cloudflare Worker, Tailwind 4, served under
 
 Times are stored as integer milliseconds and only formatted for display.
 
+\*\*IMPORTANT: THE BELOW SYNC SECTION IS OUT OF DATE AND WAS NOT UPDATED AFTER
+A REFACTOR TO THE LATEST OBJECT/SYNC MODEL - LEFT IN FOR NOW, BUT NEEDS CLEANUP
+AS IT'S NO LONGER RELEVANT
+
 ### Sync
 
 Whole-document push/pull against D1, resolved by `updatedAt` — a push older than
@@ -251,16 +255,16 @@ One consequence worth knowing: whichever device last touched a meet wins. That
 was true of the manual push too, but automatic pushing makes it easier to hit if
 you leave the app open on a second device.
 
-| Route                            | Purpose                                              |
-| -------------------------------- | ---------------------------------------------------- |
-| `GET /api/sync-status`           | Whether a D1 binding exists                          |
-| `POST /api/sync`                 | Send changed objects, take back what changed elsewhere |
-| `GET /api/teams`                 | The seasons the signed-in person may switch between  |
-| `POST /api/auth/start`           | Send a login code to an email or mobile              |
-| `POST /api/auth/verify`          | Trade the code for a session                         |
-| `GET`/`PATCH`/`DELETE /api/auth/session` | Who's signed in; record where they are; sign out |
-| `GET`/`POST`/`PATCH`/`DELETE /api/memberships` | Who's on a team, and who wants to be |
-| `GET`/`POST /api/invites`        | Inspect or mint a one-time invitation link           |
+| Route                                          | Purpose                                                |
+| ---------------------------------------------- | ------------------------------------------------------ |
+| `GET /api/sync-status`                         | Whether a D1 binding exists                            |
+| `POST /api/sync`                               | Send changed objects, take back what changed elsewhere |
+| `GET /api/teams`                               | The seasons the signed-in person may switch between    |
+| `POST /api/auth/start`                         | Send a login code to an email or mobile                |
+| `POST /api/auth/verify`                        | Trade the code for a session                           |
+| `GET`/`PATCH`/`DELETE /api/auth/session`       | Who's signed in; record where they are; sign out       |
+| `GET`/`POST`/`PATCH`/`DELETE /api/memberships` | Who's on a team, and who wants to be                   |
+| `GET`/`POST /api/invites`                      | Inspect or mint a one-time invitation link             |
 
 ## Accounts
 
@@ -277,7 +281,7 @@ lives in the swim bag. Tokens and codes are both stored hashed.
 
 **Local data wins over the session.** A device that already holds the season
 keeps working with no network and no session, which is the state a phone is in
-when pool wifi drops mid-meet. Signing in is how a season gets *onto* a device
+when pool wifi drops mid-meet. Signing in is how a season gets _onto_ a device
 and how the server knows whose it is — not a gate in front of a stopwatch.
 
 Roles are `head_coach`, `coach`, `athlete`, `parent`, `viewer`; only coaches can
@@ -289,30 +293,6 @@ grant instead, so they can work without giving a name.
 to ask becomes its head coach; after that everyone else waits for approval.
 That's the one-time bootstrap for seasons that predate accounts, so claim yours
 promptly after deploying.
-
-### Who can touch what
-
-One question, asked once, in `canUseTeam`: **are you an active member of this
-team, or is the team unclaimed?** Members get the season; everyone else gets a
-403. There is no permission matrix.
-
-That's on purpose. The risk worth spending code on here is *disclosure* — this
-endpoint hands back an entire roster of minors, with birth dates, to anyone who
-can name a team id, and no amount of hiding buttons in the UI would fix that.
-Tampering by a signed-in member of your own team is a social problem, not a
-technical one.
-
-**What a member may do once they have the season is the app's business.** The
-session payload carries each membership's role, and the UI reads it: an
-athlete or a parent simply isn't shown the buttons. Only the two endpoints that
-change *other people's* access — inviting, and admitting a join request —
-enforce coach-ness on the server, because those are the ones that would
-otherwise let someone let themselves in.
-
-This will need revisiting exactly once: when athletes and parents start
-editing their own meet entries, which is a per-object question ("is this your
-entry?") rather than a per-team one, and wants a different mechanism than a
-role check.
 
 ## Running it
 
