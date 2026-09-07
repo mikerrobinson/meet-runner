@@ -2,13 +2,12 @@
  * Object storage and the sync endpoint's engine.
  *
  * One table holds every kind of object. That's deliberate: the sync query is
- * "everything for this team since T", and answering it from one indexed table
- * beats a union across ten. The columns we actually filter on — team and meet
- * — are real columns rather than buried in the JSON, so those queries use an
- * index instead of scanning.
+ * "everything in these scopes since T", and answering it from one indexed
+ * table beats a union across ten. The scope is a real column rather than
+ * buried in the JSON, so that query uses an index instead of scanning.
  */
 
-import type { SyncObject } from "./objects";
+import { scopeKey, type ObjectScope, type SyncObject } from "./objects";
 
 /**
  * `updated_at` is the editing device's clock and decides who wins a contest
@@ -18,21 +17,23 @@ import type { SyncObject } from "./objects";
  *
  * The primary key is (type, id) because ids are only unique within a type: a
  * meet and its lineup share the meet's id on purpose.
+ *
+ * `scope` is the flattened form of an `ObjectScope` — "team:abc", "meet:def",
+ * or "global". One column and one index, because every question the sync
+ * engine asks is an exact match on it.
  */
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS objects (
      id TEXT NOT NULL,
      type TEXT NOT NULL,
-     team_id TEXT NOT NULL,
-     meet_id TEXT,
+     scope TEXT NOT NULL,
      updated_at INTEGER NOT NULL,
      server_at INTEGER NOT NULL,
      deleted_at INTEGER,
      data TEXT NOT NULL,
      PRIMARY KEY (type, id)
    )`,
-  `CREATE INDEX IF NOT EXISTS objects_cursor ON objects (team_id, server_at)`,
-  `CREATE INDEX IF NOT EXISTS objects_by_meet ON objects (meet_id, server_at)`,
+  `CREATE INDEX IF NOT EXISTS objects_cursor ON objects (scope, server_at)`,
 ];
 
 let ready = false;
@@ -41,13 +42,6 @@ export async function ensureObjectStore(db: D1Database): Promise<void> {
   if (ready) return;
   for (const statement of SCHEMA) await db.prepare(statement).run();
   ready = true;
-}
-
-/** Which meet an object belongs to, where that means anything. */
-function meetIdOf(object: SyncObject): string | null {
-  const data = object.data as { meetId?: string } | null;
-  if (object.type === "meet" || object.type === "lineup") return object.id;
-  return data?.meetId ?? null;
 }
 
 export interface PushResult {
@@ -82,11 +76,10 @@ export async function pushObjects(
       slice.map((object) =>
         db
           .prepare(
-            `INSERT INTO objects (id, type, team_id, meet_id, updated_at, server_at, deleted_at, data)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO objects (id, type, scope, updated_at, server_at, deleted_at, data)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(type, id) DO UPDATE SET
-               team_id = excluded.team_id,
-               meet_id = excluded.meet_id,
+               scope = excluded.scope,
                updated_at = excluded.updated_at,
                server_at = excluded.server_at,
                deleted_at = excluded.deleted_at,
@@ -97,8 +90,7 @@ export async function pushObjects(
           .bind(
             object.id,
             object.type,
-            object.teamId,
-            meetIdOf(object),
+            scopeKey(object.scope),
             object.updatedAt,
             serverAt,
             object.deletedAt ?? null,
@@ -124,7 +116,7 @@ export async function pushObjects(
 }
 
 /**
- * Objects per round trip. Each carries eight bound values, and D1 allows a
+ * Objects per round trip. Each carries seven bound values, and D1 allows a
  * hundred per query — so this is about batch size rather than binding.
  */
 const CHUNK = 50;
@@ -142,7 +134,7 @@ async function fetchObjects(
     const slice = wanted.slice(start, start + 40);
     const { results } = await db
       .prepare(
-        `SELECT id, type, team_id, updated_at, server_at, deleted_at, data
+        `SELECT id, type, scope, updated_at, server_at, deleted_at, data
          FROM objects WHERE (type, id) IN (VALUES ${slice.map(() => "(?, ?)").join(", ")})`,
       )
       .bind(...slice.flatMap((o) => [o.type, o.id]))
@@ -155,18 +147,25 @@ async function fetchObjects(
 interface StoredRow {
   id: string;
   type: string;
-  team_id: string;
+  scope: string;
   updated_at: number;
   server_at: number;
   deleted_at: number | null;
   data: string;
 }
 
+function parseScope(raw: string): ObjectScope {
+  if (raw === "global") return { kind: "global" };
+  const [kind, ...rest] = raw.split(":");
+  const id = rest.join(":");
+  return kind === "meet" ? { kind: "meet", id } : { kind: "team", id };
+}
+
 function rowToObject(row: StoredRow): SyncObject {
   return {
     id: row.id,
     type: row.type as SyncObject["type"],
-    teamId: row.team_id,
+    scope: parseScope(row.scope),
     updatedAt: row.updated_at,
     deletedAt: row.deleted_at ?? undefined,
     data: JSON.parse(row.data),
@@ -209,26 +208,37 @@ function formatCursor(row: StoredRow): string {
   return `${row.server_at}|${row.type}|${row.id}`;
 }
 
-/** Everything for a team that changed after a cursor. */
+/**
+ * Everything in a set of scopes that changed after a cursor.
+ *
+ * A device asks for what it's actually working on: its team, the meets it
+ * holds, and `global` for the people those reference. One cursor covers the
+ * lot, because the ordering is over the whole result rather than per scope.
+ */
 export async function pullObjects(
   db: D1Database,
-  teamId: string,
+  scopes: ObjectScope[],
   rawCursor: string | number | null | undefined,
 ): Promise<PullResult> {
   await ensureObjectStore(db);
   const from = parseCursor(rawCursor);
 
+  const keys = [...new Set(scopes.map(scopeKey))];
+  if (keys.length === 0) {
+    return { changes: [], cursor: `${from.at}|${from.type}|${from.id}`, more: false };
+  }
+
   const { results } = await db
     .prepare(
-      `SELECT id, type, team_id, updated_at, server_at, deleted_at, data
+      `SELECT id, type, scope, updated_at, server_at, deleted_at, data
        FROM objects
-       WHERE team_id = ?
+       WHERE scope IN (${keys.map(() => "?").join(", ")})
          AND (server_at > ?
               OR (server_at = ? AND (type > ? OR (type = ? AND id > ?))))
        ORDER BY server_at, type, id
        LIMIT ?`,
     )
-    .bind(teamId, from.at, from.at, from.type, from.type, from.id, PAGE + 1)
+    .bind(...keys, from.at, from.at, from.type, from.type, from.id, PAGE + 1)
     .all<StoredRow>();
 
   const more = results.length > PAGE;
@@ -245,6 +255,29 @@ export async function pullObjects(
   };
 }
 
+/**
+ * Every meet a team is racing in.
+ *
+ * Read from the meets themselves rather than from a column, because a meet
+ * names its teams and belongs to none of them — there is nothing to group by.
+ */
+export async function meetIdsFor(
+  db: D1Database,
+  teamId: string,
+): Promise<string[]> {
+  await ensureObjectStore(db);
+  const { results } = await db
+    .prepare("SELECT id, data FROM objects WHERE type = 'meet'")
+    .all<{ id: string; data: string }>();
+
+  return results
+    .filter((row) => {
+      const meet = JSON.parse(row.data) as { teamIds?: string[] };
+      return meet.teamIds?.includes(teamId) ?? false;
+    })
+    .map((row) => row.id);
+}
+
 export interface TeamChoice {
   id: string;
   name: string;
@@ -259,49 +292,70 @@ export interface TeamChoice {
  * The teams the object store knows about, with enough detail to tell them
  * apart.
  *
- * Read from the objects rather than the old documents table, which stopped
- * being the truth the moment syncing moved to objects — a device adopting
- * from it would take on a season frozen at conversion time.
+ * Counted through enrollments and meet references rather than by grouping on a
+ * team column, which no longer exists — an athlete belongs to no team, and a
+ * meet belongs to all of the ones racing it.
  */
 export async function listTeamChoices(db: D1Database): Promise<TeamChoice[]> {
   await ensureObjectStore(db);
 
-  const { results } = await db
+  const { results: rows } = await db
     .prepare(
-      `SELECT team_id,
-              SUM(CASE WHEN type = 'athlete' AND deleted_at IS NULL THEN 1 ELSE 0 END) AS athletes,
-              SUM(CASE WHEN type = 'meet'    AND deleted_at IS NULL THEN 1 ELSE 0 END) AS meets,
-              SUM(CASE WHEN type = 'watch'   AND deleted_at IS NULL THEN 1 ELSE 0 END) AS times,
-              MAX(updated_at) AS updated_at
-       FROM objects GROUP BY team_id`,
+      `SELECT id, type, scope, updated_at, data FROM objects
+       WHERE deleted_at IS NULL AND type IN ('team', 'enrollment', 'meet', 'watch')`,
     )
     .all<{
-      team_id: string;
-      athletes: number;
-      meets: number;
-      times: number;
+      id: string;
+      type: string;
+      scope: string;
       updated_at: number;
+      data: string;
     }>();
 
-  const { results: names } = await db
-    .prepare(
-      "SELECT id, data FROM objects WHERE type = 'team' AND deleted_at IS NULL",
-    )
-    .all<{ id: string; data: string }>();
-  const byId = new Map(
-    names.map((r) => [r.id, JSON.parse(r.data) as { name: string; code: string }]),
-  );
+  const teams = new Map<string, { name: string; code: string; updatedAt: number }>();
+  const enrolled = new Map<string, Set<string>>();
+  const meetTeams = new Map<string, string[]>();
+  const watchesPerMeet = new Map<string, number>();
 
-  return results
-    .filter((row) => byId.has(row.team_id))
-    .map((row) => ({
-      id: row.team_id,
-      name: byId.get(row.team_id)!.name,
-      code: byId.get(row.team_id)!.code ?? "",
-      athletes: row.athletes,
-      meets: row.meets,
-      times: row.times,
-      updatedAt: row.updated_at,
-    }))
+  for (const row of rows) {
+    const scope = parseScope(row.scope);
+    if (row.type === "team") {
+      const data = JSON.parse(row.data) as { name?: string; code?: string };
+      teams.set(row.id, {
+        name: data.name ?? "Team",
+        code: data.code ?? "",
+        updatedAt: row.updated_at,
+      });
+    } else if (row.type === "enrollment" && scope.kind === "team") {
+      const data = JSON.parse(row.data) as { athleteId?: string };
+      if (data.athleteId) {
+        (enrolled.get(scope.id) ?? enrolled.set(scope.id, new Set()).get(scope.id)!).add(
+          data.athleteId,
+        );
+      }
+    } else if (row.type === "meet") {
+      const data = JSON.parse(row.data) as { teamIds?: string[] };
+      meetTeams.set(row.id, data.teamIds ?? []);
+    } else if (row.type === "watch" && scope.kind === "meet") {
+      watchesPerMeet.set(scope.id, (watchesPerMeet.get(scope.id) ?? 0) + 1);
+    }
+  }
+
+  return [...teams.entries()]
+    .map(([id, team]) => {
+      const meets = [...meetTeams.entries()].filter(([, ids]) => ids.includes(id));
+      return {
+        id,
+        name: team.name,
+        code: team.code,
+        athletes: enrolled.get(id)?.size ?? 0,
+        meets: meets.length,
+        times: meets.reduce(
+          (total, [meetId]) => total + (watchesPerMeet.get(meetId) ?? 0),
+          0,
+        ),
+        updatedAt: team.updatedAt,
+      };
+    })
     .sort((a, b) => b.times - a.times || b.meets - a.meets);
 }

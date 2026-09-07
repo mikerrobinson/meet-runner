@@ -135,9 +135,21 @@ export function earliestAllowed(position: Position): number {
 
 /* ------------------------------------------------------------------ queue */
 
+/**
+ * A person a timer typed in, and the team they said it was.
+ *
+ * The team travels as an id rather than a name because the server turns it
+ * into a roster entry, and it will only do that for a team actually racing
+ * this meet — a name would have to be matched back to one, which is exactly
+ * the guessing the old string label forced.
+ */
+export interface QueuedAthlete extends Athlete {
+  teamId?: string;
+}
+
 export interface QueuedWrite {
   watches: WatchTime[];
-  athletes: Athlete[];
+  athletes: QueuedAthlete[];
 }
 
 function readQueue(): QueuedWrite {
@@ -245,13 +257,25 @@ export interface TimerAthlete {
   id: string;
   firstName: string;
   lastName: string;
+  /** Display label for whichever team enrolled them. */
   team?: string;
+}
+
+export interface TimerTeam {
+  id: string;
+  name: string;
 }
 
 export interface Snapshot {
   serverTime: number;
   expiresAt: number;
-  meet: { id: string; name: string; date: string; laneCount: number; teams: string[] };
+  meet: {
+    id: string;
+    name: string;
+    date: string;
+    laneCount: number;
+    teams: TimerTeam[];
+  };
   /** What to call athletes with no team label of their own. */
   ownTeam: string;
   events: MeetEvent[];
@@ -276,9 +300,9 @@ export function fetchSnapshot(timerId: string): Promise<Snapshot> {
  */
 export function newVisitingAthlete(
   name: string,
-  team: string,
+  teamId: string,
   gender: Athlete["gender"],
-): Athlete {
+): QueuedAthlete {
   const trimmed = name.trim().replace(/\s+/g, " ");
   const cut = trimmed.lastIndexOf(" ");
   return {
@@ -286,6 +310,6 @@ export function newVisitingAthlete(
     firstName: cut > 0 ? trimmed.slice(0, cut) : trimmed,
     lastName: cut > 0 ? trimmed.slice(cut + 1) : "",
     gender,
-    team: team.trim() || undefined,
+    teamId: teamId || undefined,
   };
 }

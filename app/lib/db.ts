@@ -7,7 +7,7 @@
  * here, at the cost of an async API.
  */
 
-import { parseMeetDoc, parseTeamDoc } from "./documents";
+import { normalizeAthlete, parseMeetDoc, parseTeamDoc } from "./documents";
 import type { SyncObject } from "./objects";
 import type { MeetDoc, Athlete, TeamDoc } from "~/types/meet";
 
@@ -28,6 +28,12 @@ const BASELINE_KEY = "sync:baseline";
 const CURSOR_KEY = "sync:cursor";
 /** There's one team per install; this is its fixed key in the team store. */
 const TEAM_KEY = "team";
+/**
+ * People, who belong to no team and so can't live inside the team document.
+ * Kept in the same store under their own key for the reason above: a new store
+ * would need a version bump, and a version bump can hang on a deck.
+ */
+const ATHLETES_KEY = "athletes";
 
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -91,6 +97,13 @@ export async function readTeam(): Promise<TeamDoc | null> {
   return parseTeamDoc(raw);
 }
 
+export async function readAthletes(): Promise<Athlete[]> {
+  const raw = await run<unknown>(TEAM_STORE, "readonly", (store) =>
+    store.get(ATHLETES_KEY),
+  );
+  return Array.isArray(raw) ? raw.map(normalizeAthlete) : [];
+}
+
 export async function readMeets(): Promise<MeetDoc[]> {
   const raw = await run<unknown[]>(MEET_STORE, "readonly", (store) =>
     store.getAll(),
@@ -105,6 +118,10 @@ export async function readMeets(): Promise<MeetDoc[]> {
 
 export async function writeTeam(team: TeamDoc): Promise<void> {
   await run(TEAM_STORE, "readwrite", (store) => store.put(team, TEAM_KEY));
+}
+
+export async function writeAthletes(athletes: Athlete[]): Promise<void> {
+  await run(TEAM_STORE, "readwrite", (store) => store.put(athletes, ATHLETES_KEY));
 }
 
 export async function writeMeet(meet: MeetDoc): Promise<void> {

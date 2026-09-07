@@ -43,7 +43,7 @@ export default function RunMeet() {
   const store = useAppStore();
   const { meetId } = useParams();
   const meet = store.meets.find((m) => m.id === meetId);
-  const roster = store.team.athletes;
+  const roster = store.athletes;
 
   const [editingLane, setEditingLane] = useState<number | null>(null);
   const [assigningLane, setAssigningLane] = useState<number | null>(null);
@@ -321,7 +321,7 @@ export default function RunMeet() {
       {heat && assigningLane !== null && (
         <LaneAssignSheet
           meet={meet}
-          roster={rosterForMeet(store.team, meet)}
+          roster={rosterForMeet(store.athletes, store.team, meet)}
           enrollments={enrollmentIndex(
             store.team,
             seasonForMeet(store.team, meet)?.id,

@@ -1,20 +1,29 @@
 /**
- * The season as a set of small objects, rather than two big documents.
+ * The season as a set of small objects, rather than a few big documents.
  *
- * Documents are what the app thinks in — a `TeamDoc` with a roster, a
+ * Documents are what the app thinks in — a `TeamDoc` with its seasons, a
  * `MeetDoc` with heats and times — and that doesn't change. What changes is
- * what goes over the wire: a athlete added on the laptop and a time recorded
+ * what goes over the wire: an athlete added on the laptop and a time recorded
  * on the iPad are separate objects, so they merge instead of one clobbering
  * the other.
  *
- * Everything here is pure. Decomposing and recomposing a season must give the
- * same season back, which is the property the tests pin down.
+ * Every object carries a **scope**, which is the one thing the server needs in
+ * order to answer "what changed?" without being handed the whole model:
+ *
+ *   team    — seasons and enrollments, the things a team owns
+ *   meet    — the lineup, entries, heats, watches and rulings of one day
+ *   global  — athletes, who belong to no team and outlive every meet
+ *
+ * Scoping meets by their own id rather than by an owning team is what lets two
+ * schools work the same dual meet. Both pull `meet:{id}`; neither owns it.
+ *
+ * Everything here is pure. Decomposing and recomposing must give the same
+ * model back, which is the property the tests pin down.
  */
 
 import { MEET_DOC_VERSION, TEAM_DOC_VERSION } from "~/types/meet";
 import type {
   Enrollment,
-  Entries,
   Heat,
   MeetDoc,
   MeetEvent,
@@ -38,23 +47,58 @@ export type SyncObjectType =
   | "ruling";
 
 /**
- * One syncable thing.
+ * What an object belongs to.
  *
- * `teamId` is on every object so the server can answer "everything for this
- * team since T" with one query, and so nothing can drift into another team's
- * season by accident.
+ * Three kinds rather than one team id, because the three have genuinely
+ * different lifetimes: a team outlives its meets, a meet outlives nobody, and
+ * a person outlives both.
  */
+export type ObjectScope =
+  | { kind: "team"; id: string }
+  | { kind: "meet"; id: string }
+  | { kind: "global" };
+
+export const TEAM_SCOPED: SyncObjectType[] = ["team", "season", "enrollment"];
+export const MEET_SCOPED: SyncObjectType[] = [
+  "meet",
+  "lineup",
+  "entry",
+  "heat",
+  "watch",
+  "ruling",
+];
+
+export function teamScope(id: string): ObjectScope {
+  return { kind: "team", id };
+}
+
+export function meetScope(id: string): ObjectScope {
+  return { kind: "meet", id };
+}
+
+export const GLOBAL: ObjectScope = { kind: "global" };
+
+/** A scope as one string, for indexes, comparisons and map keys. */
+export function scopeKey(scope: ObjectScope): string {
+  return scope.kind === "global" ? "global" : `${scope.kind}:${scope.id}`;
+}
+
+export function sameScope(a: ObjectScope, b: ObjectScope): boolean {
+  return scopeKey(a) === scopeKey(b);
+}
+
+/** One syncable thing. */
 export interface SyncObject {
   id: string;
   type: SyncObjectType;
-  teamId: string;
+  scope: ObjectScope;
   updatedAt: number;
   /** Set when the object was deleted; its `data` is then meaningless. */
   deletedAt?: number;
   data: unknown;
 }
 
-/** The bits of a team that aren't its people or its seasons. */
+/** The bits of a team that aren't its seasons or its roster. */
 interface TeamCore {
   name: string;
   code: string;
@@ -65,12 +109,14 @@ interface TeamCore {
 
 /** The bits of a meet that aren't its lineup, entries, heats or times. */
 interface MeetCore {
+  teamIds: string[];
+  hostTeamId?: string;
+  createdBy?: string;
   name: string;
   date: string;
   type: MeetDoc["type"];
   course: MeetDoc["course"];
   location?: string;
-  teams?: string[];
   options: MeetDoc["options"];
   timer: MeetDoc["timer"];
 }
@@ -86,56 +132,62 @@ export function entryId(
 /* ------------------------------------------------------------- decomposing */
 
 /**
- * Break a season into objects.
+ * Break the model into objects.
  *
  * `progress` is deliberately left behind: where a device has scrolled to in
  * the running order is nobody else's business, and syncing it would put a
  * write on the wire every time someone taps an arrow.
  */
-export function toObjects(team: TeamDoc, meets: MeetDoc[]): SyncObject[] {
-  const at = team.updatedAt;
+export function toObjects(
+  teams: TeamDoc[],
+  athletes: Athlete[],
+  meets: MeetDoc[],
+): SyncObject[] {
   const objects: SyncObject[] = [];
 
-  const core: TeamCore = {
-    name: team.name,
-    code: team.code,
-    headCoach: team.headCoach,
-    nameOrder: team.nameOrder,
-    currentSeasonId: team.currentSeasonId,
-  };
-  objects.push({
-    id: team.id,
-    type: "team",
-    teamId: team.id,
-    updatedAt: at,
-    data: core,
-  });
+  for (const team of teams) {
+    const at = team.updatedAt;
+    const scope = teamScope(team.id);
 
-  for (const season of team.seasons) {
-    objects.push({
-      id: season.id,
-      type: "season",
-      teamId: team.id,
-      updatedAt: at,
-      data: season,
-    });
+    const core: TeamCore = {
+      name: team.name,
+      code: team.code,
+      headCoach: team.headCoach,
+      nameOrder: team.nameOrder,
+      currentSeasonId: team.currentSeasonId,
+    };
+    objects.push({ id: team.id, type: "team", scope, updatedAt: at, data: core });
+
+    for (const season of team.seasons) {
+      objects.push({
+        id: season.id,
+        type: "season",
+        scope,
+        updatedAt: at,
+        data: season,
+      });
+    }
+    for (const enrollment of team.enrollments) {
+      objects.push({
+        id: enrollment.id,
+        type: "enrollment",
+        scope,
+        updatedAt: at,
+        data: enrollment,
+      });
+    }
   }
-  for (const athlete of team.athletes) {
+
+  // People belong to no team, so they're stamped with the moment they were
+  // last touched by whatever document happened to be holding them.
+  const athleteAt = teams[0]?.updatedAt ?? Date.now();
+  for (const athlete of athletes) {
     objects.push({
       id: athlete.id,
       type: "athlete",
-      teamId: team.id,
-      updatedAt: at,
+      scope: GLOBAL,
+      updatedAt: athleteAt,
       data: athlete,
-    });
-  }
-  for (const enrollment of team.enrollments) {
-    objects.push({
-      id: enrollment.id,
-      type: "enrollment",
-      teamId: team.id,
-      updatedAt: at,
-      data: enrollment,
     });
   }
 
@@ -148,53 +200,35 @@ export function toObjects(team: TeamDoc, meets: MeetDoc[]): SyncObject[] {
 
 function meetObjects(meet: MeetDoc): SyncObject[] {
   const at = meet.updatedAt;
-  const scope = { teamId: meet.teamId, updatedAt: at };
-
-  // A deleted meet is one tombstone and nothing else — its parts went with it.
-  if (meet.deletedAt) {
-    const core: MeetCore = {
-      name: meet.name,
-      date: meet.date,
-      type: meet.type,
-      course: meet.course,
-      location: meet.location,
-      teams: meet.teams,
-      options: meet.options,
-      timer: null,
-    };
-    return [
-      {
-        id: meet.id,
-        type: "meet",
-        ...scope,
-        deletedAt: meet.deletedAt,
-        data: core,
-      },
-    ];
-  }
+  const scope = meetScope(meet.id);
+  const stamp = { scope, updatedAt: at };
 
   const core: MeetCore = {
+    teamIds: meet.teamIds,
+    hostTeamId: meet.hostTeamId,
+    createdBy: meet.createdBy,
     name: meet.name,
     date: meet.date,
     type: meet.type,
     course: meet.course,
     location: meet.location,
-    teams: meet.teams,
     options: meet.options,
-    timer: meet.timer,
+    timer: meet.deletedAt ? null : meet.timer,
   };
 
+  // A deleted meet is one tombstone and nothing else — its parts went with it.
+  if (meet.deletedAt) {
+    return [
+      { id: meet.id, type: "meet", ...stamp, deletedAt: meet.deletedAt, data: core },
+    ];
+  }
+
   const objects: SyncObject[] = [
-    { id: meet.id, type: "meet", ...scope, data: core },
+    { id: meet.id, type: "meet", ...stamp, data: core },
     // The running order is one object: reordering is a statement about the
     // whole list, and merging two reorderings per-event would produce a
     // programme neither coach wrote.
-    {
-      id: meet.id,
-      type: "lineup",
-      ...scope,
-      data: { meetId: meet.id, events: meet.events },
-    },
+    { id: meet.id, type: "lineup", ...stamp, data: { events: meet.events } },
   ];
 
   for (const [eventId, athleteIds] of Object.entries(meet.entries)) {
@@ -202,34 +236,19 @@ function meetObjects(meet: MeetDoc): SyncObject[] {
       objects.push({
         id: entryId(meet.id, eventId, athleteId),
         type: "entry",
-        ...scope,
-        data: { meetId: meet.id, eventId, athleteId },
+        ...stamp,
+        data: { eventId, athleteId },
       });
     }
   }
   for (const heat of meet.heats) {
-    objects.push({
-      id: heat.id,
-      type: "heat",
-      ...scope,
-      data: { meetId: meet.id, ...heat },
-    });
+    objects.push({ id: heat.id, type: "heat", ...stamp, data: heat });
   }
   for (const watch of meet.watches) {
-    objects.push({
-      id: watch.id,
-      type: "watch",
-      ...scope,
-      data: { meetId: meet.id, ...watch },
-    });
+    objects.push({ id: watch.id, type: "watch", ...stamp, data: watch });
   }
   for (const ruling of meet.rulings) {
-    objects.push({
-      id: ruling.id,
-      type: "ruling",
-      ...scope,
-      data: { meetId: meet.id, ...ruling },
-    });
+    objects.push({ id: ruling.id, type: "ruling", ...stamp, data: ruling });
   }
 
   return objects;
@@ -238,38 +257,48 @@ function meetObjects(meet: MeetDoc): SyncObject[] {
 /* -------------------------------------------------------------- recomposing */
 
 /**
- * Put a season back together from its objects.
+ * Put the model back together from its objects.
  *
  * Anything whose parent is missing is dropped rather than guessed at: an
  * entry for a meet this device doesn't have is not information, it's noise.
  */
 export function fromObjects(objects: SyncObject[]): {
-  team: TeamDoc | null;
+  teams: TeamDoc[];
+  athletes: Athlete[];
   meets: MeetDoc[];
 } {
   const live = objects.filter((o) => !o.deletedAt);
   const of = <T,>(type: SyncObjectType): Array<SyncObject & { data: T }> =>
     live.filter((o) => o.type === type) as Array<SyncObject & { data: T }>;
 
-  const teamObject = of<TeamCore>("team")[0];
-  if (!teamObject) return { team: null, meets: [] };
+  const scopedTo = (object: SyncObject): string =>
+    object.scope.kind === "global" ? "" : object.scope.id;
 
-  const team: TeamDoc = {
-    version: TEAM_VERSION,
-    id: teamObject.id,
-    ...teamObject.data,
-    seasons: of<Season>("season").map((o) => o.data),
-    athletes: of<Athlete>("athlete").map((o) => o.data),
-    enrollments: of<Enrollment>("enrollment").map((o) => o.data),
-    updatedAt: teamObject.updatedAt,
-  };
+  const byTeam = new Map<string, TeamDoc>();
+  for (const object of of<TeamCore>("team")) {
+    byTeam.set(object.id, {
+      version: TEAM_DOC_VERSION,
+      id: object.id,
+      ...object.data,
+      seasons: [],
+      enrollments: [],
+      updatedAt: object.updatedAt,
+    });
+  }
+  for (const o of of<Season>("season")) {
+    byTeam.get(scopedTo(o))?.seasons.push(o.data);
+  }
+  for (const o of of<Enrollment>("enrollment")) {
+    byTeam.get(scopedTo(o))?.enrollments.push(o.data);
+  }
+
+  const athletes = of<Athlete>("athlete").map((o) => o.data);
 
   const byMeet = new Map<string, MeetDoc>();
   for (const object of of<MeetCore>("meet")) {
     byMeet.set(object.id, {
-      version: MEET_VERSION,
+      version: MEET_DOC_VERSION,
       id: object.id,
-      teamId: object.teamId,
       ...object.data,
       events: [],
       entries: {},
@@ -281,40 +310,32 @@ export function fromObjects(objects: SyncObject[]): {
     });
   }
 
-  for (const o of of<{ meetId: string; events: MeetEvent[] }>("lineup")) {
-    const meet = byMeet.get(o.data.meetId);
+  for (const o of of<{ events: MeetEvent[] }>("lineup")) {
+    const meet = byMeet.get(scopedTo(o));
     if (meet) meet.events = o.data.events;
   }
-  for (const o of of<{ meetId: string; eventId: string; athleteId: string }>(
-    "entry",
-  )) {
-    const meet = byMeet.get(o.data.meetId);
+  for (const o of of<{ eventId: string; athleteId: string }>("entry")) {
+    const meet = byMeet.get(scopedTo(o));
     if (!meet) continue;
-    const list = meet.entries[o.data.eventId] ?? [];
-    list.push(o.data.athleteId);
-    meet.entries[o.data.eventId] = list;
+    (meet.entries[o.data.eventId] ??= []).push(o.data.athleteId);
   }
-  for (const o of of<Heat & { meetId: string }>("heat")) {
-    const meet = byMeet.get(o.data.meetId);
-    if (!meet) continue;
-    const { meetId, ...heat } = o.data;
-    meet.heats.push(heat);
+  for (const o of of<Heat>("heat")) {
+    byMeet.get(scopedTo(o))?.heats.push(o.data);
   }
-  for (const o of of<WatchTime & { meetId: string }>("watch")) {
-    const meet = byMeet.get(o.data.meetId);
-    if (!meet) continue;
-    const { meetId, ...watch } = o.data;
-    meet.watches.push(watch);
+  for (const o of of<WatchTime>("watch")) {
+    byMeet.get(scopedTo(o))?.watches.push(o.data);
   }
-  for (const o of of<Ruling & { meetId: string }>("ruling")) {
-    const meet = byMeet.get(o.data.meetId);
-    if (!meet) continue;
-    const { meetId, ...ruling } = o.data;
-    meet.rulings.push(ruling);
+  for (const o of of<Ruling>("ruling")) {
+    byMeet.get(scopedTo(o))?.rulings.push(o.data);
   }
 
   // Heats are read by index everywhere; entries and times are sets, but a
   // stable order keeps documents comparable.
+  //
+  // Seasons and enrollments are deliberately left in arrival order. Their ids
+  // are random, so sorting on one would order them meaninglessly *and*
+  // non-reproducibly — a round trip would hand back the same roster in a
+  // different order every run.
   for (const meet of byMeet.values()) {
     meet.heats.sort((a, b) => a.eventId.localeCompare(b.eventId) || a.index - b.index);
     meet.watches.sort((a, b) => a.id.localeCompare(b.id));
@@ -322,12 +343,12 @@ export function fromObjects(objects: SyncObject[]): {
     for (const list of Object.values(meet.entries)) list.sort();
   }
 
-  return { team, meets: [...byMeet.values()] };
+  return {
+    teams: [...byTeam.values()],
+    athletes,
+    meets: [...byMeet.values()],
+  };
 }
-
-/** Document versions the recomposed documents claim. Kept in step with the model. */
-const TEAM_VERSION = TEAM_DOC_VERSION;
-const MEET_VERSION = MEET_DOC_VERSION;
 
 /* ------------------------------------------------------------------ diffing */
 
@@ -365,6 +386,13 @@ export function changedObjects(
   return changes;
 }
 
+/**
+ * An object's identity.
+ *
+ * Type and id, not scope: a meet moving between scopes would be a different
+ * meet, and including the scope would make that look like a delete plus an
+ * add rather than the bug it is.
+ */
 function key(object: SyncObject): string {
   return `${object.type}:${object.id}`;
 }
@@ -372,6 +400,7 @@ function key(object: SyncObject): string {
 function sameContent(a: SyncObject, b: SyncObject): boolean {
   return (
     (a.deletedAt ?? null) === (b.deletedAt ?? null) &&
+    sameScope(a.scope, b.scope) &&
     JSON.stringify(a.data) === JSON.stringify(b.data)
   );
 }
@@ -394,4 +423,36 @@ export function mergeObjects(
     }
   }
   return [...merged.values()];
+}
+
+/* ---------------------------------------------------------------- selecting */
+
+/**
+ * The athletes a set of objects actually refers to.
+ *
+ * The participant projection: a device working one meet needs the people in
+ * that meet's entries, heats and watches, and has no business holding anyone
+ * else. `timerSnapshot` did this by hand for timers; it's the general rule.
+ */
+export function referencedAthletes(objects: SyncObject[]): Set<string> {
+  const ids = new Set<string>();
+  for (const object of objects) {
+    if (object.deletedAt) continue;
+    const data = object.data as Record<string, unknown>;
+    switch (object.type) {
+      case "entry":
+      case "enrollment":
+        if (typeof data.athleteId === "string") ids.add(data.athleteId);
+        break;
+      case "heat":
+        for (const lane of (data.lanes as (string | null)[]) ?? []) {
+          if (lane) ids.add(lane);
+        }
+        break;
+      case "watch":
+        if (typeof data.athleteId === "string") ids.add(data.athleteId);
+        break;
+    }
+  }
+  return ids;
 }

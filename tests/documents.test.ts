@@ -1,5 +1,5 @@
 import { done, eq } from "./harness.ts";
-import { createMeetDoc, createTeam, parseMeetDoc, parseTeamDoc, tombstone } from "../app/lib/documents.ts";
+import { createMeetDoc, createTeam, normalizeAthlete, parseMeetDoc, parseTeamDoc, tombstone } from "../app/lib/documents.ts";
 import { defaultEvents } from "../app/lib/events.ts";
 import { isDeleted } from "../app/types/meet.ts";
 import { buildHeats } from "../app/lib/heats.ts";
@@ -10,7 +10,18 @@ import { buildHeats } from "../app/lib/heats.ts";
   eq(fresh.course, "SCY", "new meets default to SCY");
   eq(fresh.options.laneCount, 6, "new meets default to 6 lanes");
   eq("opponent" in fresh, false, "opponent is gone");
-  eq(fresh.version, 6, "doc version bumped");
+  eq(fresh.version, 7, "doc version bumped");
+  eq(fresh.teamIds, ["team1"], "one team is still a list of teams");
+
+  // Two schools, one meet — the shape the old model couldn't hold.
+  const dual = createMeetDoc(["team1", "team2"], { hostTeamId: "team2" });
+  eq(dual.teamIds, ["team1", "team2"], "a dual meet names both");
+  eq(dual.hostTeamId, "team2", "and whose pool it is");
+  eq("teamId" in dual, false, "no team owns it");
+
+  // A host that isn't racing is a mistake, not a fact.
+  const strayHost = parseMeetDoc({ id: "mh", teamIds: ["team1"], hostTeamId: "team9", events: [] })!;
+  eq(strayHost.hostTeamId, undefined, "a host that isn't in the meet is dropped");
 
   // A partial options patch keeps the other defaults.
   const wide = createMeetDoc("team1", { options: { laneCount: 10 } });
@@ -57,7 +68,7 @@ import { buildHeats } from "../app/lib/heats.ts";
 
   const dead = tombstone(meet);
   eq(dead.id, meet.id, "the tombstone keeps the id — that's the whole point");
-  eq(dead.teamId, meet.teamId, "and the team");
+  eq(dead.teamIds, meet.teamIds, "and the teams");
   eq(dead.name, meet.name, "and the name, so it can be reported");
   eq(dead.date, meet.date, "and the date");
   eq(isDeleted(dead), true, "and it reads as deleted");
@@ -89,15 +100,15 @@ import { buildHeats } from "../app/lib/heats.ts";
   // A season with every field populated, shaped exactly as the app stores it.
   const base = createTeam("Cactus Shadows");
   const seasonId = base.currentSeasonId;
+  const athletes = [
+    { id: "s1", firstName: "Avery", lastName: "Nguyen", gender: "F" as const, birthDate: "2009-03-14" },
+    { id: "s2", firstName: "Marcus", lastName: "Hill", gender: "M" as const },
+  ];
   const team = {
     ...base,
     code: "CHAP",
     headCoach: "M. Robinson",
     nameOrder: "first" as const,
-    athletes: [
-      { id: "s1", firstName: "Avery", lastName: "Nguyen", gender: "F" as const, birthDate: "2009-03-14" },
-      { id: "s2", firstName: "Marcus", lastName: "Hill", gender: "M" as const },
-    ],
     enrollments: [
       { id: "e1", teamId: base.id, seasonId, athleteId: "s1", year: "10", squad: "Blue", status: "active" as const },
       { id: "e2", teamId: base.id, seasonId, athleteId: "s2", year: "12", status: "inactive" as const },
@@ -127,9 +138,11 @@ import { buildHeats } from "../app/lib/heats.ts";
     timer: null,
   });
 
-  // What Settings > Export season writes, and what Import reads back.
-  const exported = JSON.parse(JSON.stringify({ kind: "meet-runner-backup", exportedAt: new Date().toISOString(), team, meets: [meet] }));
-  const reimportedTeam = parseTeamDoc(exported.team)!;
+  // What Settings > Export season writes, and what Import reads back. Athletes
+  // travel alongside the teams now rather than inside one of them.
+  const exported = JSON.parse(JSON.stringify({ kind: "meet-runner-backup", exportedAt: new Date().toISOString(), teams: [team], athletes, meets: [meet] }));
+  const reimportedTeam = parseTeamDoc(exported.teams[0])!;
+  const reimportedAthletes = exported.athletes.map(normalizeAthlete);
   const reimportedMeet = parseMeetDoc(exported.meets[0], reimportedTeam.id)!;
 
   eq(reimportedTeam, JSON.parse(JSON.stringify(team)), "team survives a round trip unchanged");
@@ -149,7 +162,9 @@ import { buildHeats } from "../app/lib/heats.ts";
   eq(reimportedMeet.watches.length, 2, "both timers' watches survive, not just one");
   eq(reimportedMeet.heats, meet.heats, "heats carry through verbatim");
   eq(reimportedMeet.entries, meet.entries, "entries carry through verbatim");
-  eq(reimportedTeam.athletes[0].birthDate, "2009-03-14", "birth dates carry through");
+  eq(reimportedAthletes, JSON.parse(JSON.stringify(athletes)), "people carry through verbatim");
+  eq(reimportedAthletes[0].birthDate, "2009-03-14", "birth dates carry through");
+  eq("athletes" in reimportedTeam, false, "and are not smuggled back into the team");
   eq(reimportedTeam.enrollments, JSON.parse(JSON.stringify(team.enrollments)), "enrollments carry through verbatim");
   eq(reimportedTeam.seasons, JSON.parse(JSON.stringify(team.seasons)), "seasons carry through verbatim");
   eq(reimportedTeam.code, "CHAP", "team code carries through");

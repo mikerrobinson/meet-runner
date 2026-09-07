@@ -9,9 +9,11 @@ import {
   type ReactNode,
 } from "react";
 import {
+  readAthletes,
   readMeets,
   readTeam,
   removeMeet,
+  writeAthletes,
   writeMeet,
   writeTeam,
 } from "~/lib/db";
@@ -90,6 +92,14 @@ interface AppStore {
    *  belongs to this coach. */
   startFreshTeam: (name: string, id: string) => void;
   team: TeamDoc;
+  /**
+   * Everyone this device knows about, from any team.
+   *
+   * Not the roster — that's this set filtered by the team's enrollments, which
+   * is what `rosterFor` does. Holding people separately is what lets a visiting
+   * swimmer be a real person rather than a copy on our roster.
+   */
+  athletes: Athlete[];
   /** Live meets, for everything on screen. */
   meets: MeetDoc[];
   /** Deleted meets still waiting to tell the server so. Sync only. */
@@ -126,14 +136,17 @@ interface AppStore {
   deleteMeet: (id: string) => void;
   getMeet: (id: string) => MeetDoc | undefined;
   replaceTeam: (team: TeamDoc) => void;
+  replaceAthletes: (athletes: Athlete[]) => void;
   replaceMeet: (meet: MeetDoc) => void;
   /** Take on what a sync brought back, keeping this device's own view of things. */
-  applyFromSync: (team: TeamDoc, meets: MeetDoc[]) => void;
+  applyFromSync: (team: TeamDoc, athletes: Athlete[], meets: MeetDoc[]) => void;
 
   /* Meet detail — all scoped to an explicit meet id */
   setMeetInfo: (
     id: string,
-    patch: Partial<Pick<MeetDoc, "name" | "date" | "type" | "location" | "teams">>,
+    patch: Partial<
+      Pick<MeetDoc, "name" | "date" | "type" | "location" | "teamIds" | "hostTeamId">
+    >,
   ) => void;
   setCourse: (id: string, course: MeetCourse) => void;
   setLaneCount: (id: string, laneCount: LaneCount) => void;
@@ -206,6 +219,7 @@ const AppStoreContext = createContext<AppStore | null>(null);
  */
 export async function adoptTeam(teamId: string): Promise<{
   team: TeamDoc;
+  athletes: Athlete[];
   meets: MeetDoc[];
 } | null> {
   const objects: SyncObject[] = [];
@@ -220,7 +234,8 @@ export async function adoptTeam(teamId: string): Promise<{
     if (!result.more) break;
   }
 
-  const { team, meets } = fromObjects(objects);
+  const { teams, athletes, meets } = fromObjects(objects);
+  const team = teams.find((t) => t.id === teamId);
   if (!team) return null;
 
   // Seed the baseline, or this device's first sync would push the season
@@ -228,7 +243,7 @@ export async function adoptTeam(teamId: string): Promise<{
   await writeBaseline(objects);
   await writeCursor(cursor);
 
-  return { team, meets };
+  return { team, athletes, meets };
 }
 
 export function AppStoreProvider({ children }: { children: ReactNode }) {
@@ -236,11 +251,13 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [storageError, setStorageError] = useState<string | null>(null);
   const [hasLocalData, setHasLocalData] = useState(false);
   const [team, setTeam] = useState<TeamDoc>(() => createTeam());
+  const [athletes, setAthletes] = useState<Athlete[]>([]);
   const [meets, setMeets] = useState<MeetDoc[]>([]);
 
   // Identity of what's already on disk, so a change writes only the documents
   // that actually changed rather than the whole season.
   const persistedTeam = useRef<TeamDoc | null>(null);
+  const persistedAthletes = useRef<Athlete[] | null>(null);
   const persistedMeets = useRef(new Map<string, MeetDoc>());
 
   useEffect(() => {
@@ -249,6 +266,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         const loadedTeam = await readTeam();
+        const loadedAthletes = await readAthletes();
         const loadedMeets = await readMeets();
         if (cancelled) return;
 
@@ -260,11 +278,13 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         // and whoever you turn out to be decides which season to fetch.
         const nextTeam = loadedTeam ?? createTeam();
         setTeam(nextTeam);
+        setAthletes(loadedAthletes);
         setMeets(loadedMeets);
         setHasLocalData(loadedTeam !== null);
         // A team read back is already on disk; the placeholder isn't, and
         // must not be written just because it exists.
         persistedTeam.current = nextTeam;
+        persistedAthletes.current = loadedAthletes;
         persistedMeets.current = new Map(loadedMeets.map((m) => [m.id, m]));
       } catch (error) {
         console.error("Could not open local storage:", error);
@@ -292,6 +312,16 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       writeTeam(team).catch((e) => console.error("Could not save the team:", e));
     }
   }, [ready, team]);
+
+  useEffect(() => {
+    if (!ready) return;
+    if (persistedAthletes.current !== athletes) {
+      persistedAthletes.current = athletes;
+      writeAthletes(athletes).catch((e) =>
+        console.error("Could not save the roster:", e),
+      );
+    }
+  }, [ready, athletes]);
 
   useEffect(() => {
     if (!ready) return;
@@ -340,7 +370,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     /** Registered swimmers for an event, in roster order. */
     const entrantsFor = (meet: MeetDoc, eventId: string): string[] => {
       const registered = new Set(meet.entries[eventId] ?? []);
-      return rosterForMeet(team, meet)
+      return rosterForMeet(athletes, team, meet)
         .filter((s) => registered.has(s.id))
         .map((s) => s.id);
     };
@@ -407,6 +437,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       },
 
       team,
+      athletes,
       meets: liveMeets,
       deletedMeets,
 
@@ -420,19 +451,26 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       // "replace" swaps out this season's roster, not the team's history: the
       // athletes stay, so past results still resolve, and only the enrollments
       // for this season are rebuilt.
-      enrol: (entries, mode, seasonId) =>
+      enrol: (entries, mode, seasonId) => {
+        // Two collections now, and the people are the durable half: a
+        // "replace" rebuilds this season's enrollments and touches nobody's
+        // record, so past results still resolve to a name.
+        setAthletes((current) => {
+          const known = new Set(current.map((a) => a.id));
+          const added = entries
+            .map((entry) => entry.athlete)
+            .filter((athlete) => !known.has(athlete.id));
+          return added.length > 0 ? [...current, ...added] : current;
+        });
+
         editTeam((t) => {
           const season = seasonId ?? t.currentSeasonId;
-          const athletes = [...t.athletes];
           const enrollments =
             mode === "replace"
               ? t.enrollments.filter((e) => e.seasonId !== season)
               : [...t.enrollments];
 
           for (const entry of entries) {
-            if (!athletes.some((a) => a.id === entry.athlete.id)) {
-              athletes.push(entry.athlete);
-            }
             const existing = enrollments.find(
               (e) => e.seasonId === season && e.athleteId === entry.athlete.id,
             );
@@ -445,17 +483,19 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
             );
           }
 
-          return { ...t, athletes: athletes, enrollments };
-        }),
+          return { ...t, enrollments };
+        });
+      },
 
-      saveAthlete: (athlete, facts, seasonId) =>
+      saveAthlete: (athlete, facts, seasonId) => {
+        setAthletes((current) =>
+          current.some((a) => a.id === athlete.id)
+            ? current.map((a) => (a.id === athlete.id ? athlete : a))
+            : [...current, athlete],
+        );
+
         editTeam((t) => {
           const season = seasonId ?? t.currentSeasonId;
-          const known = t.athletes.some((a) => a.id === athlete.id);
-          const athletes = known
-            ? t.athletes.map((a) => (a.id === athlete.id ? athlete : a))
-            : [...t.athletes, athlete];
-
           const existing = t.enrollments.find(
             (e) => e.seasonId === season && e.athleteId === athlete.id,
           );
@@ -470,8 +510,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
                 makeEnrollment(t.id, season, athlete.id, facts),
               ];
 
-          return { ...t, athletes, enrollments };
-        }),
+          return { ...t, enrollments };
+        });
+      },
 
       // Never a hard delete: live results reference athletes by id, so
       // removing the person would leave past meets pointing at nothing. Taking
@@ -562,11 +603,17 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         setTeam(next);
       },
 
+      replaceAthletes: (next) => {
+        persistedAthletes.current = null;
+        setAthletes(next);
+      },
+
       // The merged season, recomposed from objects. Where the device has a
       // view of its own — which event it's sitting on — that's kept: it was
       // never the server's to have an opinion about.
-      applyFromSync: (nextTeam, nextMeets) => {
+      applyFromSync: (nextTeam, nextAthletes, nextMeets) => {
         setTeam(nextTeam);
+        setAthletes(nextAthletes);
         setMeets((current) => {
           const localById = new Map(current.map((m) => [m.id, m] as const));
           return nextMeets.map((meet) => {
@@ -867,7 +914,16 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           watches: m.watches.filter((w) => w.id !== watchId),
         })),
     };
-  }, [ready, storageError, hasLocalData, team, meets, editTeam, editMeet]);
+  }, [
+    ready,
+    storageError,
+    hasLocalData,
+    team,
+    athletes,
+    meets,
+    editTeam,
+    editMeet,
+  ]);
 
   return (
     <AppStoreContext.Provider value={store}>{children}</AppStoreContext.Provider>

@@ -4,16 +4,18 @@ import { currentSeason, dayBefore, enrollmentFor, isGraduating, makeSeason, next
 
 /* ------------------------------------------------ season */
 
+/* ---- people, who belong to no team ---- */
+const athletes = [
+  { id: "a1", firstName: "Avery", lastName: "Nguyen", gender: "F" as const, birthDate: "2009-03-14" },
+  { id: "a2", firstName: "Marcus", lastName: "Hill", gender: "M" as const },
+  { id: "a3", firstName: "Jo", lastName: "Park", gender: "F" as const },
+];
+
 /* ---- a team as the app writes it today ---- */
 const legacy = parseTeamDoc({
   id: "t1", name: "Cactus Shadows", code: "CHAP", nameOrder: "first",
   currentSeasonId: "s1",
   seasons: [{ id: "s1", teamId: "t1", name: "2026-27" }],
-  athletes: [
-    { id: "a1", firstName: "Avery", lastName: "Nguyen", gender: "F", birthDate: "2009-03-14" },
-    { id: "a2", firstName: "Marcus", lastName: "Hill", gender: "M" },
-    { id: "a3", firstName: "Jo", lastName: "Park", gender: "F" },
-  ],
   enrollments: [
     { id: "e1", teamId: "t1", seasonId: "s1", athleteId: "a1", year: "10", squad: "Blue", status: "active" },
     { id: "e2", teamId: "t1", seasonId: "s1", athleteId: "a2", year: "12", status: "active" },
@@ -25,22 +27,26 @@ const legacy = parseTeamDoc({
 eq(legacy.seasons.length, 1, "the season survives");
 eq(legacy.currentSeasonId, "s1", "and is the current one");
 eq(legacy.enrollments.length, 3, "enrollments survive");
-const strayKeys = legacy.athletes.flatMap((s) =>
-  ["year", "squad", "archived"].filter((k) => k in s),
+const strayKeys = athletes.flatMap((s) =>
+  ["year", "squad", "archived", "team"].filter((k) => k in s),
 );
-eq(strayKeys, [], "athletes carry nothing seasonal");
+eq(strayKeys, [], "athletes carry nothing seasonal, and no team");
 eq(enrollmentFor(legacy, "a1", "s1")?.year, "10", "grade lives on the enrollment");
 eq(enrollmentFor(legacy, "a1", "s1")?.squad, "Blue", "so does squad");
 eq(enrollmentFor(legacy, "a3", "s1")?.status, "inactive", "and whether they're still on it");
-eq(legacy.athletes.find((s) => s.id === "a1")?.birthDate, "2009-03-14", "birth dates survive");
 eq(legacy.updatedAt, 1756000000000, "updatedAt untouched");
-eq(rosterFor(legacy, "s1").map((s) => s.id), ["a1", "a2"], "the roster excludes the inactive swimmer");
+eq(rosterFor(athletes, legacy, "s1").map((s) => s.id), ["a1", "a2"], "the roster excludes the inactive swimmer");
 eq(parseTeamDoc(JSON.parse(JSON.stringify(legacy))), legacy, "checking it twice changes nothing");
+
+// The roster is an intersection, so a person nobody enrolled is simply not on
+// it — which is what stops a visiting swimmer appearing in the home roster.
+const stranger = [...athletes, { id: "a8", firstName: "Dana", lastName: "Reyes", gender: "F" as const }];
+eq(rosterFor(stranger, legacy, "s1").map((s) => s.id), ["a1", "a2"], "an unenrolled person is on nobody's roster");
 
 /* ---- an unbounded legacy season answers for every date ---- */
 eq(seasonForDate(legacy, "2026-11-01")?.id, legacy.seasons[0].id, "a meet in season");
 eq(seasonForDate(legacy, "1999-01-01")?.id, legacy.seasons[0].id, "and one long before it");
-eq(rosterForMeet(legacy, { date: "2026-11-01" }).length, 2, "roster for a meet");
+eq(rosterForMeet(athletes, legacy, { date: "2026-11-01" }).length, 2, "roster for a meet");
 
 /* ---- two dated seasons ---- */
 const team = createTeam("Chaparral");
@@ -90,7 +96,7 @@ const rolled = {
 };
 eq(seasonForDate(rolled, "2026-11-14")?.name, "2026-27", "a meet from last season stays in last season");
 eq(seasonForDate(rolled, "2027-09-14")?.name, "2027-28", "and one from this season is in this one");
-eq(rosterForMeet(rolled, { date: "2026-11-14" }).map((s) => s.id), ["a1", "a2"], "last season's meet keeps last season's roster");
-eq(rosterForMeet(rolled, { date: "2027-09-14" }).map((s) => s.id), ["a1"], "this season's meet uses this season's");
+eq(rosterForMeet(athletes, rolled, { date: "2026-11-14" }).map((s) => s.id), ["a1", "a2"], "last season's meet keeps last season's roster");
+eq(rosterForMeet(athletes, rolled, { date: "2027-09-14" }).map((s) => s.id), ["a1"], "this season's meet uses this season's");
 
 done();

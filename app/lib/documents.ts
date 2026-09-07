@@ -37,7 +37,6 @@ export function createTeam(name = "My Team", id = generateId()): TeamDoc {
     nameOrder: "last",
     currentSeasonId: season.id,
     seasons: [season],
-    athletes: [],
     enrollments: [],
     updatedAt: Date.now(),
   };
@@ -59,11 +58,20 @@ export type MeetPatch = Partial<Omit<MeetDoc, "options">> & {
   options?: Partial<MeetOptions>;
 };
 
-export function createMeetDoc(teamId: string, patch: MeetPatch = {}): MeetDoc {
+/**
+ * A meet needs at least one team to be a meet at all — an inter-squad meet has
+ * exactly one, a dual two. Passing a bare id is allowed because that's what
+ * nearly every caller has.
+ */
+export function createMeetDoc(
+  teams: string | string[],
+  patch: MeetPatch = {},
+): MeetDoc {
+  const teamIds = (typeof teams === "string" ? [teams] : teams).filter(Boolean);
   const defaults: MeetDoc = {
     version: MEET_DOC_VERSION,
     id: generateId(),
-    teamId,
+    teamIds,
     name: "New Meet",
     date: new Date().toISOString().slice(0, 10),
     type: "dual",
@@ -105,7 +113,7 @@ export function normalizeAthlete(raw: Partial<Athlete>): Athlete {
     lastName: raw.lastName ?? "",
     gender: raw.gender === "M" ? "M" : "F",
     birthDate: raw.birthDate || undefined,
-    team: raw.team || undefined,
+    userId: raw.userId || undefined,
   };
 }
 
@@ -119,7 +127,7 @@ export function normalizeAthlete(raw: Partial<Athlete>): Athlete {
 export function parseTeamDoc(input: unknown): TeamDoc | null {
   if (!input || typeof input !== "object") return null;
   const doc = input as Partial<TeamDoc>;
-  if (!doc.id || !Array.isArray(doc.athletes)) return null;
+  if (!doc.id) return null;
 
   const seasons = doc.seasons ?? [];
   const currentSeasonId =
@@ -136,7 +144,6 @@ export function parseTeamDoc(input: unknown): TeamDoc | null {
     nameOrder: doc.nameOrder === "first" ? "first" : "last",
     currentSeasonId,
     seasons,
-    athletes: doc.athletes.map(normalizeAthlete),
     enrollments: doc.enrollments ?? [],
     updatedAt: doc.updatedAt ?? Date.now(),
   };
@@ -151,23 +158,33 @@ const MEET_TYPES = new Set<MeetType>([
 ]);
 
 /** Check and fill in a meet document. See `parseTeamDoc`. */
-export function parseMeetDoc(input: unknown, teamId?: string): MeetDoc | null {
+export function parseMeetDoc(
+  input: unknown,
+  fallbackTeamIds?: string | string[],
+): MeetDoc | null {
   if (!input || typeof input !== "object") return null;
   const doc = input as Partial<MeetDoc>;
   if (!doc.id || !Array.isArray(doc.events)) return null;
 
   const laneCount = doc.options?.laneCount;
+  const fallback =
+    typeof fallbackTeamIds === "string" ? [fallbackTeamIds] : fallbackTeamIds;
+  const teamIds = doc.teamIds?.length ? doc.teamIds : (fallback ?? []);
 
   return {
     version: MEET_DOC_VERSION,
     id: doc.id,
-    teamId: doc.teamId ?? teamId ?? "",
+    teamIds,
+    // A host that isn't racing is a typo, not a fact worth keeping.
+    hostTeamId: teamIds.includes(doc.hostTeamId ?? "")
+      ? doc.hostTeamId
+      : undefined,
+    createdBy: doc.createdBy || undefined,
     name: doc.name ?? "Untitled Meet",
     date: doc.date ?? new Date().toISOString().slice(0, 10),
     type: doc.type && MEET_TYPES.has(doc.type) ? doc.type : "dual",
     course: isMeetCourse(doc.course) ? doc.course : "SCY",
     location: doc.location || undefined,
-    teams: doc.teams?.length ? doc.teams : undefined,
     options: {
       laneCount: isLaneCount(laneCount) ? laneCount : 6,
       leadGender: doc.options?.leadGender === "M" ? "M" : "F",
@@ -195,7 +212,7 @@ export function parseMeetDoc(input: unknown, teamId?: string): MeetDoc | null {
  */
 export function tombstone(meet: MeetDoc): MeetDoc {
   return {
-    ...createMeetDoc(meet.teamId, {
+    ...createMeetDoc(meet.teamIds, {
       id: meet.id,
       name: meet.name,
       date: meet.date,

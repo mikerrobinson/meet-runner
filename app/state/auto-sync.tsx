@@ -19,7 +19,7 @@ import {
 } from "~/lib/objects";
 import { SyncRequestError, exchange, syncStatus } from "~/lib/sync";
 import { useAppStore } from "~/state/app-store";
-import type { MeetDoc, TeamDoc } from "~/types/meet";
+import type { Athlete, MeetDoc, TeamDoc } from "~/types/meet";
 
 /**
  * Pushes the meet to the server on its own, shortly after things go quiet.
@@ -70,8 +70,12 @@ export interface SyncStatus {
  * came to shadow a real season — so it stays put until it has something in
  * it, and adopting the real team quietly replaces it.
  */
-function hasSomethingToSay(team: TeamDoc, meets: MeetDoc[]): boolean {
-  return team.athletes.length > 0 || meets.length > 0;
+function hasSomethingToSay(
+  team: TeamDoc,
+  athletes: Athlete[],
+  meets: MeetDoc[],
+): boolean {
+  return team.enrollments.length > 0 || athletes.length > 0 || meets.length > 0;
 }
 
 /** Quiet period before a push. Long enough to swallow a burst of lane taps. */
@@ -95,6 +99,7 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   const {
     ready,
     team,
+    athletes,
     meets,
     deletedMeets,
     applyFromSync,
@@ -116,8 +121,8 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   // `ready` matters as much as the documents: before the store has read
   // storage, `team` is a throwaway placeholder, and pushing that would put an
   // empty roster on the server ahead of the real one.
-  const docsRef = useRef({ ready, team, meets: syncable });
-  docsRef.current = { ready, team, meets: syncable };
+  const docsRef = useRef({ ready, team, athletes, meets: syncable });
+  docsRef.current = { ready, team, athletes, meets: syncable };
   const applyRef = useRef(applyFromSync);
   applyRef.current = applyFromSync;
 
@@ -161,11 +166,15 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
    * otherwise look like every time in the meet had changed.
    */
   const outgoing = useMemo(() => {
-    if (!ready || !baselineLoaded || !hasSomethingToSay(team, syncable)) {
+    if (
+      !ready ||
+      !baselineLoaded ||
+      !hasSomethingToSay(team, athletes, syncable)
+    ) {
       return [];
     }
-    return changedObjects(baseline, toObjects(team, syncable));
-  }, [ready, baselineLoaded, team, syncable, baseline]);
+    return changedObjects(baseline, toObjects([team], athletes, syncable));
+  }, [ready, baselineLoaded, team, athletes, syncable, baseline]);
 
   const pendingCount = outgoing.length;
   const pending = pendingCount > 0;
@@ -194,13 +203,17 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
     const {
       ready: isReady,
       team: currentTeam,
+      athletes: currentAthletes,
       meets: currentMeets,
     } = docsRef.current;
     if (!isReady || !baselineLoadedRef.current) return;
 
     const base = baselineRef.current;
-    const changes = hasSomethingToSay(currentTeam, currentMeets)
-      ? changedObjects(base, toObjects(currentTeam, currentMeets))
+    const changes = hasSomethingToSay(currentTeam, currentAthletes, currentMeets)
+      ? changedObjects(
+          base,
+          toObjects([currentTeam], currentAthletes, currentMeets),
+        )
       : [];
 
     // Nothing to send and nothing asked for: don't wake the server up.
@@ -238,8 +251,15 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
       // Only rebuild the season when something actually arrived — recomposing
       // for nothing would churn every document on the screen.
       if (result.changes.length > 0 || result.refused.length > 0) {
-        const { team: nextTeam, meets: nextMeets } = fromObjects(settled);
-        if (nextTeam) applyRef.current(nextTeam, nextMeets);
+        const {
+          teams: nextTeams,
+          athletes: nextAthletes,
+          meets: nextMeets,
+        } = fromObjects(settled);
+        // Only this device's own team; the others arrive as references on a
+        // meet, and browsing them is the REST surface's job, not sync's.
+        const nextTeam = nextTeams.find((t) => t.id === currentTeam.id);
+        if (nextTeam) applyRef.current(nextTeam, nextAthletes, nextMeets);
       }
 
       failuresRef.current = 0;
@@ -286,9 +306,11 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
     const now = docsRef.current;
     if (stoppedRef.current || !now.ready) return;
     const stillPending =
-      hasSomethingToSay(now.team, now.meets) &&
-      changedObjects(baselineRef.current, toObjects(now.team, now.meets))
-        .length > 0;
+      hasSomethingToSay(now.team, now.athletes, now.meets) &&
+      changedObjects(
+        baselineRef.current,
+        toObjects([now.team], now.athletes, now.meets),
+      ).length > 0;
     if (stillPending) {
       const failures = failuresRef.current;
       schedule(

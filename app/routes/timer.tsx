@@ -18,10 +18,11 @@ import {
   saveLane,
   savePosition,
   type Position,
+  type QueuedAthlete,
   type Snapshot,
   type TimerAthlete,
 } from "~/lib/timer";
-import { eventName, watchId, type Athlete } from "~/types/meet";
+import { eventName, watchId } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Timing · Meet Runner" }];
@@ -53,7 +54,9 @@ export default function Timer() {
   // Who this timer says is in the lane, per heat, before it's been submitted.
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   // Swimmers typed in on this device; they may not have reached the server yet.
-  const [added, setAdded] = useState<Athlete[]>([]);
+  // `QueuedAthlete`, not `Athlete`: each carries the team the timer tapped, and
+  // that has to survive into the outbox for the server to enrol them.
+  const [added, setAdded] = useState<QueuedAthlete[]>([]);
 
   /* --------------------------------------------------------------- loading */
 

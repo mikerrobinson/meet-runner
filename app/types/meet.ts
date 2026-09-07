@@ -1,11 +1,16 @@
 /**
  * Core data model.
  *
- * Two kinds of document. The **team** is season-long and owns the roster; a
- * **meet** is one day's racing and refers to swimmers by id only. The roster is
- * the single source of truth for who someone is, so fixing a spelling in March
- * fixes January's results too — and removing someone archives them rather than
- * deleting, since live results still point at their id.
+ * Three things, and only one of them owns anything. **Athletes** are people,
+ * global and durable — a swimmer is one record whether they swim for a school,
+ * a club, or both. A **team** owns its seasons and states, through enrollments,
+ * who swam for it and when. A **meet** is one day's racing between two or more
+ * teams, and belongs to none of them.
+ *
+ * That last point is the load-bearing one. A meet referencing teams rather than
+ * being owned by one is what lets a dual meet be a single shared thing instead
+ * of two half-copies, and what keeps a visiting swimmer from being retyped into
+ * the home team's roster.
  *
  * Everything here is plain JSON — no Map, Set, or Date — so the same value
  * round-trips through IndexedDB and the server unchanged.
@@ -106,9 +111,12 @@ export function orderedLanes(laneCount: number, layout: LaneLayout): number[] {
 /**
  * A person, and only the things that stay true about them wherever they swim.
  *
- * Durable across seasons and teams, and never deleted — results reference
- * athletes by id forever. What changes season to season (their grade, their
- * squad, whether they're still on the roster) belongs to an `Enrollment`.
+ * Global: an athlete belongs to no team. Who they swim for, and when, is said
+ * by an `Enrollment` — which is what lets one person swim for a school in
+ * winter and a club in summer without becoming two people, and what stops a
+ * visiting swimmer being copied into the roster of every team that races them.
+ *
+ * Durable and never deleted, since results reference athletes by id forever.
  */
 export interface Athlete {
   id: string;
@@ -119,17 +127,18 @@ export interface Athlete {
    * ISO date (yyyy-mm-dd). Optional: a high-school dual meet never asks, but
    * age-group entries do, and the SDIF (.sd3) files other systems exchange
    * carry it on every athlete record.
+   *
+   * Private. It never leaves the server except to this person or their coach.
    */
   birthDate?: string;
   /**
-   * Which team they swim for, when it isn't this one.
+   * The account this athlete is, when they have one.
    *
-   * Absent means ours. A visiting swimmer typed in by a timer gets a label
-   * here and no enrollment, which is what keeps them out of the roster screen
-   * while still making them selectable at every future meet — the second time
-   * you race Horizon, their swimmers are already in the list.
+   * How a swimmer signing in becomes a swimmer rather than a spectator: it's
+   * the link that lets them see their own entries and change them. Absent for
+   * everyone who has never signed in, which is most of a roster.
    */
-  team?: string;
+  userId?: string;
 }
 
 /**
@@ -186,13 +195,15 @@ export type EnrollmentStatus = "active" | "inactive";
 export type NameOrder = "first" | "last";
 
 /**
- * The team and everything that belongs to it: its people, its seasons, and who
- * was on the roster when.
+ * A team: its seasons, and who swam for it in each of them.
  *
- * The collections are held together in one document only because sync is still
- * whole-document. They're modelled as objects with their own ids so that
- * splitting them onto their own rows later is a storage change, not a
- * redesign — nothing here indexes into an array by position.
+ * Deliberately does *not* hold its athletes. The roster is the set of
+ * enrollments pointing at global athlete records, so two teams racing the same
+ * swimmer point at one person rather than keeping a copy each.
+ *
+ * A team can exist without anyone owning it. Setting up a meet against a school
+ * that has never used the app mints an unclaimed team; a coach from that school
+ * claims it later, and the meets it already appears in are unaffected.
  */
 export interface TeamDoc {
   version: number;
@@ -206,13 +217,11 @@ export interface TeamDoc {
   /** Which season the app is working in when nothing says otherwise. */
   currentSeasonId: string;
   seasons: Season[];
-  /** The people. Everyone who has ever been on the team, active or not. */
-  athletes: Athlete[];
   enrollments: Enrollment[];
   updatedAt: number;
 }
 
-export const TEAM_DOC_VERSION = 4;
+export const TEAM_DOC_VERSION = 5;
 
 /** Team codes are short and upper-case wherever they're exchanged. */
 export function normalizeTeamCode(value: string): string {
@@ -455,8 +464,19 @@ export interface Progress {
 export interface MeetDoc {
   version: number;
   id: string;
-  /** The team whose roster this meet's athlete ids belong to. */
-  teamId: string;
+  /**
+   * The teams racing, as references.
+   *
+   * A meet belongs to none of them. An inter-squad meet names one team, a dual
+   * two, an invitational as many as turn up — and every one of them sees the
+   * same meet rather than a copy, which is the whole reason this is a list of
+   * ids and not an owner plus some labels.
+   */
+  teamIds: string[];
+  /** Whose pool it is, when that matters. Always one of `teamIds`. */
+  hostTeamId?: string;
+  /** The account that set it up, for "my meets" and for who may edit it. */
+  createdBy?: string;
   name: string;
   /** ISO date (yyyy-mm-dd). */
   date: string;
@@ -465,15 +485,6 @@ export interface MeetDoc {
   course: MeetCourse;
   /** Where it's being swum, free text — e.g. "Cactus Aquatic Center". */
   location?: string;
-  /**
-   * The teams racing, as short labels — e.g. ["CHAP", "Horizon"].
-   *
-   * Only used to give a timer adding an unlisted swimmer two or three buttons
-   * to tap instead of a text field. That sounds slight, and isn't: a typed
-   * team name is how "Horizon", "horizon" and "Horzion" become three teams and
-   * the picker's grouping stops working.
-   */
-  teams?: string[];
   options: MeetOptions;
   /** Order of this array is the order events are swum. */
   events: MeetEvent[];
@@ -498,7 +509,7 @@ export interface MeetDoc {
   updatedAt: number;
 }
 
-export const MEET_DOC_VERSION = 6;
+export const MEET_DOC_VERSION = 7;
 
 export function isDeleted(meet: Pick<MeetDoc, "deletedAt">): boolean {
   return meet.deletedAt != null;

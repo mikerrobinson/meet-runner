@@ -13,7 +13,7 @@ import {
   TextInput,
 } from "~/components/ui";
 import { downloadFile } from "~/lib/csv";
-import { parseMeetDoc, parseTeamDoc } from "~/lib/documents";
+import { normalizeAthlete, parseMeetDoc, parseTeamDoc } from "~/lib/documents";
 import {
   currentSeason,
   enrollmentsIn,
@@ -22,7 +22,13 @@ import {
   rosterFor,
 } from "~/lib/roster";
 import { useAppStore } from "~/state/app-store";
-import { displayName, type MeetDoc, type NameOrder, type TeamDoc } from "~/types/meet";
+import {
+  displayName,
+  type Athlete,
+  type MeetDoc,
+  type NameOrder,
+  type TeamDoc,
+} from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Settings · Meet Runner" }];
@@ -33,27 +39,35 @@ interface Backup {
   kind: "meet-runner-backup";
   exportedAt: string;
   team: TeamDoc;
+  /**
+   * Everyone the backup refers to. Separate from the team because an athlete
+   * belongs to no team — a meet against another school puts their swimmers in
+   * here too, and restoring must not graft them onto our roster.
+   */
+  athletes: Athlete[];
   meets: MeetDoc[];
 }
 
 export default function Settings() {
   const {
     team,
+    athletes,
     meets,
     setTeamInfo,
     renameSeason,
     setCurrentSeason,
     startSeason,
     replaceTeam,
+    replaceAthletes,
     replaceMeet,
   } = useAppStore();
   const [error, setError] = useState<string | null>(null);
   const [newSeason, setNewSeason] = useState<string | null>(null);
 
   const season = currentSeason(team);
-  const roster = rosterFor(team, season?.id);
+  const roster = rosterFor(athletes, team, season?.id);
   // Show the setting against a real name where there is one.
-  const sample = roster[0] ?? team.athletes[0];
+  const sample = roster[0] ?? athletes[0];
   const example = sample
     ? displayName(sample, team.nameOrder)
     : displayName(
@@ -77,6 +91,10 @@ export default function Settings() {
       const nextTeam = parseTeamDoc(parsed.team);
       if (!nextTeam) throw new Error("That file has no team in it.");
 
+      const nextAthletes = (parsed.athletes ?? []).map((a) =>
+        normalizeAthlete(a as Partial<Athlete>),
+      );
+
       const nextMeets = (parsed.meets ?? [])
         .map((m) => parseMeetDoc(m, nextTeam.id))
         .filter((m): m is MeetDoc => m !== null);
@@ -84,9 +102,10 @@ export default function Settings() {
       // Nothing to mark: the next sync compares the season against what the
       // server last agreed to, and an imported document differs by content.
       replaceTeam(nextTeam);
+      replaceAthletes(nextAthletes);
       for (const meet of nextMeets) replaceMeet(meet);
       setMessage(
-        `Restored ${nextTeam.athletes.length} swimmers and ${nextMeets.length} meet${
+        `Restored ${nextAthletes.length} swimmers and ${nextMeets.length} meet${
           nextMeets.length === 1 ? "" : "s"
         }.`,
       );
@@ -100,6 +119,7 @@ export default function Settings() {
       kind: "meet-runner-backup",
       exportedAt: new Date().toISOString(),
       team,
+      athletes,
       meets,
     };
     downloadFile(

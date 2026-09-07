@@ -33,7 +33,7 @@ const TEMPLATE = toCsv([
 ]);
 
 export default function Team() {
-  const { team, meets, enrol } = useAppStore();
+  const { team, athletes, meets, enrol } = useAppStore();
   const [warnings, setWarnings] = useState<string[]>([]);
   const [incoming, setIncoming] = useState<RosterEntry[] | null>(null);
   const [search, setSearch] = useState("");
@@ -70,8 +70,8 @@ export default function Team() {
   };
 
   const byId = useMemo(
-    () => new Map(team.athletes.map((s) => [s.id, s] as const)),
-    [team.athletes],
+    () => new Map(athletes.map((s) => [s.id, s] as const)),
+    [athletes],
   );
   const active = enrolled.filter((e) => e.status === "active");
   const inactive = enrolled.filter((e) => e.status !== "active");

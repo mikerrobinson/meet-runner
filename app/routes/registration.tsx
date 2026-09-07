@@ -78,7 +78,7 @@ function eventFor(race: Race, athlete: Athlete): MeetEvent | undefined {
 }
 
 export default function Registration() {
-  const { team, meets, toggleEntry, enrol } = useAppStore();
+  const { team, athletes, meets, toggleEntry, enrol } = useAppStore();
   const { meetId } = useParams();
   const [params] = useSearchParams();
   const [search, setSearch] = useState("");
@@ -100,7 +100,7 @@ export default function Registration() {
   const swimmers = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!meet) return [];
-    return rosterForMeet(team, meet)
+    return rosterForMeet(athletes, team, meet)
       .filter((s) => genderFilter === "all" || s.gender === genderFilter)
       .filter(
         (s) =>
@@ -181,7 +181,7 @@ export default function Registration() {
   if (races.length === 0 || swimmers.length === 0) {
     return (
       <EmptyState title="Nothing to register yet">
-        {rosterForMeet(team, meet).length === 0 ? (
+        {rosterForMeet(athletes, team, meet).length === 0 ? (
           <>
             The team roster is empty.{" "}
             <Link to="/team" className="font-semibold text-blue-600 underline">

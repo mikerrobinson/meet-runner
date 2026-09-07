@@ -14,16 +14,16 @@ export function meta({}: Route.MetaArgs) {
 }
 
 export default function Results() {
-  const { team, meets } = useAppStore();
+  const { team, athletes, meets } = useAppStore();
   const { meetId } = useParams();
   const [openEvent, setOpenEvent] = useState<string | null>(null);
 
   const meet = meets.find((m) => m.id === meetId);
 
   // Names come from the roster, so a spelling fixed later shows up here too.
-  const athletes = useMemo(
-    () => new Map(team.athletes.map((s) => [s.id, s] as const)),
-    [team.athletes],
+  const byId = useMemo(
+    () => new Map(athletes.map((s) => [s.id, s] as const)),
+    [athletes],
   );
 
   // Squad as it was that season, not as it is now.
@@ -72,7 +72,7 @@ export default function Results() {
             onClick={() =>
               downloadFile(
                 `${slug}-results.csv`,
-                resultsToCsv(meet, team),
+                resultsToCsv(meet, team, athletes),
                 "text/csv",
               )
             }
@@ -127,7 +127,7 @@ export default function Results() {
             {open && (
               <ol className="mt-3 divide-y divide-slate-200 dark:divide-slate-800">
                 {results.map((result, place) => {
-                  const athlete = athletes.get(result.athleteId);
+                  const athlete = byId.get(result.athleteId);
                   return (
                     <li
                       key={`${result.heatId}:${result.lane}`}

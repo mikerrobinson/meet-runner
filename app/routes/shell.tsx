@@ -250,7 +250,7 @@ function useSeasonForSession(): string | null {
 }
 
 export default function Shell() {
-  const { ready, storageError, team, meets } = useAppStore();
+  const { ready, storageError, team, athletes, meets } = useAppStore();
   const settling = useSeasonForSession();
   const status = useSyncStatus();
   const { laneLayout, setLaneLayout } = useViewPrefs();
@@ -339,7 +339,7 @@ export default function Shell() {
       ? meetSubtitle(openMeet)
       : location.pathname.startsWith("/team") ||
           location.pathname.startsWith("/athletes")
-        ? `${rosterFor(team, team.currentSeasonId).length} swimmers · ${currentSeason(team)?.name ?? ""}`
+        ? `${rosterFor(athletes, team, team.currentSeasonId).length} swimmers · ${currentSeason(team)?.name ?? ""}`
         : undefined;
 
   return (

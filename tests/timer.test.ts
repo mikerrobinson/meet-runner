@@ -70,10 +70,11 @@ eq(
 /* -------------------------------------------------------- names typed in */
 
 {
-  const dana = newVisitingAthlete("Dana Reyes", "Horizon", "F");
+  const dana = newVisitingAthlete("Dana Reyes", "team-horizon", "F");
   eq(dana.firstName, "Dana", "given name");
   eq(dana.lastName, "Reyes", "family name");
-  eq(dana.team, "Horizon", "and the team they swim for");
+  eq(dana.teamId, "team-horizon", "and the team they swim for, as a reference");
+  eq("team" in dana, false, "never a typed-in team name");
   eq(dana.birthDate, undefined, "a timer is never asked for a birth date");
 }
 {
@@ -85,9 +86,9 @@ eq(
   eq(long.lastName, "Damme", "is the family name");
 }
 eq(
-  newVisitingAthlete("Dana Reyes", "  ", "M").team,
+  newVisitingAthlete("Dana Reyes", "", "M").teamId,
   undefined,
-  "no team given means ours, which is an absent label",
+  "no team named leaves them unaffiliated rather than guessing at one",
 );
 
 /* ---------------------------------------------------------- grant expiry */

@@ -38,12 +38,12 @@ interface Swim {
 }
 
 export default function AthleteDetail() {
-  const { team, meets, saveAthlete, setEnrollmentStatus } = useAppStore();
+  const { team, athletes, meets, saveAthlete, setEnrollmentStatus } = useAppStore();
   const { athleteId } = useParams();
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
 
-  const athlete = team.athletes.find((s) => s.id === athleteId);
+  const athlete = athletes.find((s) => s.id === athleteId);
 
   /**
    * Every swim this person has, newest meet first, grouped by event so the

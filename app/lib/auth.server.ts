@@ -454,29 +454,58 @@ async function teamFacts(
 ): Promise<Map<string, { name: string; code: string; athletes: number; meets: number }>> {
   // The teams are whatever the object store holds; auth doesn't keep its own
   // copy of a team, so there's nothing here that can disagree with the roster.
+  //
+  // Counted in code rather than by a GROUP BY, because there is nothing to
+  // group on any more: an athlete belongs to no team, and a meet belongs to
+  // every team racing it. The roster is enrollments, and the meets are the
+  // ones naming this team.
   await ensureObjectStore(db);
   const { results } = await db
     .prepare(
-      `SELECT team_id,
-              SUM(CASE WHEN type = 'athlete' AND deleted_at IS NULL THEN 1 ELSE 0 END) AS athletes,
-              SUM(CASE WHEN type = 'meet'    AND deleted_at IS NULL THEN 1 ELSE 0 END) AS meets,
-              MAX(CASE WHEN type = 'team' AND deleted_at IS NULL THEN data END) AS team_data
-       FROM objects GROUP BY team_id`,
+      `SELECT id, type, scope, data FROM objects
+       WHERE deleted_at IS NULL AND type IN ('team', 'enrollment', 'meet')`,
     )
-    .all<{ team_id: string; athletes: number; meets: number; team_data: string | null }>();
+    .all<{ id: string; type: string; scope: string; data: string }>();
 
-  const facts = new Map<string, { name: string; code: string; athletes: number; meets: number }>();
+  const facts = new Map<
+    string,
+    { name: string; code: string; athletes: number; meets: number }
+  >();
+  const enrolled = new Map<string, Set<string>>();
+
   for (const row of results) {
-    const parsed = row.team_data
-      ? (JSON.parse(row.team_data) as { name?: string; code?: string })
-      : null;
-    facts.set(row.team_id, {
-      name: parsed?.name ?? "Untitled team",
-      code: parsed?.code ?? "",
-      athletes: row.athletes,
-      meets: row.meets,
+    if (row.type !== "team") continue;
+    const parsed = JSON.parse(row.data) as { name?: string; code?: string };
+    facts.set(row.id, {
+      name: parsed.name ?? "Untitled team",
+      code: parsed.code ?? "",
+      athletes: 0,
+      meets: 0,
     });
   }
+
+  for (const row of results) {
+    if (row.type === "enrollment" && row.scope.startsWith("team:")) {
+      const teamId = row.scope.slice("team:".length);
+      const enrollment = JSON.parse(row.data) as { athleteId?: string };
+      if (!enrollment.athleteId) continue;
+      let people = enrolled.get(teamId);
+      if (!people) enrolled.set(teamId, (people = new Set()));
+      people.add(enrollment.athleteId);
+    } else if (row.type === "meet") {
+      const meet = JSON.parse(row.data) as { teamIds?: string[] };
+      for (const teamId of meet.teamIds ?? []) {
+        const fact = facts.get(teamId);
+        if (fact) fact.meets += 1;
+      }
+    }
+  }
+
+  for (const [teamId, people] of enrolled) {
+    const fact = facts.get(teamId);
+    if (fact) fact.athletes = people.size;
+  }
+
   return facts;
 }
 

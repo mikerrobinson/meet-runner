@@ -1,7 +1,12 @@
 import { useMemo, useState } from "react";
 import { Button, TextInput } from "./ui";
 import type { Athlete, Gender } from "~/types/meet";
-import { newVisitingAthlete, type TimerAthlete } from "~/lib/timer";
+import {
+  newVisitingAthlete,
+  type QueuedAthlete,
+  type TimerAthlete,
+  type TimerTeam,
+} from "~/lib/timer";
 
 /**
  * "Who's actually in this lane?", answered by someone who is cold, distracted,
@@ -54,17 +59,16 @@ export function SwimmerPicker({
   current?: TimerAthlete;
   /** Label used for athletes with no team of their own. */
   ownTeam: string;
-  meetTeams: string[];
+  meetTeams: TimerTeam[];
   eventGender: Gender;
   onPick: (athlete: TimerAthlete) => void;
-  onAdd: (athlete: Athlete) => void;
+  onAdd: (athlete: QueuedAthlete) => void;
   onClose: () => void;
 }) {
   const [filter, setFilter] = useState("");
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
-  const [newTeam, setNewTeam] = useState(meetTeams[0] ?? ownTeam);
-  const [otherTeam, setOtherTeam] = useState("");
+  const [newTeam, setNewTeam] = useState(meetTeams[0]?.id ?? "");
 
   const teamOf = (athlete: TimerAthlete) => athlete.team ?? ownTeam;
   const homeTeam = current ? teamOf(current) : ownTeam;
@@ -97,11 +101,10 @@ export function SwimmerPicker({
   }, [athletes, filter, homeTeam, inEvent]);
 
   const confirmAdd = () => {
-    const team = newTeam === OTHER ? otherTeam : newTeam;
     if (!newName.trim()) return;
     // Gender comes from the event, never from a question. A timer being asked
     // to classify a stranger mid-heat is a timer not watching the water.
-    onAdd(newVisitingAthlete(newName, team === ownTeam ? "" : team, eventGender));
+    onAdd(newVisitingAthlete(newName, newTeam, eventGender));
   };
 
   return (
@@ -131,37 +134,26 @@ export function SwimmerPicker({
             <span className="mb-1 block text-sm font-semibold text-slate-600 dark:text-slate-300">
               Team
             </span>
+            {/* Only the teams actually racing. A team that isn't in this
+                meet can't be given a roster entry by a timer's grant, so
+                offering one would quietly produce a swimmer on nobody's
+                roster — the exact outcome the free-text field used to have. */}
             <div className="grid grid-cols-2 gap-2">
-              {[...new Set([...meetTeams, ownTeam])].map((team) => (
+              {meetTeams.map((team) => (
                 <TeamButton
-                  key={team}
-                  label={team}
-                  active={newTeam === team}
-                  onClick={() => setNewTeam(team)}
+                  key={team.id}
+                  label={team.name}
+                  active={newTeam === team.id}
+                  onClick={() => setNewTeam(team.id)}
                 />
               ))}
-              <TeamButton
-                label="Other…"
-                active={newTeam === OTHER}
-                onClick={() => setNewTeam(OTHER)}
-              />
             </div>
-            {newTeam === OTHER && (
-              <div className="mt-2">
-                <TextInput
-                  value={otherTeam}
-                  onChange={(e) => setOtherTeam(e.target.value)}
-                  placeholder="Team name"
-                  autoCapitalize="words"
-                />
-              </div>
-            )}
           </div>
           <div className="grid grid-cols-2 gap-2">
             <Button
               variant="primary"
               size="lg"
-              disabled={!newName.trim() || (newTeam === OTHER && !otherTeam.trim())}
+              disabled={!newName.trim() || !newTeam}
               onClick={confirmAdd}
             >
               Add
@@ -224,8 +216,6 @@ export function SwimmerPicker({
     </div>
   );
 }
-
-const OTHER = " other";
 
 function TeamButton({
   label,

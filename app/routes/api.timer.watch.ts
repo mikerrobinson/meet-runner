@@ -9,6 +9,7 @@ import {
 } from "~/lib/api.server";
 import { bearerToken } from "~/lib/auth.server";
 import { grantFor, writeAsTimer } from "~/lib/grants.server";
+import { visitorEnrollment } from "~/lib/timer.server";
 import { watchId } from "~/types/meet";
 import type { Athlete, WatchTime } from "~/types/meet";
 import type { SyncObject } from "~/lib/objects";
@@ -44,11 +45,12 @@ export async function action({ request, context }: Route.ActionArgs) {
 
     const body = await readJson<{
       watches?: Partial<WatchTime>[];
-      athletes?: Partial<Athlete>[];
+      athletes?: Array<Partial<Athlete> & { teamId?: string }>;
     }>(request);
 
     const now = Date.now();
     const objects: SyncObject[] = [];
+    const enrollable = new Set<string>();
 
     for (const raw of body.athletes ?? []) {
       const first = String(raw.firstName ?? "").trim().slice(0, 40);
@@ -61,15 +63,30 @@ export async function action({ request, context }: Route.ActionArgs) {
         gender: raw.gender === "M" ? "M" : "F",
         // No birth date, ever, from this route. A timer is never asked for
         // one, and a blank field on a deck is a field somebody guesses at.
-        team: String(raw.team ?? "").trim().slice(0, 24) || undefined,
       };
       objects.push({
         id: athlete.id,
         type: "athlete",
-        teamId: grant.teamId,
+        scope: { kind: "global" },
         updatedAt: now,
         data: athlete,
       });
+
+      // Which team the timer tapped becomes a roster entry, built from the
+      // meet's own facts rather than taken on the phone's word.
+      if (raw.teamId) {
+        const enrollment = await visitorEnrollment(
+          db,
+          grant.meetId,
+          raw.teamId,
+          athlete.id,
+          now,
+        );
+        if (enrollment) {
+          objects.push(enrollment);
+          enrollable.add(raw.teamId);
+        }
+      }
     }
 
     for (const raw of body.watches ?? []) {
@@ -98,14 +115,14 @@ export async function action({ request, context }: Route.ActionArgs) {
       objects.push({
         id: watch.id,
         type: "watch",
-        teamId: grant.teamId,
+        scope: { kind: "meet", id: grant.meetId },
         updatedAt: now,
-        data: { meetId: grant.meetId, ...watch },
+        data: watch,
       });
     }
 
     if (objects.length === 0) return json({ applied: 0 });
-    return json(await writeAsTimer(db, grant, objects));
+    return json(await writeAsTimer(db, grant, objects, [...enrollable]));
   } catch (error) {
     return errorResponse(error);
   }

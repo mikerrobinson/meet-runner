@@ -267,8 +267,12 @@ export function toCsv(rows: Array<Array<string | number>>): string {
  * Results export: one row per recorded swim, ordered by event, then heat, then
  * finish place.
  */
-export function resultsToCsv(meet: MeetDoc, team: TeamDoc): string {
-  const byId = new Map(team.athletes.map((a) => [a.id, a] as const));
+export function resultsToCsv(
+  meet: MeetDoc,
+  team: TeamDoc,
+  athletes: Athlete[],
+): string {
+  const byId = new Map(athletes.map((a) => [a.id, a] as const));
   // Their year and squad as of this meet, not as of today.
   const seasonId = seasonForMeet(team, meet)?.id;
   const heats = new Map(meet.heats.map((h) => [h.id, h] as const));

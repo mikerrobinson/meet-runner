@@ -89,11 +89,14 @@ export function enrollmentFor(
 }
 
 /**
- * Everyone who can be entered in a race this season, in document order.
+ * Everyone who can be entered in a race this season, in the order given.
  *
- * Callers sort — display order is a naming preference, not a roster fact.
+ * Athletes are global, so the roster is an intersection rather than a field:
+ * these people, filtered to the ones this team enrolled this season. Callers
+ * sort — display order is a naming preference, not a roster fact.
  */
 export function rosterFor(
+  athletes: Athlete[],
   team: TeamDoc,
   seasonId: string | undefined,
 ): Athlete[] {
@@ -103,15 +106,60 @@ export function rosterFor(
       .filter((e) => e.seasonId === seasonId && e.status === "active")
       .map((e) => e.athleteId),
   );
-  return team.athletes.filter((s) => active.has(s.id));
+  return athletes.filter((s) => active.has(s.id));
 }
 
 /** Who's enterable in this meet: the roster of the season it falls in. */
 export function rosterForMeet(
+  athletes: Athlete[],
   team: TeamDoc,
   meet: Pick<MeetDoc, "date">,
 ): Athlete[] {
-  return rosterFor(team, seasonForMeet(team, meet)?.id);
+  return rosterFor(athletes, team, seasonForMeet(team, meet)?.id);
+}
+
+/**
+ * Everyone racing a meet, across all of its teams.
+ *
+ * What a heat sheet is drawn from, and what a timer's picker offers. A swimmer
+ * enrolled by two of the teams present appears once.
+ */
+export function rosterForMeetTeams(
+  athletes: Athlete[],
+  teams: TeamDoc[],
+  meet: Pick<MeetDoc, "date" | "teamIds">,
+): Athlete[] {
+  const racing = teams.filter((t) => meet.teamIds.includes(t.id));
+  const ids = new Set(
+    racing.flatMap((team) => rosterForMeet(athletes, team, meet).map((a) => a.id)),
+  );
+  return athletes.filter((a) => ids.has(a.id));
+}
+
+/**
+ * Which of a meet's teams an athlete is racing for.
+ *
+ * Derived from enrollments rather than stored on the entry: the enrollment
+ * already says who they swam for in the season the meet falls in, so a swimmer
+ * who changes schools between seasons has their history stay correct without
+ * anyone editing an old meet. Returns null for someone with no enrollment in
+ * any team present — an unaffiliated entry.
+ */
+export function teamForAthleteAt(
+  teams: TeamDoc[],
+  meet: Pick<MeetDoc, "date" | "teamIds">,
+  athleteId: string,
+): TeamDoc | null {
+  for (const team of teams) {
+    if (!meet.teamIds.includes(team.id)) continue;
+    const seasonId = seasonForMeet(team, meet)?.id;
+    if (!seasonId) continue;
+    const enrolled = team.enrollments.some(
+      (e) => e.athleteId === athleteId && e.seasonId === seasonId,
+    );
+    if (enrolled) return team;
+  }
+  return null;
 }
 
 /** Seasons an athlete has an enrollment in, most recent first. */

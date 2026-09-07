@@ -24,7 +24,7 @@ const MODES = [
 ];
 
 export default function MeetOverview() {
-  const { meets, team, deleteMeet } = useAppStore();
+  const { meets, team, athletes, deleteMeet } = useAppStore();
   const { meetId } = useParams();
   const navigate = useNavigate();
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -117,7 +117,7 @@ export default function MeetOverview() {
             onClick={() =>
               downloadFile(
                 `${slug}-results.csv`,
-                resultsToCsv(meet, team),
+                resultsToCsv(meet, team, athletes),
                 "text/csv",
               )
             }
