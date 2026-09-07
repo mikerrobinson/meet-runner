@@ -4,7 +4,7 @@
  * synced or exported.
  */
 
-import { LANE_LAYOUTS, type LaneLayout } from "~/types/meet";
+import { LANE_LAYOUTS, type LaneLayout, type NameOrder } from "~/types/meet";
 
 const AUTO_SYNC_KEY = "meet-runner:auto-sync";
 const TOKEN_KEY = "meet-runner:sync-token";
@@ -78,6 +78,27 @@ export function loadLaneLayout(): LaneLayout {
 export function saveLaneLayout(layout: LaneLayout): void {
   if (typeof localStorage === "undefined") return;
   localStorage.setItem(LANE_LAYOUT_KEY, layout);
+}
+
+const NAME_ORDER_KEY = "meet-runner:name-order";
+
+/**
+ * How this person likes names written and sorted.
+ *
+ * Moved off the team document, where it used to live. That was defensible
+ * while a team was one coach's private season; now that teams are shared and
+ * publicly readable, a visiting coach flipping it would have changed how the
+ * home team reads its own roster. A display preference belongs to whoever is
+ * looking, not to the thing being looked at.
+ */
+export function loadNameOrder(): NameOrder {
+  if (typeof localStorage === "undefined") return "last";
+  return localStorage.getItem(NAME_ORDER_KEY) === "first" ? "first" : "last";
+}
+
+export function saveNameOrder(order: NameOrder): void {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(NAME_ORDER_KEY, order);
 }
 
 /**

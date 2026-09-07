@@ -107,8 +107,6 @@ import { buildHeats } from "../app/lib/heats.ts";
   const team = {
     ...base,
     code: "CHAP",
-    headCoach: "M. Robinson",
-    nameOrder: "first" as const,
     enrollments: [
       { id: "e1", teamId: base.id, seasonId, athleteId: "s1", year: "10", squad: "Blue", status: "active" as const },
       { id: "e2", teamId: base.id, seasonId, athleteId: "s2", year: "12", status: "inactive" as const },
@@ -168,7 +166,6 @@ import { buildHeats } from "../app/lib/heats.ts";
   eq(reimportedTeam.enrollments, JSON.parse(JSON.stringify(team.enrollments)), "enrollments carry through verbatim");
   eq(reimportedTeam.seasons, JSON.parse(JSON.stringify(team.seasons)), "seasons carry through verbatim");
   eq(reimportedTeam.code, "CHAP", "team code carries through");
-  eq(reimportedTeam.headCoach, "M. Robinson", "head coach carries through");
   eq(reimportedTeam.currentSeasonId, seasonId, "the current season pointer survives");
 
   // What a document saved by YESTERDAY's build looks like coming back.

@@ -102,7 +102,6 @@ export async function action({ request, context }: Route.ActionArgs) {
         data: {
           name: team.name,
           code: team.code,
-          nameOrder: team.nameOrder,
           currentSeasonId: team.currentSeasonId,
         },
       },

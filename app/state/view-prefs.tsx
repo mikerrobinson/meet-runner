@@ -6,8 +6,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { loadLaneLayout, loadTimerId, saveLaneLayout } from "~/lib/storage";
-import type { LaneLayout } from "~/types/meet";
+import {
+  loadLaneLayout,
+  loadNameOrder,
+  loadTimerId,
+  saveLaneLayout,
+  saveNameOrder,
+} from "~/lib/storage";
+import type { LaneLayout, NameOrder } from "~/types/meet";
 
 /**
  * How this device likes to look at things, as opposed to what's true about a
@@ -22,6 +28,9 @@ interface ViewPrefs {
   setLaneLayout: (layout: LaneLayout) => void;
   /** This device's identity as a timer — every watch it takes is filed under it. */
   timerId: string;
+  /** How names are written and sorted for whoever is holding this device. */
+  nameOrder: NameOrder;
+  setNameOrder: (order: NameOrder) => void;
 }
 
 const ViewPrefsContext = createContext<ViewPrefs | null>(null);
@@ -31,22 +40,29 @@ export function ViewPrefsProvider({ children }: { children: ReactNode }) {
   // server can't read localStorage, and guessing would mismatch on hydration.
   const [laneLayout, setLayout] = useState<LaneLayout>("grid");
   const [timerId, setTimerId] = useState("device");
+  const [nameOrder, setOrder] = useState<NameOrder>("last");
 
   useEffect(() => {
     setLayout(loadLaneLayout());
     setTimerId(loadTimerId());
+    setOrder(loadNameOrder());
   }, []);
 
   const value = useMemo<ViewPrefs>(
     () => ({
       laneLayout,
       timerId,
+      nameOrder,
       setLaneLayout: (next) => {
         setLayout(next);
         saveLaneLayout(next);
       },
+      setNameOrder: (next) => {
+        setOrder(next);
+        saveNameOrder(next);
+      },
     }),
-    [laneLayout, timerId],
+    [laneLayout, timerId, nameOrder],
   );
 
   return (

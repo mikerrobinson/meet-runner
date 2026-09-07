@@ -5,6 +5,7 @@ import { AthleteSheet } from "~/components/AthleteSheet";
 import { Button, EmptyState, TextInput } from "~/components/ui";
 import { enrollmentIndex, rosterForMeet, seasonForMeet } from "~/lib/roster";
 import { useAppStore } from "~/state/app-store";
+import { useViewPrefs } from "~/state/view-prefs";
 import {
   byAthlete,
   displayName,
@@ -79,6 +80,7 @@ function eventFor(race: Race, athlete: Athlete): MeetEvent | undefined {
 
 export default function Registration() {
   const { team, athletes, meets, toggleEntry, enrol } = useAppStore();
+  const { nameOrder } = useViewPrefs();
   const { meetId } = useParams();
   const [params] = useSearchParams();
   const [search, setSearch] = useState("");
@@ -107,7 +109,7 @@ export default function Registration() {
           !query ||
           `${s.firstName} ${s.lastName}`.toLowerCase().includes(query),
       )
-      .sort(byAthlete(team.nameOrder));
+      .sort(byAthlete(nameOrder));
   }, [team, genderFilter, search]);
 
   // Changing the filter changes which rows exist. Holding the old scroll
@@ -296,7 +298,7 @@ export default function Registration() {
                     className={`sticky left-0 z-10 border-b border-r border-slate-300 px-2 py-1 text-left dark:border-slate-700 ${tone.name}`}
                   >
                     <span className="block truncate text-sm font-semibold">
-                      {displayName(athlete, team.nameOrder)}
+                      {displayName(athlete, nameOrder)}
                     </span>
                     <span className="block text-[11px] font-normal text-slate-500">
                       {athlete.gender}
@@ -321,7 +323,7 @@ export default function Registration() {
                           type="button"
                           disabled={event === undefined}
                           aria-pressed={isIn}
-                          aria-label={`${displayName(athlete, team.nameOrder)} in ${raceLabel(race)}`}
+                          aria-label={`${displayName(athlete, nameOrder)} in ${raceLabel(race)}`}
                           onClick={() =>
                             event && toggleEntry(meet.id, event.id, athlete.id)
                           }

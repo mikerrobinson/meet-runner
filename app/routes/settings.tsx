@@ -22,6 +22,7 @@ import {
   rosterFor,
 } from "~/lib/roster";
 import { useAppStore } from "~/state/app-store";
+import { useViewPrefs } from "~/state/view-prefs";
 import {
   displayName,
   type Athlete,
@@ -61,6 +62,7 @@ export default function Settings() {
     replaceAthletes,
     replaceMeet,
   } = useAppStore();
+  const { nameOrder, setNameOrder } = useViewPrefs();
   const [error, setError] = useState<string | null>(null);
   const [newSeason, setNewSeason] = useState<string | null>(null);
 
@@ -69,10 +71,10 @@ export default function Settings() {
   // Show the setting against a real name where there is one.
   const sample = roster[0] ?? athletes[0];
   const example = sample
-    ? displayName(sample, team.nameOrder)
+    ? displayName(sample, nameOrder)
     : displayName(
         { id: "", firstName: "Avery", lastName: "Aaronson", gender: "F" },
-        team.nameOrder,
+        nameOrder,
       );
 
   // What starting the next season would do, so the button can say so.
@@ -150,23 +152,14 @@ export default function Settings() {
                 autoCapitalize="characters"
               />
             </Field>
-            <Field label="Head coach">
-              <TextInput
-                value={team.headCoach ?? ""}
-                onChange={(e) =>
-                  setTeamInfo({ headCoach: e.target.value || undefined })
-                }
-                autoCapitalize="words"
-              />
-            </Field>
           </div>
           <Field
             label="Name order"
-            hint={`Sorts and writes names this way on the roster, registration and run screens. The other name breaks ties, so siblings always come out in the same order. Example: ${example}.`}
+            hint={`How names read on this device, for the roster, registration and run screens. The other name breaks ties, so siblings always come out in the same order. Example: ${example}.`}
           >
             <Segmented
-              value={team.nameOrder}
-              onChange={(value) => setTeamInfo({ nameOrder: value as NameOrder })}
+              value={nameOrder}
+              onChange={(value) => setNameOrder(value as NameOrder)}
               options={[
                 { value: "last" as NameOrder, label: "Last, First" },
                 { value: "first" as NameOrder, label: "First Last" },

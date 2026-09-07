@@ -19,7 +19,7 @@ import { makeEnrollment, makeSeason, rosterForMeetTeams, teamForAthleteAt } from
 const base = createTeam("Cactus Shadows");
 const s1 = makeSeason(base.id, "2026-27", { startDate: "2026-08-01", endDate: "2027-07-31" });
 const home: TeamDoc = {
-  ...base, code: "CHAP", headCoach: "M. Robinson", nameOrder: "first" as const,
+  ...base, code: "CHAP",
   seasons: [s1], currentSeasonId: s1.id,
   enrollments: [
     makeEnrollment(base.id, s1.id, "a1", { year: "10", squad: "Blue" }),
@@ -89,7 +89,6 @@ const bv = back.teams.find((t) => t.id === visitor.id)!;
 eq(back.teams.length, 2, "both teams come back");
 eq(bh.name, home.name, "team name");
 eq(bh.code, "CHAP", "code");
-eq(bh.headCoach, "M. Robinson", "head coach");
 eq(bh.currentSeasonId, s1.id, "current season");
 eq(bh.seasons, home.seasons, "seasons intact");
 eq(bh.enrollments, home.enrollments, "enrollments intact");

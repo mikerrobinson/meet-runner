@@ -102,8 +102,6 @@ export interface SyncObject {
 interface TeamCore {
   name: string;
   code: string;
-  headCoach?: string;
-  nameOrder: TeamDoc["nameOrder"];
   currentSeasonId: string;
 }
 
@@ -152,8 +150,6 @@ export function toObjects(
     const core: TeamCore = {
       name: team.name,
       code: team.code,
-      headCoach: team.headCoach,
-      nameOrder: team.nameOrder,
       currentSeasonId: team.currentSeasonId,
     };
     objects.push({ id: team.id, type: "team", scope, updatedAt: at, data: core });

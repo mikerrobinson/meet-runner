@@ -788,6 +788,69 @@ export async function pendingRequests(
   }));
 }
 
+export interface TeamMember {
+  userId: string;
+  contact: string;
+  name: string | null;
+  role: Role;
+  since: number;
+}
+
+/**
+ * Everyone actually on a team.
+ *
+ * Coaches need this to say which account belongs to which swimmer, which is
+ * the one thing that turns a roster row into a person who can sign in and
+ * manage their own entries.
+ */
+export async function teamMembers(
+  db: D1Database,
+  teamId: string,
+): Promise<TeamMember[]> {
+  await ensureAuthStore(db);
+  const { results } = await db
+    .prepare(
+      `SELECT m.user_id, m.role, m.created_at, u.contact, u.name
+       FROM memberships m JOIN users u ON u.id = m.user_id
+       WHERE m.team_id = ? AND m.status = 'active'
+       ORDER BY u.name, u.contact`,
+    )
+    .bind(teamId)
+    .all<{
+      user_id: string;
+      role: Role;
+      created_at: number;
+      contact: string;
+      name: string | null;
+    }>();
+
+  return results.map((row) => ({
+    userId: row.user_id,
+    contact: row.contact,
+    name: row.name,
+    role: row.role,
+    since: row.created_at,
+  }));
+}
+
+/**
+ * Who coaches a team, for display where a name is wanted rather than a role.
+ *
+ * Replaces the free-text `headCoach` field on the team document, which was a
+ * string nobody could verify and which said nothing about whether that person
+ * could actually do anything.
+ */
+export async function headCoachOf(
+  db: D1Database,
+  teamId: string,
+): Promise<string | null> {
+  const members = await teamMembers(db, teamId);
+  const head =
+    members.find((m) => m.role === "head_coach") ??
+    members.find((m) => isCoach(m.role));
+  return head ? (head.name ?? head.contact) : null;
+}
+
 /** Let someone in with a role, or turn them down. Coaches only — checked by
  *  the caller, which is the one that knows who's asking. */
 export async function decideRequest(

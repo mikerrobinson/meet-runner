@@ -8,8 +8,14 @@ import {
   requireDb,
   type SyncEnv,
 } from "~/lib/api.server";
-import { canUseTeam } from "~/lib/auth.server";
-import { meetIdsFor, pullObjects, pushObjects } from "~/lib/sync.server";
+import { canUseTeam, membershipIn } from "~/lib/auth.server";
+import { isCoach } from "~/lib/identity";
+import {
+  ensureObjectStore,
+  meetIdsFor,
+  pullObjects,
+  pushObjects,
+} from "~/lib/sync.server";
 import type { ObjectScope, SyncObject } from "~/lib/objects";
 
 /**
@@ -24,6 +30,12 @@ import type { ObjectScope, SyncObject } from "~/lib/objects";
  * The caller names one team; the server works out what that entitles them to
  * read and write. That's `team:{id}`, every meet the team is racing, and the
  * global people those reference — never another team's roster.
+ *
+ * Reading and writing are not the same permission. Everyone on the team reads
+ * the same set; only a coach may write most of it. An athlete may enter and
+ * scratch *themselves* and nothing else — which is the original reason this
+ * app exists, iPads handed round before a meet, and is also as far as it goes:
+ * before this check, admitting a swimmer handed them the whole season.
  */
 export async function action({ request, context }: Route.ActionArgs) {
   const env = context.cloudflare.env as SyncEnv;
@@ -49,6 +61,11 @@ export async function action({ request, context }: Route.ActionArgs) {
     const allowed = await canUseTeam(db, user?.id ?? null, teamId);
     if (!allowed.ok) throw new SyncError(allowed.reason, 403);
 
+    // What this particular person may change, as opposed to see.
+    const membership = user ? await membershipIn(db, user.id, teamId) : undefined;
+    const coach = !user || (membership ? isCoach(membership.role) : false);
+    const ownAthleteId = coach || !user ? null : await athleteFor(db, user.id);
+
     const meetIds = new Set(await meetIdsFor(db, teamId));
 
     // A meet being created right now isn't in the store yet, so its own object
@@ -68,6 +85,20 @@ export async function action({ request, context }: Route.ActionArgs) {
         "That batch reaches outside this team's meets and roster",
         400,
       );
+    }
+
+    if (!coach) {
+      const refusedRole = changes.find(
+        (object) => !mayWriteAsAthlete(object, ownAthleteId),
+      );
+      if (refusedRole) {
+        throw new SyncError(
+          ownAthleteId
+            ? "You can enter and scratch yourself; the rest is the coach's."
+            : "Only a coach can change this. Ask yours to link your account to your roster entry.",
+          403,
+        );
+      }
     }
 
     const pushed = await pushObjects(db, changes);
@@ -115,4 +146,45 @@ function mayWrite(
     case "global":
       return object.type === "athlete";
   }
+}
+
+/**
+ * The roster entry an account is, if a coach has linked one.
+ *
+ * Read from the objects rather than trusted from the request: which swimmer
+ * you are is a claim only a coach gets to make.
+ */
+async function athleteFor(
+  db: D1Database,
+  userId: string,
+): Promise<string | null> {
+  await ensureObjectStore(db);
+  const { results } = await db
+    .prepare(
+      "SELECT id, data FROM objects WHERE type = 'athlete' AND deleted_at IS NULL",
+    )
+    .all<{ id: string; data: string }>();
+
+  const mine = results.find(
+    (row) => (JSON.parse(row.data) as { userId?: string }).userId === userId,
+  );
+  return mine ? mine.id : null;
+}
+
+/**
+ * What somebody who isn't a coach may write.
+ *
+ * Their own entries, and nothing else. Not heats — seeding is the coach's
+ * call. Not watches — a swimmer doesn't time their own race. Not the athlete
+ * record, because editing the name on it is how you'd quietly become someone
+ * else.
+ */
+function mayWriteAsAthlete(
+  object: SyncObject,
+  ownAthleteId: string | null,
+): boolean {
+  if (!ownAthleteId) return false;
+  if (object.type !== "entry") return false;
+  const entry = object.data as { athleteId?: string } | null;
+  return entry?.athleteId === ownAthleteId;
 }

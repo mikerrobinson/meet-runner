@@ -12,6 +12,7 @@ import {
 import { formatTime } from "~/lib/time";
 import { currentSeason, enrollmentFor } from "~/lib/roster";
 import { allResults } from "~/lib/timing";
+import { AthleteAccount } from "~/components/AthleteAccount";
 import { useAppStore } from "~/state/app-store";
 import {
   ageOn,
@@ -38,7 +39,8 @@ interface Swim {
 }
 
 export default function AthleteDetail() {
-  const { team, athletes, meets, saveAthlete, setEnrollmentStatus } = useAppStore();
+  const { team, athletes, meets, saveAthlete, setEnrollmentStatus } =
+    useAppStore();
   const { athleteId } = useParams();
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
@@ -235,6 +237,19 @@ export default function AthleteDetail() {
           </div>
         )}
       </Card>
+
+      <AthleteAccount
+        athlete={athlete}
+        teamId={team.id}
+        onLinked={(next) =>
+          // Straight through the store so the link is on this device too, and
+          // goes up with the next sync like any other edit to a person.
+          saveAthlete(next, {
+            year: enrollment?.year ?? "",
+            squad: enrollment?.squad,
+          })
+        }
+      />
 
       <Card>
         <SectionTitle>Roster</SectionTitle>

@@ -14,6 +14,7 @@ import { downloadFile, parseRosterCsv, toCsv } from "~/lib/csv";
 import { currentSeason, enrollmentsIn } from "~/lib/roster";
 import { allResults } from "~/lib/timing";
 import { useAppStore, type RosterEntry } from "~/state/app-store";
+import { useViewPrefs } from "~/state/view-prefs";
 import {
   byAthlete,
   displayName,
@@ -34,6 +35,7 @@ const TEMPLATE = toCsv([
 
 export default function Team() {
   const { team, athletes, meets, enrol } = useAppStore();
+  const { nameOrder } = useViewPrefs();
   const [warnings, setWarnings] = useState<string[]>([]);
   const [incoming, setIncoming] = useState<RosterEntry[] | null>(null);
   const [search, setSearch] = useState("");
@@ -85,8 +87,8 @@ export default function Team() {
           row.athlete !== undefined &&
           (!query || athleteName(row.athlete).toLowerCase().includes(query)),
       )
-      .sort((a, b) => byAthlete(team.nameOrder)(a.athlete, b.athlete));
-  }, [enrolled, active, byId, showArchived, search, team.nameOrder]);
+      .sort((a, b) => byAthlete(nameOrder)(a.athlete, b.athlete));
+  }, [enrolled, active, byId, showArchived, search, nameOrder]);
 
   return (
     <div className="space-y-4">
@@ -135,7 +137,7 @@ export default function Team() {
                             off ? "text-slate-400" : ""
                           }`}
                         >
-                          {displayName(athlete, team.nameOrder)}
+                          {displayName(athlete, nameOrder)}
                           {off && (
                             <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                               off roster

@@ -211,9 +211,6 @@ export interface TeamDoc {
   name: string;
   /** Short code as it appears on a heat sheet or an SD3 file — "CHAP". */
   code: string;
-  /** Display only. Becomes a coach membership once there are user accounts. */
-  headCoach?: string;
-  nameOrder: NameOrder;
   /** Which season the app is working in when nothing says otherwise. */
   currentSeasonId: string;
   seasons: Season[];
@@ -221,7 +218,7 @@ export interface TeamDoc {
   updatedAt: number;
 }
 
-export const TEAM_DOC_VERSION = 5;
+export const TEAM_DOC_VERSION = 6;
 
 /** Team codes are short and upper-case wherever they're exchanged. */
 export function normalizeTeamCode(value: string): string {

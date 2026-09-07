@@ -70,7 +70,7 @@ export default function RunMeet() {
     if (meet && event && !isDiving(event)) store.ensureHeats(meet.id, event.id);
   }, [meet, event, store]);
 
-  const { laneLayout: layout, timerId } = useViewPrefs();
+  const { laneLayout: layout, timerId, nameOrder } = useViewPrefs();
   const running = meet != null && heat != null && meet.timer?.heatId === heat.id;
 
   // Derived, not stored: each lane's official time comes from the watches on
@@ -181,7 +181,7 @@ export default function RunMeet() {
           meet={meet}
           event={event}
           roster={roster}
-          nameOrder={store.team.nameOrder}
+          nameOrder={nameOrder}
         />
       ) : heats.length === 0 || !heat ? (
         <EmptyState title="Nobody is entered in this event">
@@ -211,7 +211,7 @@ export default function RunMeet() {
                 clockRunning={clockRunning}
                 layout={layout}
                 laneCount={heat.lanes.length}
-                nameOrder={store.team.nameOrder}
+                nameOrder={nameOrder}
                 onStop={() =>
                   store.stopLane(
                     meet.id,
@@ -326,7 +326,7 @@ export default function RunMeet() {
             store.team,
             seasonForMeet(store.team, meet)?.id,
           )}
-          nameOrder={store.team.nameOrder}
+          nameOrder={nameOrder}
           heat={heat}
           lane={assigningLane}
           onAssign={(athleteId) =>
@@ -344,7 +344,7 @@ export default function RunMeet() {
           result={resultsByLane.get(editingLane)}
           swimmerLabel={(() => {
             const s = findAthlete(roster, heat.lanes[editingLane - 1]);
-            return s ? displayName(s, store.team.nameOrder) : `Lane ${editingLane}`;
+            return s ? displayName(s, nameOrder) : `Lane ${editingLane}`;
           })()}
           watches={watchesForLane(meet, heat.id, editingLane)}
           timerId={timerId}

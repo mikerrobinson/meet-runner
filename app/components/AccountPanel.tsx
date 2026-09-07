@@ -102,6 +102,17 @@ export function AccountPanel() {
         {session.stale && " (last known; the server is unreachable right now)"}
       </p>
 
+      {session.user && (
+        <p className="mt-1 text-sm">
+          <Link
+            to={`/users/${session.user.id}`}
+            className="font-semibold text-blue-600"
+          >
+            Your teams, meets and times ›
+          </Link>
+        </p>
+      )}
+
       {error && (
         <div className="mt-3">
           <Banner tone="error">{error}</Banner>

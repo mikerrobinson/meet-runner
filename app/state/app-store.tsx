@@ -107,7 +107,7 @@ interface AppStore {
 
   /* Team */
   setTeamInfo: (
-    patch: Partial<Pick<TeamDoc, "name" | "code" | "headCoach" | "nameOrder">>,
+    patch: Partial<Pick<TeamDoc, "name" | "code">>,
   ) => void;
   /** Add athletes and enrol them in a season, or replace that season's roster. */
   enrol: (
