@@ -14,7 +14,15 @@ export default [
   layout("routes/shell.tsx", [
     index("routes/home.tsx"),
 
+    // The coach's own roster, editable, behind a membership.
     route("team", "routes/team.tsx"),
+
+    // Browsing: every team and everyone, read from the server rather than the
+    // store — the store only ever holds your team, and these are the pages
+    // that exist to show the ones that aren't yours.
+    route("teams", "routes/teams.tsx"),
+    route("teams/:teamId", "routes/team-detail.tsx"),
+    route("athletes", "routes/athletes.tsx"),
     route("athletes/:athleteId", "routes/athlete-detail.tsx"),
 
     route("meets", "routes/meets.tsx"),
@@ -33,7 +41,16 @@ export default [
   // Resource routes for syncing to D1.
   route("api/sync-status", "routes/api.sync-status.ts"),
   route("api/sync", "routes/api.sync.ts"),
+
+  // Reading. Open, because a meet is a public event — the heat sheet is handed
+  // out at the door. Sync is for working a deck; this is for everyone else.
   route("api/teams", "routes/api.teams.ts"),
+  route("api/teams/:teamId", "routes/api.public.team.ts"),
+  route("api/meets", "routes/api.public.meets.ts"),
+  route("api/meets/:meetId", "routes/api.public.meet.ts"),
+  route("api/athletes", "routes/api.public.athletes.ts"),
+  route("api/athletes/:athleteId", "routes/api.public.athlete.ts"),
+  route("api/users/:userId", "routes/api.public.user.ts"),
 
   // Accounts and membership.
   route("api/auth/start", "routes/api.auth.start.ts"),

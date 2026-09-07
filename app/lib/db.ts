@@ -101,15 +101,40 @@ export async function readAthletes(): Promise<Athlete[]> {
   const raw = await run<unknown>(TEAM_STORE, "readonly", (store) =>
     store.get(ATHLETES_KEY),
   );
-  return Array.isArray(raw) ? raw.map(normalizeAthlete) : [];
+  // An *empty* array counts as nothing, not as an empty roster. A sync that
+  // ran before this recovery existed will have written one, and treating that
+  // as the answer would strand the people still sitting in the team document.
+  if (Array.isArray(raw) && raw.length > 0) return raw.map(normalizeAthlete);
+
+  // Nothing under the new key. A device that last ran an older build has its
+  // people inside the team document, where they used to live — and
+  // `parseTeamDoc` no longer looks at that field, so without this the roster
+  // comes back as a list of enrollments pointing at nobody.
+  //
+  // Read from the raw record rather than the parsed one, precisely because
+  // parsing is what drops them. One-shot: it's written forward immediately,
+  // so the next launch takes the fast path above.
+  const legacy = await run<unknown>(TEAM_STORE, "readonly", (store) =>
+    store.get(TEAM_KEY),
+  );
+  const embedded = (legacy as { athletes?: unknown })?.athletes;
+  if (!Array.isArray(embedded) || embedded.length === 0) return [];
+
+  const recovered = embedded.map(normalizeAthlete);
+  await writeAthletes(recovered);
+  return recovered;
 }
 
-export async function readMeets(): Promise<MeetDoc[]> {
+/**
+ * `fallbackTeamIds` catches meets written before a meet referenced its teams:
+ * without it they come back racing nobody and drop off every team's schedule.
+ */
+export async function readMeets(fallbackTeamIds?: string[]): Promise<MeetDoc[]> {
   const raw = await run<unknown[]>(MEET_STORE, "readonly", (store) =>
     store.getAll(),
   );
   return raw
-    .map((item) => parseMeetDoc(item))
+    .map((item) => parseMeetDoc(item, fallbackTeamIds))
     .filter((meet): meet is MeetDoc => meet !== null)
     .sort((a, b) => b.date.localeCompare(a.date) || b.updatedAt - a.updatedAt);
 }
@@ -156,7 +181,25 @@ export async function readBaseline(): Promise<SyncObject[]> {
     "readonly",
     (store) => store.get(BASELINE_KEY),
   );
-  return stored ?? [];
+  if (!Array.isArray(stored)) return [];
+
+  // A baseline written by an older build has a different shape — objects were
+  // scoped by a `teamId` field before scopes existed. It's a cache, not data,
+  // so the safe move is to throw the whole thing away rather than to reason
+  // about half-converted objects: an empty baseline just means the next sync
+  // re-sends the season, which the server merges by object as usual.
+  //
+  // Dropping the lot rather than the bad rows matters. A partial baseline
+  // looks like "everything missing was deleted here", and the next push would
+  // faithfully tell the server so.
+  const usable = stored.every(
+    (object) =>
+      object &&
+      typeof object === "object" &&
+      typeof object.type === "string" &&
+      typeof object.scope?.kind === "string",
+  );
+  return usable ? stored : [];
 }
 
 export async function writeBaseline(objects: SyncObject[]): Promise<void> {

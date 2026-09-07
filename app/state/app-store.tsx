@@ -267,7 +267,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       try {
         const loadedTeam = await readTeam();
         const loadedAthletes = await readAthletes();
-        const loadedMeets = await readMeets();
+        const loadedMeets = await readMeets(
+          loadedTeam ? [loadedTeam.id] : undefined,
+        );
         if (cancelled) return;
 
         // A device with nothing on it must not invent a team: the season very

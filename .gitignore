@@ -21,4 +21,8 @@ worker-configuration.d.ts
 *.swp
 
 # Random
-meet-runner-pre-deploy.sql 
+meet-runner-pre-deploy.sql
+
+# Database backups. Real rosters — minors' names, and birth dates where
+# they've been entered — so they stay on the machine that made them.
+backups/ 

@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import type { Route } from "./+types/meets";
+import { listPublicMeets } from "~/lib/public.server";
+import type { SyncEnv } from "~/lib/api.server";
 import {
   Button,
   Card,
@@ -32,8 +34,22 @@ export function meta({}: Route.MetaArgs) {
   return [{ title: "Meets · Meet Runner" }];
 }
 
+/**
+ * Everything the server holds, so this page can show meets this device
+ * doesn't. Failing quietly is deliberate: the schedule below comes from local
+ * storage and has to render on a pool deck with no signal.
+ */
+export async function loader({ context }: Route.LoaderArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  if (!env.DB) return { elsewhere: [] };
+  try {
+    return { elsewhere: await listPublicMeets(env.DB) };
+  } catch {
+    return { elsewhere: [] };
+  }
+}
 
-export default function Meets() {
+export default function Meets({ loaderData }: Route.ComponentProps) {
   const { meets, createMeet } = useAppStore();
   const [adding, setAdding] = useState(false);
 
@@ -43,6 +59,14 @@ export default function Meets() {
     () => [...meets].sort((a, b) => b.date.localeCompare(a.date)),
     [meets],
   );
+
+  // Meets on the server this device doesn't hold — another school's, or one
+  // from a season this device never adopted. Listed separately rather than
+  // mixed in, because the ones above are the ones you can actually run.
+  const elsewhere = useMemo(() => {
+    const mine = new Set(meets.map((m) => m.id));
+    return loaderData.elsewhere.filter((m) => !mine.has(m.id));
+  }, [loaderData.elsewhere, meets]);
 
   return (
     <div className="space-y-4">
@@ -91,6 +115,43 @@ export default function Meets() {
           </ul>
         )}
       </Card>
+
+      {elsewhere.length > 0 && (
+        <Card>
+          <SectionTitle>Elsewhere ({elsewhere.length})</SectionTitle>
+          <p className="mb-2 text-xs text-slate-500 dark:text-slate-400">
+            Meets on the server this device doesn&rsquo;t hold. Read-only.
+          </p>
+          <ul className="divide-y divide-slate-200 dark:divide-slate-800">
+            {elsewhere.map((meet) => (
+              <li key={meet.id}>
+                <Link
+                  to={`/meets/${meet.id}`}
+                  className="flex min-h-14 touch-manipulation items-center justify-between gap-3 py-2"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-semibold">
+                      {meet.name}
+                    </span>
+                    <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
+                      {[
+                        meet.date,
+                        meet.teams.map((t) => t.code || t.name).join(" v "),
+                        `${meet.times} time${meet.times === 1 ? "" : "s"}`,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                  </span>
+                  <span aria-hidden className="text-xl text-slate-400">
+                    ›
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       {adding && (
         <NewMeetSheet

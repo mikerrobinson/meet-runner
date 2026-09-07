@@ -21,6 +21,7 @@ import {
   standardOrder,
 } from "~/lib/events";
 import { recordedCount } from "~/lib/timing";
+import { MeetTeams } from "~/components/MeetTeams";
 import { useAppStore } from "~/state/app-store";
 import {
   LANE_COUNTS,
@@ -529,6 +530,12 @@ function OptionsTab({ meet }: { meet: MeetDoc }) {
           </Field>
         </div>
       </Card>
+
+      <MeetTeams
+        meet={meet}
+        homeTeamId={team.id}
+        onChange={(patch) => setMeetInfo(meet.id, patch)}
+      />
     </div>
   );
 }

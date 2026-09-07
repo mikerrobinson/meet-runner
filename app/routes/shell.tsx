@@ -25,6 +25,9 @@ interface Tab {
 const TOP_TABS: Tab[] = [
   { to: "/team", label: "Team", icon: "👥" },
   { to: "/meets", label: "Meets", icon: "🏊" },
+  // Everyone else's teams and swimmers, read from the server. Separate from
+  // "Team", which is the one roster this device can actually edit.
+  { to: "/teams", label: "Browse", icon: "🔎" },
   { to: "/settings", label: "Settings", icon: "⚙️" },
 ];
 
@@ -184,7 +187,23 @@ function layoutOptions(
  *
  * Returns what to show while that's being settled, or null to carry on.
  */
-function useSeasonForSession(): string | null {
+/**
+ * Routes that don't need this device to hold a season.
+ *
+ * Browsing is public — a parent opening a link to results has no account, no
+ * team, and nothing in local storage, and sending them to a sign-in screen
+ * would defeat the entire point of publishing results. The deck screens still
+ * require a season, because a stopwatch with no roster behind it is useless.
+ */
+const PUBLIC_PREFIXES = ["/teams", "/athletes", "/meets"];
+
+function isPublicPath(pathname: string): boolean {
+  return PUBLIC_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
+}
+
+function useSeasonForSession(publicPath: boolean): string | null {
   const { ready, hasLocalData, chooseTeam, team } = useAppStore();
   const session = useSession();
   const navigate = useNavigate();
@@ -195,6 +214,9 @@ function useSeasonForSession(): string | null {
 
   useEffect(() => {
     if (!ready || session.status === "loading") return;
+    // A visitor reading a public page is not a device that has lost its
+    // season, and must not be redirected as though it were.
+    if (publicPath) return;
 
     if (!hasLocalData) {
       if (session.status === "out") {
@@ -226,7 +248,7 @@ function useSeasonForSession(): string | null {
       .finally(() => {
         adopting.current = null;
       });
-  }, [ready, hasLocalData, session, team.id, chooseTeam, navigate]);
+  }, [ready, hasLocalData, publicPath, session, team.id, chooseTeam, navigate]);
 
   // Keep the account's idea of where this person is up to date, so their next
   // device opens the same place. Guarded by what was last sent rather than by
@@ -250,11 +272,12 @@ function useSeasonForSession(): string | null {
 }
 
 export default function Shell() {
-  const { ready, storageError, team, athletes, meets } = useAppStore();
-  const settling = useSeasonForSession();
+  const { ready, storageError, hasLocalData, team, athletes, meets } = useAppStore();
+  const location = useLocation();
+  const publicPath = isPublicPath(location.pathname);
+  const settling = useSeasonForSession(publicPath);
   const status = useSyncStatus();
   const { laneLayout, setLaneLayout } = useViewPrefs();
-  const location = useLocation();
   const params = useParams();
 
   if (storageError) {
@@ -283,8 +306,9 @@ export default function Shell() {
   }
 
   // This device has no season yet — either it's on its way, or fetching it
-  // failed and there's something to say about that.
-  if (settling !== null) {
+  // failed and there's something to say about that. Public pages render
+  // regardless: they read from the server and need nothing local.
+  if (settling !== null && !publicPath) {
     return (
       <div className="flex min-h-screen items-center justify-center p-6 text-center">
         {settling ? (
@@ -332,7 +356,8 @@ export default function Shell() {
     />
   ) : null;
 
-  const title = openMeet?.name ?? team.name;
+  const title =
+    openMeet?.name ?? (hasLocalData || !publicPath ? team.name : "Meet Runner");
   const subtitle = onRegistration
     ? undefined
     : openMeet

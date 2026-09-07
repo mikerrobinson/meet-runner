@@ -1,6 +1,6 @@
 import { done, eq } from "./harness.ts";
-import { makeRuling, makeWatch, officialTime, resultForLane, resultsForHeat, truncateToHundredths } from "../app/lib/timing.ts";
-import { watchId } from "../app/types/meet.ts";
+import { attributedAthlete, makeRuling, makeWatch, officialTime, resultForLane, resultsForHeat, truncateToHundredths } from "../app/lib/timing.ts";
+import { watchId, type Heat } from "../app/types/meet.ts";
 
 /* ------------------------------------------------ timing */
 
@@ -85,5 +85,83 @@ eq(results.length, 2, "one result per timed lane");
 eq(results.map((x) => x.lane), [3, 4], "in lane order");
 eq(results[0].timeMs, 27140, "lane 3 averaged and truncated");
 eq(results[1].timeMs, 30010, "lane 4 single");
+
+/* ------------------------------- an empty lane the timers had an opinion on */
+
+// The gap this closes: a visiting swimmer, an exhibition swim, or a late entry
+// nobody seeded. The lineup has no opinion about an empty lane, so the timers
+// are the only witnesses — and silently dropping a swim that genuinely
+// happened is worse than crediting it on their word.
+{
+  const heat: Heat = {
+    id: "h9",
+    eventId: "ev1",
+    index: 0,
+    lanes: ["a1", null, null, null, null, null],
+  };
+  const meet = {
+    heats: [heat],
+    rulings: [],
+    watches: [
+      { id: "h9:1:tA", eventId: "ev1", heatId: "h9", lane: 1, timerId: "tA", timeMs: 26100, recordedAt: 1, source: "stopwatch" as const },
+      // Lane 4 was empty; two timers say Dana swam it.
+      { id: "h9:4:tA", eventId: "ev1", heatId: "h9", lane: 4, timerId: "tA", timeMs: 25400, recordedAt: 2, source: "stopwatch" as const, athleteId: "a9" },
+      { id: "h9:4:tB", eventId: "ev1", heatId: "h9", lane: 4, timerId: "tB", timeMs: 25460, recordedAt: 3, source: "stopwatch" as const, athleteId: "a9" },
+    ],
+  };
+
+  const lane4 = resultForLane(meet, heat, 4)!;
+  eq(lane4 !== null, true, "an unseeded lane the timers named still produces a result");
+  eq(lane4.athleteId, "a9", "credited to whoever the timers said");
+  eq(lane4.attributed, true, "and flagged, because nobody seeded it");
+  eq(lane4.watchCount, 2, "with both watches behind it");
+
+  const lane1 = resultForLane(meet, heat, 1)!;
+  eq(lane1.athleteId, "a1", "a seeded lane is unaffected");
+  eq(lane1.attributed, undefined, "and isn't flagged");
+
+  // The lineup still wins where it has an opinion: a timer may not move a
+  // swimmer out of a lane the coach seeded.
+  const disputed = {
+    ...meet,
+    watches: [
+      { id: "h9:1:tA", eventId: "ev1", heatId: "h9", lane: 1, timerId: "tA", timeMs: 26100, recordedAt: 1, source: "stopwatch" as const, athleteId: "a9" },
+    ],
+  };
+  eq(
+    resultForLane(disputed, heat, 1)!.athleteId,
+    "a1",
+    "a timer disagreeing about a seeded lane does not rewrite the lineup",
+  );
+
+  eq(resultForLane(meet, heat, 5), null, "an empty lane nobody named is still nothing");
+}
+
+/* ---- who the timers name, when they disagree ---- */
+{
+  const w = (timerId: string, athleteId: string | undefined, recordedAt: number) => ({
+    id: `x:${timerId}`, eventId: "ev1", heatId: "h9", lane: 4, timerId,
+    timeMs: 25000, recordedAt, source: "stopwatch" as const, athleteId,
+  });
+
+  eq(attributedAthlete([]), undefined, "no watches, nobody named");
+  eq(attributedAthlete([w("tA", undefined, 1)]), undefined, "a watch naming nobody names nobody");
+  eq(attributedAthlete([w("tA", "a9", 1)]), "a9", "one timer's word stands alone");
+  eq(
+    attributedAthlete([w("tA", "a9", 1), w("tB", "a9", 2), w("tC", "a7", 3)]),
+    "a9",
+    "the most-named wins",
+  );
+  eq(
+    attributedAthlete([w("tB", "a7", 5), w("tA", "a9", 2)]),
+    "a9",
+    "an even split goes to whoever reported first, so the answer is stable",
+  );
+  eq(
+    attributedAthlete([w("tA", "a9", 2), w("tB", "a7", 5)]),
+    "a9",
+    "and doesn't depend on the order the watches arrived in",
+  );
+}
 
 done();

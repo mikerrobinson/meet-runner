@@ -6,6 +6,7 @@
 
 import { request } from "./http";
 import type { SyncObject } from "./objects";
+import type { PublicTeam } from "./public";
 
 export { ApiError as SyncRequestError } from "./http";
 
@@ -33,20 +34,11 @@ export async function exchange(
   });
 }
 
-export interface RemoteTeamSummary {
-  id: string;
-  name: string;
-  code: string;
-  athletes: number;
-  meets: number;
-  /** Recorded times — the surest sign of which season is the real one. */
-  times: number;
-  updatedAt: number;
-}
+export type { PublicTeam as RemoteTeamSummary } from "./public";
 
-/** Every season on the server, for a device deciding which one it belongs to. */
-export async function listTeams(): Promise<RemoteTeamSummary[]> {
-  const body = await request<{ teams: RemoteTeamSummary[] }>("/api/teams");
+/** The seasons this device may adopt: the ones its signed-in coach is on. */
+export async function listTeams(): Promise<PublicTeam[]> {
+  const body = await request<{ teams: PublicTeam[] }>("/api/teams?mine=1");
   return body.teams;
 }
 

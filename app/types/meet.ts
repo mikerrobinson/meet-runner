@@ -429,6 +429,12 @@ export interface Result {
   watchCount: number;
   /** True when no stopwatch was involved at all. */
   manual?: boolean;
+  /**
+   * True when nobody was seeded in this lane and the swim is credited on a
+   * timer's word alone. Worth showing: it's a real time, and it's also the
+   * one kind of result a coach might want to look at twice.
+   */
+  attributed?: boolean;
 }
 
 export interface MeetOptions {

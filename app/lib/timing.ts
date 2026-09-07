@@ -84,20 +84,55 @@ export function rulingForLane(
 }
 
 /**
+ * Who the timers say was in a lane, when they say anything at all.
+ *
+ * Several timers on one lane can name different people, so the most-named
+ * wins and an even split is broken by whoever reported first — which makes
+ * the answer deterministic rather than dependent on row order.
+ */
+export function attributedAthlete(watches: WatchTime[]): string | undefined {
+  const named = watches.filter((w) => w.athleteId);
+  if (named.length === 0) return undefined;
+
+  const votes = new Map<string, { count: number; first: number }>();
+  for (const watch of named) {
+    const existing = votes.get(watch.athleteId!);
+    if (existing) {
+      existing.count += 1;
+      existing.first = Math.min(existing.first, watch.recordedAt);
+    } else {
+      votes.set(watch.athleteId!, { count: 1, first: watch.recordedAt });
+    }
+  }
+
+  return [...votes.entries()].sort(
+    ([, a], [, b]) => b.count - a.count || a.first - b.first,
+  )[0][0];
+}
+
+/**
  * The result for one lane, or null if nothing has been recorded there.
  *
  * A ruling outranks the watches: a DQ stands whatever the stopwatches said,
  * and a coach who types a time over them has decided the watches were wrong.
+ *
+ * Who the swim belongs to is the coach's lineup wherever the lineup has an
+ * opinion — a timer saying they saw somebody else must never rewrite the
+ * running order. But an *empty* lane is the lineup having no opinion at all,
+ * and there the timers are the only witnesses: an exhibition swim, a late
+ * entry, a visiting swimmer nobody seeded. Dropping those times silently was
+ * worse than crediting them, because the swim genuinely happened and the
+ * stopwatch genuinely recorded it.
  */
 export function resultForLane(
   meet: Pick<MeetDoc, "watches" | "rulings">,
   heat: Heat,
   lane: number,
 ): Result | null {
-  const athleteId = heat.lanes[lane - 1];
-  if (!athleteId) return null;
-
   const watches = watchesForLane(meet, heat.id, lane);
+  const seated = heat.lanes[lane - 1];
+  const athleteId = seated ?? attributedAthlete(watches);
+  if (!athleteId) return null;
   const ruling = rulingForLane(meet, heat.id, lane);
   const derived = officialTime(watches);
 
@@ -108,6 +143,7 @@ export function resultForLane(
     heatId: heat.id,
     athleteId,
     lane,
+    ...(seated ? {} : { attributed: true }),
   };
 
   // A coach's own time replaces whatever the watches said.
