@@ -35,7 +35,6 @@ const TEAM_KEY = "team";
  */
 const ATHLETES_KEY = "athletes";
 
-
 let dbPromise: Promise<IDBDatabase> | null = null;
 
 function openDb(): Promise<IDBDatabase> {
@@ -155,11 +154,6 @@ export async function writeMeet(meet: MeetDoc): Promise<void> {
 
 export async function removeMeet(id: string): Promise<void> {
   await run(MEET_STORE, "readwrite", (store) => store.delete(id));
-}
-
-export async function wipe(): Promise<void> {
-  await run(TEAM_STORE, "readwrite", (store) => store.clear());
-  await run(MEET_STORE, "readwrite", (store) => store.clear());
 }
 
 /* --------------------------------------------------------------- migration */

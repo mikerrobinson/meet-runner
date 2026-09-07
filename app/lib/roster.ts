@@ -162,16 +162,6 @@ export function teamForAthleteAt(
   return null;
 }
 
-/** Seasons an athlete has an enrollment in, most recent first. */
-export function seasonsFor(team: TeamDoc, athleteId: string): Season[] {
-  const ids = new Set(
-    team.enrollments
-      .filter((e) => e.athleteId === athleteId)
-      .map((e) => e.seasonId),
-  );
-  return team.seasons.filter((s) => ids.has(s.id)).reverse();
-}
-
 /** The ISO day before this one, for closing a season the day a new one opens. */
 export function dayBefore(isoDate: string): string {
   const date = new Date(`${isoDate}T00:00:00Z`);

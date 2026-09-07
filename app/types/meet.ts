@@ -518,18 +518,6 @@ export function isDeleted(meet: Pick<MeetDoc, "deletedAt">): boolean {
   return meet.deletedAt != null;
 }
 
-/** Enough of a meet to render the schedule without loading the whole thing. */
-export interface MeetSummary {
-  id: string;
-  name: string;
-  date: string;
-  type: MeetType;
-  course: MeetCourse;
-  location?: string;
-  deletedAt?: number | null;
-  updatedAt: number;
-}
-
 /* ------------------------------------------------------------------ naming */
 
 export function athleteName(s: Athlete): string {
@@ -605,7 +593,3 @@ export function findAthlete(
   return athletes.find((a) => a.id === id);
 }
 
-/** A placeholder for a athlete id no longer in the roster at all. */
-export function missingAthleteLabel(id: string): string {
-  return `(removed ${id.slice(0, 4)})`;
-}

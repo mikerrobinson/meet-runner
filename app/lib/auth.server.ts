@@ -833,24 +833,6 @@ export async function teamMembers(
   }));
 }
 
-/**
- * Who coaches a team, for display where a name is wanted rather than a role.
- *
- * Replaces the free-text `headCoach` field on the team document, which was a
- * string nobody could verify and which said nothing about whether that person
- * could actually do anything.
- */
-export async function headCoachOf(
-  db: D1Database,
-  teamId: string,
-): Promise<string | null> {
-  const members = await teamMembers(db, teamId);
-  const head =
-    members.find((m) => m.role === "head_coach") ??
-    members.find((m) => isCoach(m.role));
-  return head ? (head.name ?? head.contact) : null;
-}
-
 /** Let someone in with a role, or turn them down. Coaches only — checked by
  *  the caller, which is the one that knows who's asking. */
 export async function decideRequest(

@@ -25,12 +25,6 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
 
   try {
     const me = await currentUser(request, env);
-    console.log(
-      "me",
-      JSON.stringify(me, null, 2),
-      "params.userId",
-      params.userId,
-    );
     if (!me || me.id !== params.userId) {
       return { dashboard: null, swims: null, mine: false };
     }

@@ -58,16 +58,6 @@ export type ObjectScope =
   | { kind: "meet"; id: string }
   | { kind: "global" };
 
-export const TEAM_SCOPED: SyncObjectType[] = ["team", "season", "enrollment"];
-export const MEET_SCOPED: SyncObjectType[] = [
-  "meet",
-  "lineup",
-  "entry",
-  "heat",
-  "watch",
-  "ruling",
-];
-
 export function teamScope(id: string): ObjectScope {
   return { kind: "team", id };
 }

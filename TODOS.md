@@ -7,6 +7,22 @@ Nothing here is committed to — it's a parking lot. Add your own freely.
 
 ## Features
 
+### An athlete's own screen
+Phase 3 linked accounts to roster entries and gave a linked swimmer permission
+to enter and scratch *themselves* through `/api/sync` — verified, and refused
+for anyone else's entries. What's missing is the screen. `/users/{id}` shows
+their teams, meets and times read-only; there's nothing to tap to sign up for
+the 100 Free.
+
+The registration grid is the coach's tool — a roster down the side, every race
+across the top — and is the wrong shape for one person. What a swimmer wants is
+their own short list: the races in the next meet, which ones they're in, and
+the entry limits (4 events, max 2 individual) counting down as they pick.
+
+This is the use case the app was originally built for: iPads handed round on
+deck before a meet so swimmers sort out their own entries. It's the only part
+of that still missing, and the permission work is already done.
+
 ### Entry limits
 NFHS caps a swimmer at 4 events, max 2 individual (varies by state). The
 registration row already shows "3 ev" — turn it amber at the cap and red past
@@ -42,15 +58,17 @@ first-class references first — an SD3 entry belongs to a team, not to "us".
 Export is the easier half and the one that pays off immediately after a meet.
 
 Swimmer birth dates are stored as of 2026-09-05, which SDIF needs on every
-athlete record. Still missing for export: an LSC/club code for the team, and
+athlete record — though as of the 2026-09-07 production backup not one of the
+96 athletes actually has one, so export needs them entered before it can work. Still missing for export: an LSC/club code for the team, and
 whatever the exporter decides to do about athlete IDs — the legacy USS number
 is derived from the birth date and name, but a real registration ID is not
 something we can invent, so unregistered swimmers will need a fallback.
 
-### Teams as first-class references
-Prerequisite for the above, and for scoring more than one team. Open question
-worth settling early: a meet's teams as references to team documents (so
-rosters and lineups can be imported and reused) rather than labels on a meet.
+### ~~Teams as first-class references~~ — built
+A meet now carries `teamIds` referencing real team documents, athletes are
+global, and a team can exist unclaimed until a coach from that school signs in.
+Two schools work the same meet rather than keeping half a copy each. This was
+the prerequisite blocking SD3 and multi-team scoring; both are now unblocked.
 
 ### Copy the lineup from a previous meet
 Cheaper than full reusable templates (which we passed on) and gets most of the
@@ -107,7 +125,10 @@ mid-season today.
   half-width grid tile than the old initials did. Fine in list layout.
 - **Name order elsewhere.** Results, swimmer detail and the CSV export still use
   natural "First Last" rather than the Settings name order. Deliberate — those
-  read as records rather than a scanned column — but worth revisiting.
+  read as records rather than a scanned column — but worth revisiting. The
+  preference itself now lives on the device rather than the team, since a
+  visiting coach shouldn't change how the host reads its own roster; moving it
+  on again to the user record would make it follow someone between devices.
 - **Time entry keypad.** `inputMode` is still `decimal` though the "." is no
   longer needed; `numeric` would be a cleaner pad. Prefilling the field with
   bare digits would also make correcting a time a couple of taps instead of a
