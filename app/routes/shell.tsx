@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { currentSeason, rosterFor } from "~/lib/roster";
+import { AccountMenu } from "~/components/AccountMenu";
 import { useAppStore } from "~/state/app-store";
 import { syncLabel, useSyncStatus } from "~/state/auto-sync";
 import { useSession } from "~/state/session";
@@ -40,8 +41,8 @@ function meetTabs(meetId: string): Tab[] {
   const base = `/meets/${meetId}`;
   return [
     { to: "/meets", label: "Meets", icon: "‹" },
-    { to: `${base}/setup`, label: "Setup", icon: "⚙️" },
-    { to: `${base}/registration`, label: "Register", icon: "📋" },
+    { to: base, label: "Info", icon: "📄" },
+    { to: `${base}/entries`, label: "Entries", icon: "📋" },
     { to: `${base}/run`, label: "Run", icon: "⏱️" },
     { to: `${base}/results`, label: "Results", icon: "🏅" },
   ];
@@ -328,10 +329,13 @@ export default function Shell() {
   const openMeet = params.meetId
     ? meets.find((m) => m.id === params.meetId)
     : undefined;
-  const tabs = openMeet ? meetTabs(openMeet.id) : TOP_TABS;
+  // The sections belong to the URL, not to whether this device holds the meet.
+  // A parent opening a link to somebody else's meet still gets Info and
+  // Results; the sections that need local data say so when they're reached.
+  const tabs = params.meetId ? meetTabs(params.meetId) : TOP_TABS;
   const chip = syncLabel(status);
 
-  const onRegistration = location.pathname.endsWith("/registration");
+  const onRegistration = location.pathname.endsWith("/entries");
   const onRun = location.pathname.endsWith("/run");
   const rawGender = new URLSearchParams(location.search).get("g");
   const genderParam = rawGender === "f" || rawGender === "m" ? rawGender : "all";
@@ -394,11 +398,16 @@ export default function Shell() {
 
           {toggles && <div className="justify-self-center">{toggles}</div>}
 
-          <span
-            className={`justify-self-end rounded-full px-2 py-1 text-xs font-semibold ${CHIP_TONES[chip.tone]}`}
-          >
-            {chip.text}
-          </span>
+          {/* Sync state and the account control share the right-hand cell.
+              The chip is about this device; the circle is about the person. */}
+          <div className="flex items-center gap-2 justify-self-end">
+            <span
+              className={`rounded-full px-2 py-1 text-xs font-semibold ${CHIP_TONES[chip.tone]}`}
+            >
+              {chip.text}
+            </span>
+            <AccountMenu />
+          </div>
         </div>
       </header>
 
@@ -418,7 +427,7 @@ export default function Shell() {
           {tabs.map((tab) => {
             // The back arrow points at the meet list, which would otherwise
             // light up as the active tab while you're inside a meet.
-            const isBackLink = openMeet !== undefined && tab.to === "/meets";
+            const isBackLink = params.meetId !== undefined && tab.to === "/meets";
             return (
               <NavLink
                 key={tab.to}

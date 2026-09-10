@@ -251,12 +251,25 @@ sees a byte of the other's roster.
 object. `server_at` is ours, and is what a cursor pages through — a device with
 a wrong clock shouldn't be able to hide a change from everyone else.
 
-**Reading and writing are not the same permission.** Everyone on a team reads
-the same set; only a coach writes most of it. A swimmer whose account a coach
-has linked to their roster entry may enter and scratch *themselves*, and
-nothing else — not heats, because seeding is the coach's call; not watches,
-because you don't time your own race; not the athlete record, because editing
-the name on it is how you'd quietly become someone else.
+**Reading and writing are not the same permission**, and inside a meet the
+question isn't which team you're from — it's whether you're running it.
+
+| | Meet admin | Coach of a racing team | Linked athlete |
+| --- | :-: | :-: | :-: |
+| Meet details, lineup, heats | ✓ | | |
+| Rulings — DQ, no-show, override | ✓ | | |
+| Watches | ✓ | ✓ | |
+| Entries | ✓ | their own team's | themselves |
+
+Watches and rulings sit on opposite sides of that line deliberately. A watch is
+*evidence*: several per lane, resolved by median, and one more never overwrites
+anybody — so every coach keeps their stopwatch. A ruling is a *decision*, and
+with two schools in the water the decision isn't one of the schools' to make.
+
+A swimmer may enter and scratch themselves and nothing else — not heats,
+because seeding isn't theirs; not watches, because you don't time your own
+race; not the athlete record, because editing the name on it is how you'd
+quietly become someone else.
 
 `app/state/auto-sync.tsx` pushes on its own, and is built to stay off the
 render path:
@@ -302,6 +315,8 @@ until somebody decides otherwise.
 | `POST /api/auth/start`, `/verify` | Send a login code; trade it for a session |
 | `GET`/`PATCH`/`DELETE /api/auth/session` | Who's signed in; sign out |
 | `GET`/`POST`/`PATCH`/`DELETE /api/memberships` | Who's on a team, and who wants to be |
+| `GET`/`POST`/`DELETE /api/meets/:id/admins` | Who runs a meet |
+| `GET`/`PATCH`/`POST`/`DELETE /api/profile` | Your name, and the contacts you sign in with |
 | `GET`/`POST /api/invites` | Inspect or mint a one-time invitation |
 | `GET`/`POST`/`DELETE /api/timer/grant` | The coach's end of the timing QR code |
 | `GET /api/timer/meet` | One meet, as much as a timer may see |
@@ -364,11 +379,28 @@ keeps working with no network and no session, which is the state a phone is in
 when pool wifi drops mid-meet. Signing in is how a season gets _onto_ a device
 and how the server knows whose it is — not a gate in front of a stopwatch.
 
+Identity is a set, not a value: an account can hold several contacts, and any
+of them opens it. A coach with a school address and a mobile signs in with
+whichever is to hand rather than ending up with two accounts owning half a
+season each. Adding one sends a code to it first — an address you can't read
+isn't yours, and without that check anybody could attach somebody else's.
+**Profile** is where they're managed, from the account circle top right.
+
 Roles are `head_coach`, `coach`, `athlete`, `parent`, `viewer`; only coaches can
 admit people or hand out invitations, and only an active membership carries any
 power at all. Being a member is not permission to change things — see the write
 rules under Sync. Timers are deliberately not a role: they hold a meet-scoped
 grant instead, so they can work without giving a name.
+
+**Running a meet is not a team role.** Every other role here belongs to a team —
+you coach Chaparral, you swim for Horizon — but a meet belongs to no team, so
+the person deciding between three watches on lane 4, or ruling a DQ, can't be
+defined by which school they're from. Often it's the host's head coach; at a
+bigger meet it's a referee who coaches nobody. So a meet has *administrators*,
+managed under **Setup → Running this meet**, and whoever first puts a meet on
+the server takes the job. That keeps your own inter-squad meet behaving exactly
+as it always has; the limits only bite once somebody else's coach is in the
+same water.
 
 **An account can be a swimmer.** A coach links one from the athlete's page,
 choosing among people already admitted to the team — self-claiming would let

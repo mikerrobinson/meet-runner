@@ -3,13 +3,23 @@ import { Link, useParams } from "react-router";
 import type { Route } from "./+types/run";
 import { LaneAssignSheet } from "~/components/LaneAssignSheet";
 import { LaneTile } from "~/components/LaneTile";
-import { Banner, Button, EmptyState, Field, Sheet, TextInput } from "~/components/ui";
+import {
+  Banner,
+  Button,
+  EmptyState,
+  Field,
+  Segmented,
+  Sheet,
+  TextInput,
+} from "~/components/ui";
 import { useElapsed, useWakeLock } from "~/hooks/use-stopwatch";
 import { heatsForEvent } from "~/lib/heats";
 import { resultsForHeat, watchesForLane } from "~/lib/timing";
 import { formatClock, formatTime, parseTime } from "~/lib/time";
 import { enrollmentIndex, rosterForMeet, seasonForMeet } from "~/lib/roster";
 import { useAppStore } from "~/state/app-store";
+import { useMeetRole } from "~/state/meet-role";
+import { RunControl } from "./run-control";
 import { useViewPrefs } from "~/state/view-prefs";
 import {
   byAthlete,
@@ -39,11 +49,26 @@ const METHOD_LABEL: Record<string, string> = {
   official: "set by hand",
 };
 
+/**
+ * Running a meet, from whichever seat you're in.
+ *
+ * Three people are working the same water at once and they need different
+ * screens: an administrator signing off times at a table, a coach with a
+ * multi-lane stopwatch on the deck, and a timer with one lane and one button
+ * (that one lives at `/timer`, behind a QR code, with no account at all).
+ *
+ * The default follows the role, because the common case is that you want the
+ * screen your job needs. An administrator can still switch — they often hold a
+ * watch too — but a coach is never shown a sign-off desk they can't use.
+ */
 export default function RunMeet() {
   const store = useAppStore();
   const { meetId } = useParams();
+  const role = useMeetRole();
   const meet = store.meets.find((m) => m.id === meetId);
   const roster = store.athletes;
+  const [view, setView] = useState<"control" | "stopwatch" | null>(null);
+  const showing = view ?? (role.admin ? "control" : "stopwatch");
 
   const [editingLane, setEditingLane] = useState<number | null>(null);
   const [assigningLane, setAssigningLane] = useState<number | null>(null);
@@ -128,17 +153,45 @@ export default function RunMeet() {
 
   if (!meet) return null;
 
+  // The switcher only exists for people who have a real choice: an
+  // administrator who also holds a watch. Showing it to a coach would offer a
+  // screen whose every button the server refuses.
+  const switcher = role.admin ? (
+    <div className="mb-3">
+      <Segmented
+        value={showing}
+        onChange={(next) => setView(next as "control" | "stopwatch")}
+        options={[
+          { value: "control", label: "Control" },
+          { value: "stopwatch", label: "Stopwatch" },
+        ]}
+      />
+    </div>
+  ) : null;
+
+  if (showing === "control") {
+    return (
+      <div>
+        {switcher}
+        <RunControl meet={meet} />
+      </div>
+    );
+  }
+
   if (!event) {
     return (
-      <EmptyState title="No events yet">
-        <Link
-          to={`/meets/${meet.id}/setup`}
-          className="font-semibold text-blue-600 underline"
-        >
-          Add events in setup
-        </Link>{" "}
-        before running the meet.
-      </EmptyState>
+      <>
+        {switcher}
+        <EmptyState title="No events yet">
+          <Link
+            to={`/meets/${meet.id}`}
+            className="font-semibold text-blue-600 underline"
+          >
+            Add events under Info
+          </Link>{" "}
+          before running the meet.
+        </EmptyState>
+      </>
     );
   }
 
@@ -147,6 +200,7 @@ export default function RunMeet() {
 
   return (
     <div className="space-y-3">
+      {switcher}
       {/* Event navigation */}
       <div className="flex items-center gap-2">
         <Button

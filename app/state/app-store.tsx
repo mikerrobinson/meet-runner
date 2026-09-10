@@ -41,9 +41,15 @@ import {
   withoutDiving,
 } from "~/lib/events";
 import { buildHeats, shuffle } from "~/lib/heats";
-import { makeRuling, makeWatch } from "~/lib/timing";
+import {
+  acceptResult,
+  activeLanes,
+  makeRuling,
+  makeWatch,
+} from "~/lib/timing";
 import { generateId } from "~/lib/id";
 import {
+  acceptedResultId,
   isDeleted,
   isDiving,
   rulingId,
@@ -51,6 +57,7 @@ import {
   todayIso,
 } from "~/types/meet";
 import type {
+  AcceptedResult,
   EnrollmentStatus,
   Gender,
   Heat,
@@ -207,6 +214,27 @@ interface AppStore {
   clearLaneTimes: (id: string, heat: Heat, lane: number) => void;
   /** Drop a single watch — one timer's time, not the lane's. */
   removeWatch: (id: string, watchId: string) => void;
+
+  /* Signing off — what makes a time official */
+
+  /**
+   * Accept a lane, as it stands or corrected. `by` is the account doing it.
+   *
+   * The correction and the acceptance are one act on purpose: an administrator
+   * looking at a lane either agrees with the watches or doesn't, and either
+   * way what they decide is the result.
+   */
+  acceptLane: (
+    id: string,
+    heat: Heat,
+    lane: number,
+    by: string | undefined,
+    override?: Partial<Pick<AcceptedResult, "timeMs" | "status" | "athleteId">>,
+  ) => void;
+  /** Take a sign-off back, returning the lane to what the watches say. */
+  unacceptLane: (id: string, heat: Heat, lane: number) => void;
+  /** Accept every lane in a heat that hasn't been signed off yet. */
+  acceptHeat: (id: string, heat: Heat, by: string | undefined) => void;
 }
 
 const AppStoreContext = createContext<AppStore | null>(null);
@@ -915,6 +943,42 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           ...m,
           watches: m.watches.filter((w) => w.id !== watchId),
         })),
+
+      acceptLane: (id, heat, lane, by, override) =>
+        editMeet(id, (m) => {
+          const accepted = acceptResult(m, heat, lane, by, override);
+          if (!accepted) return m;
+          return {
+            ...m,
+            results: [
+              ...m.results.filter((r) => r.id !== accepted.id),
+              accepted,
+            ],
+          };
+        }),
+
+      unacceptLane: (id, heat, lane) =>
+        editMeet(id, (m) => ({
+          ...m,
+          results: m.results.filter(
+            (r) => r.id !== acceptedResultId(heat.id, lane),
+          ),
+        })),
+
+      acceptHeat: (id, heat, by) =>
+        editMeet(id, (m) => {
+          // Only the lanes still outstanding, so "accept all" never quietly
+          // rewrites a correction somebody already made.
+          const pending = activeLanes(m, heat).filter(
+            (lane) => !m.results.some((r) => r.id === acceptedResultId(heat.id, lane)),
+          );
+          if (pending.length === 0) return m;
+
+          const added = pending
+            .map((lane) => acceptResult(m, heat, lane, by))
+            .filter((r): r is AcceptedResult => r !== null);
+          return { ...m, results: [...m.results, ...added] };
+        }),
     };
   }, [
     ready,

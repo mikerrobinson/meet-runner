@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
-import type { Route } from "./+types/registration";
+import type { Route } from "./+types/entries";
 import { AthleteSheet } from "~/components/AthleteSheet";
 import { Button, EmptyState, TextInput } from "~/components/ui";
 import { enrollmentIndex, rosterForMeet, seasonForMeet } from "~/lib/roster";
 import { useAppStore } from "~/state/app-store";
+import { canEditEntriesFor, canSeeEntries, useMeetRole } from "~/state/meet-role";
+import { whyNotEnter } from "~/lib/events";
 import { useViewPrefs } from "~/state/view-prefs";
 import {
   byAthlete,
@@ -18,7 +20,7 @@ import {
 } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Registration · Meet Runner" }];
+  return [{ title: "Entries · Meet Runner" }];
 }
 
 /**
@@ -80,6 +82,7 @@ function eventFor(race: Race, athlete: Athlete): MeetEvent | undefined {
 
 export default function Registration() {
   const { team, athletes, meets, toggleEntry, enrol } = useAppStore();
+  const role = useMeetRole();
   const { nameOrder } = useViewPrefs();
   const { meetId } = useParams();
   const [params] = useSearchParams();
@@ -163,6 +166,18 @@ export default function Registration() {
   }, [meet?.entries]);
 
   if (!meet) return null;
+
+  // A meet can keep lineups to the teams they belong to. Before the racing, a
+  // lineup is competitive information; a reader with no stake in the meet has
+  // no claim on it, and the results are public either way.
+  if (!canSeeEntries(role, meet)) {
+    return (
+      <EmptyState title="Entries aren't public for this meet">
+        The coaches involved can see their own. Results appear here as they
+        happen, whatever this is set to.
+      </EmptyState>
+    );
+  }
 
   const entryCount = (event?: MeetEvent) =>
     event ? (meet.entries[event.id] ?? []).length : 0;
@@ -314,6 +329,23 @@ export default function Registration() {
                     const isIn =
                       event !== undefined &&
                       registered.has(`${event.id}|${athlete.id}`);
+                    // Who may change this cell is a per-swimmer question: an
+                    // administrator may change any, a coach only their own
+                    // team's, a swimmer only their own and only when the meet
+                    // allows it.
+                    const mayEdit =
+                      event !== undefined &&
+                      // Every row here is from this device's team — the grid
+                      // draws that roster. An administrator's multi-team grid
+                      // is still to come.
+                      canEditEntriesFor(role, meet, athlete.id, team.id);
+                    // Entry limits are the meet's rules, so they're checked
+                    // here rather than discovered after the tap.
+                    const blocked =
+                      event !== undefined && !isIn
+                        ? whyNotEnter(meet, athlete.id, event.id)
+                        : null;
+                    const locked = event !== undefined && (!mayEdit || blocked !== null);
                     return (
                       <td
                         key={race.key}
@@ -321,9 +353,13 @@ export default function Registration() {
                       >
                         <button
                           type="button"
-                          disabled={event === undefined}
+                          disabled={event === undefined || locked}
                           aria-pressed={isIn}
                           aria-label={`${displayName(athlete, nameOrder)} in ${raceLabel(race)}`}
+                          // The reason travels with the control, so a cell
+                          // that won't take a tap can say why instead of just
+                          // refusing.
+                          title={blocked ?? undefined}
                           onClick={() =>
                             event && toggleEntry(meet.id, event.id, athlete.id)
                           }
@@ -331,8 +367,10 @@ export default function Registration() {
                             event === undefined
                               ? "cursor-not-allowed bg-slate-100 text-slate-300 dark:bg-slate-800/60 dark:text-slate-700"
                               : isIn
-                                ? "bg-emerald-500 text-white active:bg-emerald-600"
-                                : `${tone.cell} text-transparent active:bg-slate-200 dark:active:bg-slate-700`
+                                ? `bg-emerald-500 text-white ${mayEdit ? "active:bg-emerald-600" : "opacity-80"}`
+                                : locked
+                                  ? `${tone.cell} cursor-not-allowed text-transparent`
+                                  : `${tone.cell} text-transparent active:bg-slate-200 dark:active:bg-slate-700`
                           }`}
                         >
                           {event === undefined ? "·" : "✓"}

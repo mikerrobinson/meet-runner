@@ -11,6 +11,11 @@ import {
 import { canUseTeam, membershipIn } from "~/lib/auth.server";
 import { isCoach } from "~/lib/identity";
 import {
+  administeredMeets,
+  claimUnadministeredMeet,
+  meetsAdministeredBy,
+} from "~/lib/admins.server";
+import {
   ensureObjectStore,
   meetIdsFor,
   pullObjects,
@@ -31,11 +36,18 @@ import type { ObjectScope, SyncObject } from "~/lib/objects";
  * read and write. That's `team:{id}`, every meet the team is racing, and the
  * global people those reference — never another team's roster.
  *
- * Reading and writing are not the same permission. Everyone on the team reads
- * the same set; only a coach may write most of it. An athlete may enter and
- * scratch *themselves* and nothing else — which is the original reason this
- * app exists, iPads handed round before a meet, and is also as far as it goes:
- * before this check, admitting a swimmer handed them the whole season.
+ * Reading and writing are not the same permission, and inside a meet the
+ * question isn't which team you're from — it's whether you're running it.
+ *
+ *   meet admin   the meet, its lineup, its heats, and every ruling
+ *   coach        their own team, their own swimmers' entries, and watches
+ *   athlete      entering and scratching themselves
+ *
+ * Watches and rulings sit on opposite sides of that line deliberately. A watch
+ * is evidence: several per lane, resolved by median, and one more never
+ * overwrites anybody — so every coach keeps their stopwatch. A ruling is a
+ * decision, and at a meet with two schools in the water the decision isn't one
+ * of the schools' to make.
  */
 export async function action({ request, context }: Route.ActionArgs) {
   const env = context.cloudflare.env as SyncEnv;
@@ -65,6 +77,11 @@ export async function action({ request, context }: Route.ActionArgs) {
     const membership = user ? await membershipIn(db, user.id, teamId) : undefined;
     const coach = !user || (membership ? isCoach(membership.role) : false);
     const ownAthleteId = coach || !user ? null : await athleteFor(db, user.id);
+    const adminOf = await meetsAdministeredBy(db, user?.id);
+    // An unauthenticated caller only gets here when the deployment has no
+    // SYNC_TOKEN and no accounts at all — a single-coach install, where there
+    // is nobody to be an administrator *other* than whoever is holding it.
+    const anonymous = !user;
 
     const meetIds = new Set(await meetIdsFor(db, teamId));
 
@@ -99,9 +116,38 @@ export async function action({ request, context }: Route.ActionArgs) {
           403,
         );
       }
+    } else if (!anonymous) {
+      const ourAthletes = await athletesEnrolledBy(db, teamId);
+      // A meet nobody runs yet is open — whoever pushes it takes it on, a few
+      // lines below. Without this the first push is refused for not being an
+      // administrator the meet doesn't have.
+      const spokenFor = await administeredMeets(db, [
+        ...new Set(
+          changes
+            .filter((object) => object.scope.kind === "meet")
+            .map((object) => (object.scope as { id: string }).id),
+        ),
+      ]);
+      const refusedAdmin = changes.find(
+        (object) => !mayWriteAsCoach(object, adminOf, spokenFor, ourAthletes),
+      );
+      if (refusedAdmin) {
+        throw new SyncError(
+          refusedAdmin.type === "entry"
+            ? "That swimmer isn't on your roster."
+            : "Whoever is running this meet decides that. You can still record times.",
+          403,
+        );
+      }
     }
 
     const pushed = await pushObjects(db, changes);
+
+    // A meet nobody administrates goes to whoever just put it on the server.
+    for (const object of changes) {
+      if (object.type !== "meet" || object.deletedAt) continue;
+      await claimUnadministeredMeet(db, object.id, user?.id);
+    }
     const pulled = await pullObjects(
       db,
       [
@@ -187,4 +233,58 @@ function mayWriteAsAthlete(
   if (object.type !== "entry") return false;
   const entry = object.data as { athleteId?: string } | null;
   return entry?.athleteId === ownAthleteId;
+}
+
+/** Athlete ids a team has enrolled, in any season. */
+async function athletesEnrolledBy(
+  db: D1Database,
+  teamId: string,
+): Promise<Set<string>> {
+  await ensureObjectStore(db);
+  const { results } = await db
+    .prepare(
+      `SELECT data FROM objects
+       WHERE type = 'enrollment' AND scope = ? AND deleted_at IS NULL`,
+    )
+    .bind(`team:${teamId}`)
+    .all<{ data: string }>();
+
+  const ids = new Set<string>();
+  for (const row of results) {
+    const enrollment = JSON.parse(row.data) as { athleteId?: string };
+    if (enrollment.athleteId) ids.add(enrollment.athleteId);
+  }
+  return ids;
+}
+
+/**
+ * What a coach may write in a meet they don't run.
+ *
+ * Their own team's data outright; inside the meet, their own swimmers' entries
+ * and any watch. Everything that decides how the meet goes — the running
+ * order, the seeding, the rulings, the meet's own details — belongs to whoever
+ * is administrating it, and a coach who *is* administrating passes this
+ * trivially because the meet is in `adminOf`.
+ */
+function mayWriteAsCoach(
+  object: SyncObject,
+  adminOf: Set<string>,
+  spokenFor: Set<string>,
+  ourAthletes: Set<string>,
+): boolean {
+  // A team's own data, and people, are not meet business.
+  if (object.scope.kind === "team" || object.scope.kind === "global") return true;
+  if (adminOf.has(object.scope.id)) return true;
+  // Nobody runs it yet, so this push is the one that claims it.
+  if (!spokenFor.has(object.scope.id)) return true;
+
+  // A watch is evidence, and an extra one never overwrites anybody.
+  if (object.type === "watch") return true;
+
+  if (object.type === "entry") {
+    const entry = object.data as { athleteId?: string } | null;
+    return entry?.athleteId ? ourAthletes.has(entry.athleteId) : false;
+  }
+
+  return false;
 }

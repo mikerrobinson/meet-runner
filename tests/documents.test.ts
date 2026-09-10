@@ -10,7 +10,7 @@ import { buildHeats } from "../app/lib/heats.ts";
   eq(fresh.course, "SCY", "new meets default to SCY");
   eq(fresh.options.laneCount, 6, "new meets default to 6 lanes");
   eq("opponent" in fresh, false, "opponent is gone");
-  eq(fresh.version, 7, "doc version bumped");
+  eq(fresh.version, 8, "doc version bumped");
   eq(fresh.teamIds, ["team1"], "one team is still a list of teams");
 
   // Two schools, one meet — the shape the old model couldn't hold.
@@ -25,7 +25,23 @@ import { buildHeats } from "../app/lib/heats.ts";
 
   // A partial options patch keeps the other defaults.
   const wide = createMeetDoc("team1", { options: { laneCount: 10 } });
-  eq(wide.options, { laneCount: 10, leadGender: "F", includeDiving: false }, "partial options patch merges");
+  eq(
+    wide.options,
+    {
+      laneCount: 10,
+      leadGender: "F",
+      includeDiving: false,
+      limits: { maxIndividual: 2, maxRelays: 2, maxTotal: 4 },
+      entryVisibility: "everyone",
+      athletesMayEnter: false,
+    },
+    "partial options patch merges, and the rest keep their defaults",
+  );
+  // NFHS caps by default, because that's what a high-school meet runs under.
+  eq(fresh.options.limits.maxTotal, 4, "four events");
+  eq(fresh.options.limits.maxIndividual, 2, "at most two individual");
+  eq(fresh.options.athletesMayEnter, false, "swimmers don't pick their own lineup unless told");
+  eq(fresh.options.entryVisibility, "everyone", "and lineups are open unless a meet says otherwise");
 
   // A document off the wire, with a field the model no longer has.
   const old = parseMeetDoc({

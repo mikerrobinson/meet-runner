@@ -1,33 +1,37 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import type { Route } from "./+types/meet-overview";
+import type { Route } from "./+types/meet-info";
 import { Banner, Button, Card, SectionTitle } from "~/components/ui";
 import { TimerAccess } from "~/components/TimerAccess";
 import { downloadFile, resultsToCsv } from "~/lib/csv";
 import { recordedCount } from "~/lib/timing";
 import { useAppStore } from "~/state/app-store";
-import { courseLabel, meetSubtitle } from "~/types/meet";
+import {
+  courseLabel,
+  eventName,
+  meetSubtitle,
+  type MeetDoc,
+} from "~/types/meet";
+import {
+  MeetEventsEditor,
+  MeetOptionsEditor,
+} from "~/components/MeetSetup";
+import { canEditMeet, useMeetRole } from "~/state/meet-role";
+import { eventClosed } from "~/lib/timing";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Meet · Meet Runner" }];
 }
 
-const MODES = [
-  { slug: "setup", title: "Setup", detail: "Meet details and event order" },
-  {
-    slug: "registration",
-    title: "Registration",
-    detail: "Enter swimmers in events",
-  },
-  { slug: "run", title: "Run Meet", detail: "Heat-by-heat stopwatch" },
-  { slug: "results", title: "Results", detail: "Times and export" },
-];
-
-export default function MeetOverview() {
+export default function MeetInfo() {
   const { meets, team, athletes, deleteMeet } = useAppStore();
   const { meetId } = useParams();
   const navigate = useNavigate();
+  const role = useMeetRole();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editing, setEditing] = useState(false);
+
+  const mayEdit = canEditMeet(role);
 
   const meet = meets.find((m) => m.id === meetId);
   if (!meet) return null;
@@ -50,12 +54,11 @@ export default function MeetOverview() {
       <Card>
         <SectionTitle
           action={
-            <Link
-              to={`/meets/${meet.id}/setup`}
-              className="text-sm font-semibold text-blue-600"
-            >
-              Edit ›
-            </Link>
+            mayEdit ? (
+              <Button size="sm" onClick={() => setEditing((v) => !v)}>
+                {editing ? "Done" : "Edit"}
+              </Button>
+            ) : undefined
           }
         >
           {meet.name}
@@ -87,27 +90,19 @@ export default function MeetOverview() {
         </dl>
       </Card>
 
-      <div className="space-y-2">
-        {MODES.map((mode) => (
-          <Link
-            key={mode.slug}
-            to={`/meets/${meet.id}/${mode.slug}`}
-            className="flex touch-manipulation items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 active:bg-slate-100 dark:border-slate-800 dark:bg-slate-900 dark:active:bg-slate-800"
-          >
-            <span>
-              <span className="block text-lg font-bold">{mode.title}</span>
-              <span className="block text-sm text-slate-500 dark:text-slate-400">
-                {mode.detail}
-              </span>
-            </span>
-            <span aria-hidden className="text-2xl text-slate-400">
-              ›
-            </span>
-          </Link>
-        ))}
-      </div>
+      {/* Editing is the same page with controls, not a different screen. A
+          reader sees the lineup; whoever runs the meet sees the lineup and can
+          change it. */}
+      {editing ? (
+        <>
+          <MeetEventsEditor meet={meet} />
+          <MeetOptionsEditor meet={meet} />
+        </>
+      ) : (
+        <EventList meet={meet} />
+      )}
 
-      <TimerAccess meet={meet} />
+      {mayEdit && <TimerAccess meet={meet} />}
 
       <Card>
         <SectionTitle>Export</SectionTitle>
@@ -167,5 +162,56 @@ export default function MeetOverview() {
         )}
       </Card>
     </div>
+  );
+}
+
+/**
+ * The running order, as a reader sees it.
+ *
+ * Shows how far along the meet is by marking events official — which is
+ * derived from every lane having been signed off, so it can't claim more than
+ * the results underneath it.
+ */
+function EventList({ meet }: { meet: MeetDoc }) {
+  if (meet.events.length === 0) {
+    return (
+      <Card>
+        <SectionTitle>Events</SectionTitle>
+        <p className="text-sm text-slate-500">No events yet.</p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <SectionTitle>Events ({meet.events.length})</SectionTitle>
+      <ol className="divide-y divide-slate-100 dark:divide-slate-800">
+        {meet.events.map((event, index) => {
+          const entered = (meet.entries[event.id] ?? []).length;
+          const official = eventClosed(meet, event.id);
+          return (
+            <li
+              key={event.id}
+              className="flex items-center gap-3 py-2 text-sm"
+            >
+              <span className="w-6 text-right tabular-nums text-slate-400">
+                {index + 1}
+              </span>
+              <span className="min-w-0 flex-1 truncate font-medium">
+                {eventName(event)}
+              </span>
+              {official && (
+                <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+                  official
+                </span>
+              )}
+              <span className="shrink-0 text-xs text-slate-500">
+                {entered} entered
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </Card>
   );
 }

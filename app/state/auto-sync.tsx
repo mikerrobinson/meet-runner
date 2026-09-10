@@ -86,10 +86,15 @@ const DEBOUNCE_MS = 2500;
  * Without this, news only arrives when the device has something of its own to
  * send or the tab regains focus — so a coach watching the registration grid
  * while someone else fills it in would sit there looking at a stale screen.
- * Ten seconds is short enough to feel live on a deck and long enough that an
- * idle tab costs almost nothing: an empty exchange is about 130 bytes.
+ * Two seconds, because the screen with the tightest need is an administrator
+ * watching three timers' watches land on the same lane — ten felt broken. An
+ * empty exchange is about 130 bytes, so an idle tab still costs little.
+ *
+ * This is the ceiling of what polling can sensibly do. Running a meet properly
+ * wants a push channel (Durable Objects on Workers); the object model is
+ * already the right shape for it, and this is the placeholder until then.
  */
-const POLL_MS = 10_000;
+const POLL_MS = 2_000;
 /** Backoff after failures — a dead pool wifi shouldn't be retried every second. */
 const BACKOFF_MS = [4000, 10_000, 30_000, 60_000];
 
@@ -419,23 +424,35 @@ export function AutoSyncProvider({ children }: { children: ReactNode }) {
   }, [team.id]);
 
   /**
-   * Ask for news on a timer while the tab is visible.
+   * Ask for news on a timer while the tab is visible, and straight away on
+   * opening.
    *
-   * Stops the moment the tab is hidden — a backgrounded device has nobody
-   * looking at it, and its timers get throttled to uselessness anyway.
+   * The immediate pull is the point. Waiting out a full interval before the
+   * first one meant opening the app showed whatever this device last knew —
+   * so a meet somebody else had just created, or entries a coach had just
+   * changed, simply weren't there for ten seconds with nothing to say why.
+   * Coming back to a backgrounded tab has the same problem and the same fix.
+   *
+   * Polling stops the moment the tab is hidden: a backgrounded device has
+   * nobody looking at it, and its timers get throttled to uselessness anyway.
    */
   useEffect(() => {
     if (!ready || !enabled) return;
 
     let timer: ReturnType<typeof setInterval> | null = null;
 
+    const pull = () => {
+      if (stoppedRef.current || !enabledRef.current) return;
+      wantPullRef.current = true;
+      void pumpRef.current();
+    };
+
     const start = () => {
       if (timer !== null) return;
-      timer = setInterval(() => {
-        if (stoppedRef.current || !enabledRef.current) return;
-        wantPullRef.current = true;
-        void pumpRef.current();
-      }, POLL_MS);
+      // `pump` already refuses to overlap itself, so an immediate pull can't
+      // pile up on one that's still in flight.
+      pull();
+      timer = setInterval(pull, POLL_MS);
     };
 
     const stop = () => {

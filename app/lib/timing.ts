@@ -7,8 +7,15 @@
  * the same official time from the same three, and nobody overwrites anybody.
  */
 
-import type { Heat, MeetDoc, Result, Ruling, WatchTime } from "~/types/meet";
-import { rulingId, watchId } from "~/types/meet";
+import type {
+  AcceptedResult,
+  Heat,
+  MeetDoc,
+  Result,
+  Ruling,
+  WatchTime,
+} from "~/types/meet";
+import { acceptedResultId, rulingId, watchId } from "~/types/meet";
 
 /**
  * Swim times are truncated to hundredths, never rounded up: two watches
@@ -124,12 +131,42 @@ export function attributedAthlete(watches: WatchTime[]): string | undefined {
  * worse than crediting them, because the swim genuinely happened and the
  * stopwatch genuinely recorded it.
  */
+export function acceptedForLane(
+  meet: Pick<MeetDoc, "results">,
+  heatId: string,
+  lane: number,
+): AcceptedResult | undefined {
+  return meet.results?.find((r) => r.id === acceptedResultId(heatId, lane));
+}
+
 export function resultForLane(
-  meet: Pick<MeetDoc, "watches" | "rulings">,
+  meet: Pick<MeetDoc, "watches" | "rulings" | "results">,
   heat: Heat,
   lane: number,
 ): Result | null {
   const watches = watchesForLane(meet, heat.id, lane);
+
+  // An accepted result is the answer, full stop. It's what makes a watch that
+  // turns up afterwards harmless rather than something to guard against.
+  const accepted = acceptedForLane(meet, heat.id, lane);
+  if (accepted) {
+    return {
+      eventId: accepted.eventId,
+      heatId: accepted.heatId,
+      athleteId: accepted.athleteId,
+      lane: accepted.lane,
+      timeMs: accepted.timeMs,
+      status: accepted.status,
+      recordedAt: accepted.acceptedAt,
+      method: accepted.fromWatches?.method ?? "official",
+      watchCount: accepted.fromWatches?.watchCount ?? watches.length,
+      manual: accepted.fromWatches === undefined,
+      accepted: true,
+      acceptedAt: accepted.acceptedAt,
+      ...(heat.lanes[lane - 1] ? {} : { attributed: true }),
+    };
+  }
+
   const seated = heat.lanes[lane - 1];
   const athleteId = seated ?? attributedAthlete(watches);
   if (!athleteId) return null;
@@ -185,7 +222,7 @@ export function resultForLane(
 
 /** Every result in a heat, in lane order. */
 export function resultsForHeat(
-  meet: Pick<MeetDoc, "watches" | "rulings">,
+  meet: Pick<MeetDoc, "watches" | "rulings" | "results">,
   heat: Heat,
 ): Result[] {
   return heat.lanes
@@ -208,7 +245,7 @@ export function recordedCount(
 
 /** Every result in the meet, for the results screen and exports. */
 export function allResults(
-  meet: Pick<MeetDoc, "watches" | "rulings" | "heats">,
+  meet: Pick<MeetDoc, "watches" | "rulings" | "results" | "heats">,
 ): Result[] {
   return meet.heats.flatMap((heat) => resultsForHeat(meet, heat));
 }
@@ -246,5 +283,112 @@ export function makeRuling(
     status,
     timeMs,
     decidedAt: Date.now(),
+  };
+}
+
+/* ----------------------------------------------------------------- closing */
+
+/**
+ * Lanes in a heat that somebody actually swam.
+ *
+ * Seeded lanes, plus any empty lane a timer put a name to. An empty lane
+ * nobody claimed isn't waiting on anything, so it can't hold a heat open.
+ */
+export function activeLanes(
+  meet: Pick<MeetDoc, "watches">,
+  heat: Heat,
+): number[] {
+  const lanes: number[] = [];
+  for (let lane = 1; lane <= heat.lanes.length; lane++) {
+    if (heat.lanes[lane - 1]) {
+      lanes.push(lane);
+      continue;
+    }
+    if (attributedAthlete(watchesForLane(meet, heat.id, lane))) lanes.push(lane);
+  }
+  return lanes;
+}
+
+/**
+ * A heat is closed once every lane that swam has been accepted.
+ *
+ * Derived rather than stored, for the same reason official times are: there is
+ * no second fact to keep in step, so "closed" can never disagree with the
+ * results underneath it. A heat nobody swam is not closed — it hasn't started.
+ */
+export function heatClosed(
+  meet: Pick<MeetDoc, "watches" | "results">,
+  heat: Heat,
+): boolean {
+  const lanes = activeLanes(meet, heat);
+  if (lanes.length === 0) return false;
+  return lanes.every((lane) => acceptedForLane(meet, heat.id, lane) !== undefined);
+}
+
+/** An event is closed once all of its heats are. Its results are then official. */
+export function eventClosed(
+  meet: Pick<MeetDoc, "watches" | "results" | "heats">,
+  eventId: string,
+): boolean {
+  const heats = meet.heats.filter((heat) => heat.eventId === eventId);
+  if (heats.length === 0) return false;
+  return heats.every((heat) => heatClosed(meet, heat));
+}
+
+/** How far along a heat is, for a screen that has to show progress. */
+export function heatProgress(
+  meet: Pick<MeetDoc, "watches" | "results">,
+  heat: Heat,
+): { accepted: number; active: number } {
+  const lanes = activeLanes(meet, heat);
+  return {
+    accepted: lanes.filter(
+      (lane) => acceptedForLane(meet, heat.id, lane) !== undefined,
+    ).length,
+    active: lanes.length,
+  };
+}
+
+/**
+ * Accept what the watches worked out for a lane, or a correction of it.
+ *
+ * `override` is how an administrator disagrees: a different time, a different
+ * status, or a different swimmer. What the watches said is kept alongside, so
+ * the record still shows what was on screen when the call was made.
+ */
+export function acceptResult(
+  meet: Pick<MeetDoc, "watches" | "rulings" | "results">,
+  heat: Heat,
+  lane: number,
+  by: string | undefined,
+  override: Partial<Pick<AcceptedResult, "timeMs" | "status" | "athleteId">> = {},
+  now = Date.now(),
+): AcceptedResult | null {
+  const proposed = resultForLane(meet, heat, lane);
+  const athleteId = override.athleteId ?? proposed?.athleteId;
+  if (!athleteId) return null;
+
+  const watches = watchesForLane(meet, heat.id, lane);
+  const derived = officialTime(watches);
+
+  return {
+    id: acceptedResultId(heat.id, lane),
+    eventId: heat.eventId,
+    heatId: heat.id,
+    lane,
+    athleteId,
+    timeMs: override.timeMs ?? proposed?.timeMs ?? 0,
+    status: override.status ?? proposed?.status ?? "OK",
+    acceptedAt: now,
+    acceptedBy: by,
+    ...(derived
+      ? {
+          fromWatches: {
+            timeMs: derived.timeMs,
+            watchCount: derived.watchCount,
+            method: derived.method,
+          },
+        }
+      : {}),
   };
 }

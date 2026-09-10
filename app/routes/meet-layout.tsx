@@ -1,9 +1,10 @@
-import { Link, Outlet, useParams } from "react-router";
+import { Link, Outlet, useLocation, useParams } from "react-router";
 import type { Route } from "./+types/meet-layout";
 import { Card, EmptyState, SectionTitle } from "~/components/ui";
 import { publicMeetDetail } from "~/lib/public.server";
 import { formatTime } from "~/lib/time";
 import { meetTypeLabel } from "~/types/meet";
+import { MeetRoleProvider } from "~/state/meet-role";
 import { useAppStore } from "~/state/app-store";
 import type { SyncEnv } from "~/lib/api.server";
 
@@ -29,11 +30,18 @@ export async function loader({ params, context }: Route.LoaderArgs) {
 export default function MeetLayout({ loaderData }: Route.ComponentProps) {
   const { meets } = useAppStore();
   const { meetId } = useParams();
+  const location = useLocation();
   const meet = meets.find((m) => m.id === meetId);
 
   // Local first, always: on a deck the store is the truth and the server may
   // be unreachable.
-  if (meet) return <Outlet />;
+  if (meet) {
+    return (
+      <MeetRoleProvider meetId={meetId}>
+        <Outlet />
+      </MeetRoleProvider>
+    );
+  }
 
   const published = loaderData.published;
   if (!published) {
@@ -49,6 +57,9 @@ export default function MeetLayout({ loaderData }: Route.ComponentProps) {
   }
 
   const swum = published.results.filter((event) => event.placings.length > 0);
+  const section = location.pathname.split("/").pop() ?? "";
+  const onResults = section === "results";
+  const onInfo = section === meetId || section === "";
 
   return (
     <div className="space-y-4">
@@ -80,6 +91,40 @@ export default function MeetLayout({ loaderData }: Route.ComponentProps) {
         </p>
       </Card>
 
+      {onInfo && (
+        <Card>
+          <SectionTitle>Events ({published.results.length})</SectionTitle>
+          <ol className="divide-y divide-slate-100 dark:divide-slate-800">
+            {published.results.map((event, index) => (
+              <li key={event.id} className="flex items-center gap-3 py-2 text-sm">
+                <span className="w-6 text-right tabular-nums text-slate-400">
+                  {index + 1}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {event.name}
+                </span>
+                {event.official && (
+                  <span className="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+                    official
+                  </span>
+                )}
+              </li>
+            ))}
+          </ol>
+        </Card>
+      )}
+
+      {!onInfo && !onResults && (
+        <Card>
+          <EmptyState title="Not on this device">
+            Entering swimmers and running a meet need the meet itself, which
+            this device doesn&rsquo;t hold. Its details and results are on the
+            other two tabs.
+          </EmptyState>
+        </Card>
+      )}
+
+      {(onInfo || onResults) && (
       <Card>
         <SectionTitle>Results</SectionTitle>
         {swum.length === 0 ? (
@@ -132,6 +177,7 @@ export default function MeetLayout({ loaderData }: Route.ComponentProps) {
           </div>
         )}
       </Card>
+      )}
     </div>
   );
 }

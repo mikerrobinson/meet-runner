@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
-import type { Route } from "./+types/setup";
 import {
   Banner,
   Button,
@@ -11,7 +10,7 @@ import {
   Segmented,
   Select,
   TextInput,
-} from "~/components/ui";
+} from "./ui";
 import {
   RELAY_DISTANCES,
   defaultEvents,
@@ -21,7 +20,8 @@ import {
   standardOrder,
 } from "~/lib/events";
 import { recordedCount } from "~/lib/timing";
-import { MeetTeams } from "~/components/MeetTeams";
+import { MeetAdmins } from "./MeetAdmins";
+import { MeetTeams } from "./MeetTeams";
 import { useAppStore } from "~/state/app-store";
 import {
   LANE_COUNTS,
@@ -42,53 +42,18 @@ import {
   type Stroke,
 } from "~/types/meet";
 
-export function meta({}: Route.MetaArgs) {
-  return [{ title: "Setup · Meet Runner" }];
-}
-
-type Tab = "events" | "options";
-
-export default function Setup() {
-  const { meets } = useAppStore();
-  const { meetId } = useParams();
-  const [tab, setTab] = useState<Tab>("events");
-
-  const meet = meets.find((m) => m.id === meetId);
-  if (!meet) return null;
-
-  return (
-    <div className="space-y-4">
-      <div className="flex gap-1 rounded-xl bg-slate-200 p-1 dark:bg-slate-800">
-        {(
-          [
-            ["events", "Events"],
-            ["options", "Options"],
-          ] as Array<[Tab, string]>
-        ).map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => setTab(value)}
-            className={`min-h-11 flex-1 touch-manipulation rounded-lg text-base font-semibold transition-colors ${
-              tab === value
-                ? "bg-white text-slate-900 shadow-sm dark:bg-slate-950 dark:text-white"
-                : "text-slate-600 dark:text-slate-300"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {tab === "events" && <EventsTab meet={meet} />}
-      {tab === "options" && <OptionsTab meet={meet} />}
-    </div>
-  );
-}
+/**
+ * The editable half of a meet.
+ *
+ * These used to be a screen of their own called Setup, reached from a tab.
+ * They're components now because "set the meet up" and "look at the meet" were
+ * never different places — the same page shows the events and the options, and
+ * grows controls for whoever is allowed to change them.
+ */
 
 /* ------------------------------------------------------------------ events */
 
-function EventsTab({ meet }: { meet: MeetDoc }) {
+export function MeetEventsEditor({ meet }: { meet: MeetDoc }) {
   const {
     addEvent,
     removeEvent,
@@ -443,7 +408,7 @@ function EventOrder({
 
 /* ----------------------------------------------------------------- options */
 
-function OptionsTab({ meet }: { meet: MeetDoc }) {
+export function MeetOptionsEditor({ meet }: { meet: MeetDoc }) {
   const { setMeetInfo, setCourse, setLaneCount, team } = useAppStore();
   const { laneCount } = meet.options;
 
@@ -536,6 +501,8 @@ function OptionsTab({ meet }: { meet: MeetDoc }) {
         homeTeamId={team.id}
         onChange={(patch) => setMeetInfo(meet.id, patch)}
       />
+
+      <MeetAdmins meetId={meet.id} teamId={team.id} />
     </div>
   );
 }

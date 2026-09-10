@@ -20,7 +20,7 @@
  * depend on which route is asking.
  */
 
-import { allResults } from "./timing";
+import { allResults, eventClosed } from "./timing";
 import { eventName, isDiving } from "~/types/meet";
 import type {
   Athlete,
@@ -149,6 +149,11 @@ export interface PublicPlacing {
   watchCount: number;
   /** Nobody was seeded here; a timer said who it was. */
   attributed: boolean;
+  /**
+   * Signed off by whoever is running the meet. Until then these numbers are
+   * what the watches worked out, and the meet isn't official.
+   */
+  accepted: boolean;
 }
 
 export interface PublicEventResults {
@@ -159,6 +164,12 @@ export interface PublicEventResults {
   gender: string;
   /** Absent for diving, which holds its place in the order but isn't timed. */
   placings: PublicPlacing[];
+  /**
+   * Every lane that swam has been signed off, so these results are official.
+   * Derived from the acceptances rather than stored, so it can't disagree with
+   * them.
+   */
+  official: boolean;
 }
 
 export interface PublicMeetDetail extends PublicMeetSummary {
@@ -208,6 +219,7 @@ export function meetResults(
         method: result.method,
         watchCount: result.watchCount,
         attributed: result.attributed === true,
+        accepted: result.accepted === true,
       };
     });
 
@@ -218,6 +230,7 @@ export function meetResults(
       stroke: event.stroke,
       gender: event.gender,
       placings: isDiving(event) ? [] : placings,
+      official: isDiving(event) ? false : eventClosed(meet, event.id),
     };
   });
 }

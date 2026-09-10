@@ -27,15 +27,19 @@ export default [
 
     // Somebody's own page: their teams, their meets, their times.
     route("users/:userId", "routes/user-detail.tsx"),
+    route("profile", "routes/profile.tsx"),
 
     route("meets", "routes/meets.tsx"),
     // Everything under a meet id runs against that one meet.
+    // A meet's sections. Read-only for everyone; the editing appears for
+    // whoever the server says may edit. Setup used to be its own screen —
+    // it's now the editable half of the meet's own page, because "set it up"
+    // and "look at it" were never different places.
     route("meets/:meetId", "routes/meet-layout.tsx", [
-      index("routes/meet-overview.tsx"),
-      route("setup", "routes/setup.tsx"),
-      route("registration", "routes/registration.tsx"),
-      route("run", "routes/run.tsx"),
+      index("routes/meet-info.tsx"),
+      route("entries", "routes/entries.tsx"),
       route("results", "routes/results.tsx"),
+      route("run", "routes/run.tsx"),
     ]),
 
     route("settings", "routes/settings.tsx"),
@@ -51,6 +55,8 @@ export default [
   route("api/teams/:teamId", "routes/api.public.team.ts"),
   route("api/meets", "routes/api.public.meets.ts"),
   route("api/meets/:meetId", "routes/api.public.meet.ts"),
+  route("api/meets/:meetId/admins", "routes/api.meet.admins.ts"),
+  route("api/meets/:meetId/me", "routes/api.meet.me.ts"),
   route("api/athletes", "routes/api.public.athletes.ts"),
   route("api/athletes/:athleteId", "routes/api.public.athlete.ts"),
   route("api/users/:userId", "routes/api.public.user.ts"),
@@ -59,6 +65,7 @@ export default [
   route("api/auth/start", "routes/api.auth.start.ts"),
   route("api/auth/verify", "routes/api.auth.verify.ts"),
   route("api/auth/session", "routes/api.auth.session.ts"),
+  route("api/profile", "routes/api.profile.ts"),
   route("api/memberships", "routes/api.memberships.ts"),
   route("api/members", "routes/api.members.ts"),
   route("api/athletes/:athleteId/link", "routes/api.athlete.link.ts"),

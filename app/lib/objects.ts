@@ -23,6 +23,7 @@
 
 import { MEET_DOC_VERSION, TEAM_DOC_VERSION } from "~/types/meet";
 import type {
+  AcceptedResult,
   Enrollment,
   Heat,
   MeetDoc,
@@ -44,7 +45,8 @@ export type SyncObjectType =
   | "entry"
   | "heat"
   | "watch"
-  | "ruling";
+  | "ruling"
+  | "result";
 
 /**
  * What an object belongs to.
@@ -236,6 +238,9 @@ function meetObjects(meet: MeetDoc): SyncObject[] {
   for (const ruling of meet.rulings) {
     objects.push({ id: ruling.id, type: "ruling", ...stamp, data: ruling });
   }
+  for (const result of meet.results) {
+    objects.push({ id: result.id, type: "result", ...stamp, data: result });
+  }
 
   return objects;
 }
@@ -291,6 +296,7 @@ export function fromObjects(objects: SyncObject[]): {
       heats: [],
       watches: [],
       rulings: [],
+      results: [],
       progress: { eventIndex: 0, heatIndex: 0 },
       updatedAt: object.updatedAt,
     });
@@ -314,6 +320,9 @@ export function fromObjects(objects: SyncObject[]): {
   for (const o of of<Ruling>("ruling")) {
     byMeet.get(scopedTo(o))?.rulings.push(o.data);
   }
+  for (const o of of<AcceptedResult>("result")) {
+    byMeet.get(scopedTo(o))?.results.push(o.data);
+  }
 
   // Heats are read by index everywhere; entries and times are sets, but a
   // stable order keeps documents comparable.
@@ -326,6 +335,7 @@ export function fromObjects(objects: SyncObject[]): {
     meet.heats.sort((a, b) => a.eventId.localeCompare(b.eventId) || a.index - b.index);
     meet.watches.sort((a, b) => a.id.localeCompare(b.id));
     meet.rulings.sort((a, b) => a.id.localeCompare(b.id));
+    meet.results.sort((a, b) => a.id.localeCompare(b.id));
     for (const list of Object.values(meet.entries)) list.sort();
   }
 

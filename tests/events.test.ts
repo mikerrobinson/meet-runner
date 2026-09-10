@@ -1,5 +1,5 @@
 import { done, eq } from "./harness.ts";
-import { RELAY_DISTANCES, convertDistances, defaultEvents, distancesFor, dualMeetRaceCount, standardOrder, withDiving, withoutDiving } from "../app/lib/events.ts";
+import { RELAY_DISTANCES, convertDistances, defaultEvents, distancesFor, dualMeetRaceCount, standardOrder, tallyEntries, teamFullFor, whyNotEnter, withDiving, withoutDiving } from "../app/lib/events.ts";
 import { eventName, isDiving } from "../app/types/meet.ts";
 import { createMeetDoc } from "../app/lib/documents.ts";
 
@@ -115,6 +115,88 @@ import { createMeetDoc } from "../app/lib/documents.ts";
 
   eq(createMeetDoc("t", { events: split }).options.includeDiving, true, "createMeetDoc infers on");
   eq(createMeetDoc("t", { events: [] }).options.includeDiving, false, "createMeetDoc infers off");
+}
+
+/* ----------------------------------------------------------- entry limits */
+
+// NFHS caps a high-school swimmer at four events, at most two individual.
+// The rules live on the meet because states vary and a time trial wants none.
+{
+  const events = defaultEvents({ course: "SCY" });
+  const free50 = events.find((e) => e.distance === 50 && e.stroke === "Free")!;
+  const free100 = events.find((e) => e.distance === 100 && e.stroke === "Free")!;
+  const fly100 = events.find((e) => e.distance === 100 && e.stroke === "Fly")!;
+  const relays = events.filter((e) => e.stroke.endsWith("Relay"));
+
+  const meet = (entries: Record<string, string[]>, limits: any = {
+    maxIndividual: 2, maxRelays: 2, maxTotal: 4,
+  }) => ({
+    events,
+    entries,
+    options: { laneCount: 6 as const, includeDiving: false, leadGender: "F" as const,
+               limits, entryVisibility: "everyone" as const, athletesMayEnter: false },
+  });
+
+  eq(tallyEntries(meet({}), "a1"), { individual: 0, relay: 0, total: 0 }, "nobody starts entered");
+  eq(whyNotEnter(meet({}), "a1", free50.id), null, "an empty card can enter anything");
+
+  const twoIndividual = meet({ [free50.id]: ["a1"], [free100.id]: ["a1"] });
+  eq(tallyEntries(twoIndividual, "a1").individual, 2, "two individual events");
+  eq(
+    whyNotEnter(twoIndividual, "a1", fly100.id),
+    "Already in 2 individual events, and this meet allows 2.",
+    "a third individual event is refused, and says why in words a coach can repeat",
+  );
+  eq(
+    whyNotEnter(twoIndividual, "a1", relays[0].id),
+    null,
+    "but a relay is a different allowance",
+  );
+
+  // Re-checking an event they're already in must never report a breach, or a
+  // full card couldn't be edited at all.
+  eq(whyNotEnter(twoIndividual, "a1", free50.id), null, "an existing entry is always fine");
+
+  const full = meet({
+    [free50.id]: ["a1"], [free100.id]: ["a1"],
+    [relays[0].id]: ["a1"], [relays[1].id]: ["a1"],
+  });
+  eq(tallyEntries(full, "a1"), { individual: 2, relay: 2, total: 4 }, "a full card");
+  eq(whyNotEnter(full, "a1", fly100.id) !== null, true, "and nothing more fits");
+
+  // No limits set is the time-trial case, and it means no limits.
+  const open = meet({ [free50.id]: ["a1"], [free100.id]: ["a1"] }, {});
+  eq(whyNotEnter(open, "a1", fly100.id), null, "a meet with no caps allows anything");
+
+  // Diving holds a place in the running order but isn't a swim.
+  const withDiving = defaultEvents({ course: "SCY", includeDiving: true });
+  const diving = withDiving.find((e) => e.stroke === "Diving");
+  if (diving) {
+    const divers = {
+      events: withDiving,
+      entries: { [diving.id]: ["a1"] },
+      options: { laneCount: 6 as const, includeDiving: true, leadGender: "F" as const,
+                 limits: { maxTotal: 4 }, entryVisibility: "everyone" as const,
+                 athletesMayEnter: false },
+    };
+    eq(tallyEntries(divers, "a1").total, 0, "diving doesn't count against a swimming cap");
+  }
+
+  /* ---- a team's allowance in one race ---- */
+  const ours = new Set(["a1", "a2", "a3"]);
+  const capped = meet({ [free50.id]: ["a1", "a2"] }, { maxPerTeamPerEvent: 2 });
+  eq(teamFullFor(capped, free50.id, ours), true, "two of ours already in, and two is the cap");
+  eq(teamFullFor(capped, free100.id, ours), false, "a different race has its own count");
+  eq(
+    teamFullFor(meet({ [free50.id]: ["a1", "a2"] }), free50.id, ours),
+    false,
+    "and with no per-team cap there's nothing to fill",
+  );
+  eq(
+    teamFullFor(capped, free50.id, new Set(["b1"])),
+    false,
+    "another team's entries don't fill ours",
+  );
 }
 
 done();

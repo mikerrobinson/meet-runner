@@ -79,12 +79,18 @@ export function createMeetDoc(
       laneCount: 6,
       leadGender: "F",
       includeDiving: true,
+      // NFHS's usual caps, which is what a high-school dual meet runs under.
+      // A meet that doesn't want them clears them rather than being told.
+      limits: { maxIndividual: 2, maxRelays: 2, maxTotal: 4 },
+      entryVisibility: "everyone",
+      athletesMayEnter: false,
     },
     events: [],
     entries: {},
     heats: [],
     watches: [],
     rulings: [],
+    results: [],
     progress: { eventIndex: 0, heatIndex: 0 },
     timer: null,
     updatedAt: Date.now(),
@@ -188,12 +194,18 @@ export function parseMeetDoc(
       includeDiving:
         doc.options?.includeDiving ??
         (doc.events ?? []).some((e) => e.stroke === "Diving"),
+      limits: doc.options?.limits ?? {},
+      entryVisibility:
+        doc.options?.entryVisibility === "own-team" ? "own-team" : "everyone",
+      athletesMayEnter: doc.options?.athletesMayEnter === true,
+      scoring: doc.options?.scoring,
     },
     events: doc.events,
     entries: doc.entries ?? {},
     heats: doc.heats ?? [],
     watches: doc.watches ?? [],
     rulings: doc.rulings ?? [],
+    results: doc.results ?? [],
     progress: doc.progress ?? { eventIndex: 0, heatIndex: 0 },
     timer: doc.timer ?? null,
     // Absent on a live meet rather than an explicit null, so a document that

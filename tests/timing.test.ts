@@ -1,5 +1,5 @@
 import { done, eq } from "./harness.ts";
-import { attributedAthlete, makeRuling, makeWatch, officialTime, resultForLane, resultsForHeat, truncateToHundredths } from "../app/lib/timing.ts";
+import { acceptResult, activeLanes, attributedAthlete, eventClosed, heatClosed, heatProgress, makeRuling, makeWatch, officialTime, resultForLane, resultsForHeat, truncateToHundredths, watchesForLane } from "../app/lib/timing.ts";
 import { watchId, type Heat } from "../app/types/meet.ts";
 
 /* ------------------------------------------------ timing */
@@ -40,7 +40,11 @@ eq(makeWatch(heat, 3, "deviceB", 27160, "stopwatch").id !== first.id, true, "a d
 eq(makeWatch(heat, 4, "deviceA", 27160, "stopwatch").id !== first.id, true, "so is a different lane");
 
 /* ---- results derived from watches ---- */
-const meet = (watches: any[], rulings: any[] = []) => ({ watches, rulings });
+const meet = (watches: any[], rulings: any[] = [], results: any[] = []) => ({
+  watches,
+  rulings,
+  results,
+});
 
 eq(resultForLane(meet([]), heat, 3), null, "a lane with nothing recorded has no result");
 eq(resultForLane(meet([]), heat, 1), null, "an empty lane never has one");
@@ -78,6 +82,7 @@ const busy = {
     { ...w(30010, "a"), lane: 4, id: watchId("h1", 4, "a") },
   ],
   rulings: [],
+  results: [],
 };
 const heat2 = { id: "h1", eventId: "e1", index: 0, lanes: [null, null, "swimmerA", "swimmerB", null, null] };
 const results = resultsForHeat(busy, heat2);
@@ -102,6 +107,7 @@ eq(results[1].timeMs, 30010, "lane 4 single");
   const meet = {
     heats: [heat],
     rulings: [],
+    results: [],
     watches: [
       { id: "h9:1:tA", eventId: "ev1", heatId: "h9", lane: 1, timerId: "tA", timeMs: 26100, recordedAt: 1, source: "stopwatch" as const },
       // Lane 4 was empty; two timers say Dana swam it.
@@ -162,6 +168,104 @@ eq(results[1].timeMs, 30010, "lane 4 single");
     "a9",
     "and doesn't depend on the order the watches arrived in",
   );
+}
+
+/* ------------------------------------------------ accepting a lane's result */
+
+// The layering the whole design rests on: watches are evidence, rulings are
+// judgements, and an accepted result is the decision. Nothing is official
+// until an administrator says so.
+{
+  const h: Heat = {
+    id: "hA", eventId: "e1", index: 0,
+    lanes: ["s1", "s2", null, null, null, null],
+  };
+  const base = {
+    heats: [h],
+    rulings: [],
+    results: [] as any[],
+    watches: [
+      { id: "hA:1:t1", eventId: "e1", heatId: "hA", lane: 1, timerId: "t1", timeMs: 27130, recordedAt: 10, source: "stopwatch" as const },
+      { id: "hA:1:t2", eventId: "e1", heatId: "hA", lane: 1, timerId: "t2", timeMs: 27150, recordedAt: 11, source: "stopwatch" as const },
+      { id: "hA:2:t1", eventId: "e1", heatId: "hA", lane: 2, timerId: "t1", timeMs: 30000, recordedAt: 12, source: "stopwatch" as const },
+    ],
+  };
+
+  eq(resultForLane(base, h, 1)!.accepted, undefined, "a computed time is a proposal, not a result");
+  eq(heatClosed(base, h), false, "and the heat is open");
+  eq(eventClosed(base, "e1"), false, "so is the event");
+  eq(heatProgress(base, h), { accepted: 0, active: 2 }, "two lanes swam, none accepted");
+
+  // Accept lane 1 as it stands.
+  const one = acceptResult(base, h, 1, "admin")!;
+  eq(one.timeMs, 27140, "accepting takes what the watches worked out");
+  eq(one.athleteId, "s1", "credited to whoever was in the lane");
+  eq(one.fromWatches, { timeMs: 27140, watchCount: 2, method: "average" }, "and records what it saw");
+
+  const after = { ...base, results: [one] };
+  eq(resultForLane(after, h, 1)!.accepted, true, "now it's official");
+  eq(heatClosed(after, h), false, "but lane 2 is still outstanding");
+
+  // The case acceptance exists for: a watch arriving after the fact.
+  const late = {
+    ...after,
+    watches: [
+      ...base.watches,
+      { id: "hA:1:t3", eventId: "e1", heatId: "hA", lane: 1, timerId: "t3", timeMs: 99999, recordedAt: 900, source: "stopwatch" as const },
+    ],
+  };
+  eq(
+    resultForLane(late, h, 1)!.timeMs,
+    27140,
+    "a watch that turns up afterwards doesn't move an accepted result",
+  );
+  eq(
+    watchesForLane(late, "hA", 1).length,
+    3,
+    "though it's still on file, timestamped, for anyone who wants to reopen it",
+  );
+
+  // An administrator disagreeing is the other half of accepting.
+  const corrected = acceptResult(base, h, 2, "admin", { timeMs: 29990, status: "DQ" })!;
+  eq(corrected.timeMs, 29990, "a correction is what gets stored");
+  eq(corrected.status, "DQ", "with the status they chose");
+  eq(corrected.fromWatches?.timeMs, 30000, "and what it overrode, for the record");
+
+  const closed = { ...base, results: [one, corrected] };
+  eq(heatClosed(closed, h), true, "every lane that swam is accepted, so the heat is closed");
+  eq(eventClosed(closed, "e1"), true, "and its only heat is closed, so the event is official");
+  eq(heatProgress(closed, h), { accepted: 2, active: 2 }, "both accepted");
+}
+
+/* ---- an unseeded lane a timer named still has to be accepted ---- */
+{
+  const h: Heat = { id: "hB", eventId: "e2", index: 0, lanes: ["s1", null, null, null, null, null] };
+  const meet = {
+    heats: [h],
+    rulings: [],
+    results: [] as any[],
+    watches: [
+      { id: "hB:1:t1", eventId: "e2", heatId: "hB", lane: 1, timerId: "t1", timeMs: 27000, recordedAt: 1, source: "stopwatch" as const },
+      { id: "hB:4:t1", eventId: "e2", heatId: "hB", lane: 4, timerId: "t1", timeMs: 26000, recordedAt: 2, source: "stopwatch" as const, athleteId: "visitor" },
+    ],
+  };
+  eq(activeLanes(meet, h), [1, 4], "a lane a timer put a name to counts as swum");
+  eq(heatClosed(meet, h), false, "so it holds the heat open until it's accepted too");
+
+  const both = {
+    ...meet,
+    results: [acceptResult(meet, h, 1, "a")!, acceptResult(meet, h, 4, "a")!],
+  };
+  eq(heatClosed(both, h), true, "accepting both closes it");
+  eq(
+    both.results[1].athleteId,
+    "visitor",
+    "and the unseeded swim stays credited to whoever the timer named",
+  );
+
+  // An empty lane nobody claimed isn't waiting on anything.
+  const quiet = { ...meet, watches: [meet.watches[0]] };
+  eq(activeLanes(quiet, h), [1], "an untouched empty lane doesn't count");
 }
 
 done();

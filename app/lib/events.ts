@@ -4,6 +4,7 @@ import type {
   EventGender,
   Gender,
   MeetCourse,
+  MeetDoc,
   MeetEvent,
   Stroke,
 } from "~/types/meet";
@@ -224,3 +225,94 @@ export function distancesFor(course: MeetCourse): number[] {
  * The same four in either course — a 200 free relay is a 200 free relay.
  */
 export const RELAY_DISTANCES = [100, 200, 400, 800];
+
+/* ------------------------------------------------------------ entry limits */
+
+export interface EntryTally {
+  individual: number;
+  relay: number;
+  total: number;
+}
+
+/** What a swimmer is already in, counted the way the limits are written. */
+export function tallyEntries(
+  meet: Pick<MeetDoc, "entries" | "events">,
+  athleteId: string,
+): EntryTally {
+  const byId = new Map(meet.events.map((e) => [e.id, e] as const));
+  let individual = 0;
+  let relay = 0;
+
+  for (const [eventId, ids] of Object.entries(meet.entries)) {
+    if (!ids.includes(athleteId)) continue;
+    const event = byId.get(eventId);
+    // Diving holds a place in the running order but isn't a swim, so it
+    // doesn't count against a swimming cap.
+    if (!event || isDiving(event)) continue;
+    if (isRelay(event)) relay += 1;
+    else individual += 1;
+  }
+
+  return { individual, relay, total: individual + relay };
+}
+
+/**
+ * Why a swimmer can't be added to an event, or null if they can.
+ *
+ * Returns the reason rather than a boolean because every caller wants to say
+ * it out loud — a greyed-out cell that won't explain itself is how a coach
+ * ends up counting on their fingers.
+ *
+ * Counts what they'd have *after* the entry, and ignores an event they're
+ * already in, so re-checking an existing entry never reports a breach.
+ */
+export function whyNotEnter(
+  meet: Pick<MeetDoc, "entries" | "events" | "options">,
+  athleteId: string,
+  eventId: string,
+): string | null {
+  const event = meet.events.find((e) => e.id === eventId);
+  if (!event) return "That race isn't in this meet.";
+  if ((meet.entries[eventId] ?? []).includes(athleteId)) return null;
+  if (isDiving(event)) return null;
+
+  const { limits } = meet.options;
+  const tally = tallyEntries(meet, athleteId);
+  const relay = isRelay(event);
+
+  if (relay && limits.maxRelays !== undefined && tally.relay >= limits.maxRelays) {
+    return `Already in ${tally.relay} relay${tally.relay === 1 ? "" : "s"}, and this meet allows ${limits.maxRelays}.`;
+  }
+  if (
+    !relay &&
+    limits.maxIndividual !== undefined &&
+    tally.individual >= limits.maxIndividual
+  ) {
+    return `Already in ${tally.individual} individual event${tally.individual === 1 ? "" : "s"}, and this meet allows ${limits.maxIndividual}.`;
+  }
+  if (limits.maxTotal !== undefined && tally.total >= limits.maxTotal) {
+    return `Already in ${tally.total} events, and this meet allows ${limits.maxTotal}.`;
+  }
+
+  return null;
+}
+
+/**
+ * Whether a team has filled its allowance in a race.
+ *
+ * Separate from the per-swimmer check because it's a different question with a
+ * different answer: a swimmer under their own cap can still be turned away
+ * because their team already has enough in that heat.
+ */
+export function teamFullFor(
+  meet: Pick<MeetDoc, "entries" | "options">,
+  eventId: string,
+  teamAthleteIds: Set<string>,
+): boolean {
+  const cap = meet.options.limits.maxPerTeamPerEvent;
+  if (cap === undefined) return false;
+  const entered = (meet.entries[eventId] ?? []).filter((id) =>
+    teamAthleteIds.has(id),
+  );
+  return entered.length >= cap;
+}

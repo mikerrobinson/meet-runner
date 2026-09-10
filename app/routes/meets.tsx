@@ -10,6 +10,7 @@ import {
   Field,
   SectionTitle,
   Select,
+  Segmented,
   Sheet,
   TextInput,
 } from "~/components/ui";
@@ -17,6 +18,7 @@ import type { MeetPatch } from "~/lib/documents";
 import { defaultEvents, dualMeetRaceCount } from "~/lib/events";
 import { recordedCount } from "~/lib/timing";
 import { useAppStore } from "~/state/app-store";
+import { useSession } from "~/state/session";
 import {
   LANE_COUNTS,
   MEET_COURSES,
@@ -24,6 +26,7 @@ import {
   courseLabel,
   meetSubtitle,
   meetTypeLabel,
+  todayIso,
   type LaneCount,
   type MeetCourse,
   type MeetDoc,
@@ -49,61 +52,172 @@ export async function loader({ context }: Route.LoaderArgs) {
   }
 }
 
+type Filter = "upcoming" | "complete" | "all";
+
+/** One line in the schedule, whether it came from this device or the server. */
+interface Row {
+  id: string;
+  name: string;
+  date: string;
+  subtitle: string;
+  detail: string;
+  /** Held on this device, so it works with no signal and can be run. */
+  local: boolean;
+}
+
+/**
+ * Upcoming or complete, decided by the date.
+ *
+ * Deliberately not "has all its results signed off": a meet that was swum but
+ * never fully accepted is still in the past, and a schedule that kept it under
+ * "upcoming" for months would be lying about the calendar. Whether the results
+ * are official is a question the meet's own page answers.
+ */
+function isUpcoming(date: string, today: string): boolean {
+  return date >= today;
+}
+
 export default function Meets({ loaderData }: Route.ComponentProps) {
   const { meets, createMeet } = useAppStore();
+  const session = useSession();
   const [adding, setAdding] = useState(false);
+  const [filter, setFilter] = useState<Filter>("upcoming");
+  const today = todayIso();
 
-  // Newest first — during the season you're nearly always after the next one
-  // or the one you just ran.
-  const ordered = useMemo(
-    () => [...meets].sort((a, b) => b.date.localeCompare(a.date)),
-    [meets],
-  );
-
-  // Meets on the server this device doesn't hold — another school's, or one
-  // from a season this device never adopted. Listed separately rather than
-  // mixed in, because the ones above are the ones you can actually run.
-  const elsewhere = useMemo(() => {
+  /**
+   * The schedule, from both sides at once.
+   *
+   * Local first and never blocking on the network: a coach opening this at a
+   * pool with dead wifi has to see their own meets immediately, because that
+   * is the situation the app exists for. Whatever the server knows is merged
+   * in when it arrives, and a meet held on this device wins — its copy is the
+   * one that can actually be run.
+   */
+  const rows = useMemo<Row[]>(() => {
     const mine = new Set(meets.map((m) => m.id));
-    return loaderData.elsewhere.filter((m) => !mine.has(m.id));
-  }, [loaderData.elsewhere, meets]);
+
+    const local: Row[] = meets.map((meet) => ({
+      id: meet.id,
+      name: meet.name,
+      date: meet.date,
+      subtitle: [meetSubtitle(meet), meet.course, meet.location]
+        .filter(Boolean)
+        .join(" · "),
+      detail: summarize(meet),
+      local: true,
+    }));
+
+    const remote: Row[] = loaderData.elsewhere
+      .filter((meet) => !mine.has(meet.id))
+      .map((meet) => ({
+        id: meet.id,
+        name: meet.name,
+        date: meet.date,
+        subtitle: [
+          meetTypeLabel(meet.type),
+          meet.course,
+          meet.teams.map((t) => t.code || t.name).join(" v "),
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        detail: `${meet.events} event${meet.events === 1 ? "" : "s"} · ${meet.entries} entr${meet.entries === 1 ? "y" : "ies"}${meet.times > 0 ? ` · ${meet.times} time${meet.times === 1 ? "" : "s"}` : ""}`,
+        local: false,
+      }));
+
+    return [...local, ...remote];
+  }, [meets, loaderData.elsewhere]);
+
+  const visible = useMemo(() => {
+    const matching = rows.filter((row) =>
+      filter === "all"
+        ? true
+        : filter === "upcoming"
+          ? isUpcoming(row.date, today)
+          : !isUpcoming(row.date, today),
+    );
+    // The next meet first when looking forward; the last one first when
+    // looking back. Both are "nearest to now", which is what you came for.
+    const ascending = filter === "upcoming";
+    return matching.sort((a, b) =>
+      ascending ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date),
+    );
+  }, [rows, filter, today]);
+
+  const counts = useMemo(
+    () => ({
+      upcoming: rows.filter((r) => isUpcoming(r.date, today)).length,
+      complete: rows.filter((r) => !isUpcoming(r.date, today)).length,
+      all: rows.length,
+    }),
+    [rows, today],
+  );
 
   return (
     <div className="space-y-4">
       <Card>
         <SectionTitle
           action={
-            <Button variant="primary" size="sm" onClick={() => setAdding(true)}>
-              + Meet
-            </Button>
+            session.status === "in" ? (
+              <Button variant="primary" size="sm" onClick={() => setAdding(true)}>
+                + Meet
+              </Button>
+            ) : undefined
           }
         >
-          Schedule ({meets.length})
+          Meets
         </SectionTitle>
 
-        {meets.length === 0 ? (
-          <EmptyState title="No meets yet">
-            Add one to set up events, register swimmers, and run it.
+        <div className="mb-3">
+          <Segmented
+            value={filter}
+            onChange={(next) => setFilter(next as Filter)}
+            options={[
+              { value: "upcoming", label: `Upcoming (${counts.upcoming})` },
+              { value: "complete", label: `Complete (${counts.complete})` },
+              { value: "all", label: `All (${counts.all})` },
+            ]}
+          />
+        </div>
+
+        {visible.length === 0 ? (
+          <EmptyState
+            title={
+              filter === "upcoming"
+                ? "Nothing coming up"
+                : filter === "complete"
+                  ? "Nothing swum yet"
+                  : "No meets yet"
+            }
+          >
+            {session.status === "in"
+              ? "Add one to set up events, register swimmers, and run it."
+              : "Sign in to set one up."}
           </EmptyState>
         ) : (
           <ul className="divide-y divide-slate-200 dark:divide-slate-800">
-            {ordered.map((meet) => (
-              <li key={meet.id}>
+            {visible.map((row) => (
+              <li key={row.id}>
                 <Link
-                  to={`/meets/${meet.id}`}
+                  to={`/meets/${row.id}`}
                   className="flex min-h-16 touch-manipulation items-center justify-between gap-3 py-2"
                 >
                   <span className="min-w-0">
-                    <span className="block truncate font-semibold">
-                      {meet.name}
+                    <span className="flex items-center gap-2">
+                      <span className="truncate font-semibold">{row.name}</span>
+                      {!row.local && (
+                        <span
+                          className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+                          title="On the server. Open it to read; it isn't on this device."
+                        >
+                          elsewhere
+                        </span>
+                      )}
                     </span>
                     <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
-                      {[meet.date, meetSubtitle(meet), meet.course, meet.location]
-                        .filter(Boolean)
-                        .join(" · ")}
+                      {[row.date, row.subtitle].filter(Boolean).join(" · ")}
                     </span>
                     <span className="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">
-                      {summarize(meet)}
+                      {row.detail}
                     </span>
                   </span>
                   <span aria-hidden className="text-xl text-slate-400">
@@ -115,43 +229,6 @@ export default function Meets({ loaderData }: Route.ComponentProps) {
           </ul>
         )}
       </Card>
-
-      {elsewhere.length > 0 && (
-        <Card>
-          <SectionTitle>Elsewhere ({elsewhere.length})</SectionTitle>
-          <p className="mb-2 text-xs text-slate-500 dark:text-slate-400">
-            Meets on the server this device doesn&rsquo;t hold. Read-only.
-          </p>
-          <ul className="divide-y divide-slate-200 dark:divide-slate-800">
-            {elsewhere.map((meet) => (
-              <li key={meet.id}>
-                <Link
-                  to={`/meets/${meet.id}`}
-                  className="flex min-h-14 touch-manipulation items-center justify-between gap-3 py-2"
-                >
-                  <span className="min-w-0">
-                    <span className="block truncate font-semibold">
-                      {meet.name}
-                    </span>
-                    <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
-                      {[
-                        meet.date,
-                        meet.teams.map((t) => t.code || t.name).join(" v "),
-                        `${meet.times} time${meet.times === 1 ? "" : "s"}`,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </span>
-                  </span>
-                  <span aria-hidden className="text-xl text-slate-400">
-                    ›
-                  </span>
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
 
       {adding && (
         <NewMeetSheet
@@ -209,7 +286,7 @@ function NewMeetSheet({
       events: withDefaults ? defaultEvents({ course }) : [],
     });
     onClose();
-    navigate(`/meets/${meet.id}/setup`);
+    navigate(`/meets/${meet.id}`);
   };
 
   return (

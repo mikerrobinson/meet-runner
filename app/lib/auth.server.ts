@@ -47,6 +47,24 @@ const SCHEMA = [
      last_team_id TEXT,
      last_season_id TEXT
    )`,
+  /**
+   * The contacts an account can be reached at and sign in with.
+   *
+   * A person is not one email address. A coach has a school address and a
+   * mobile; a parent signs up with one and later wants the other. Keeping
+   * contacts in their own table is what lets either one open the same account
+   * rather than minting a second.
+   *
+   * `contact` is the primary key, so one address can only ever belong to one
+   * account — which is the property the whole login flow rests on.
+   */
+  `CREATE TABLE IF NOT EXISTS identities (
+     contact TEXT PRIMARY KEY,
+     kind TEXT NOT NULL,
+     user_id TEXT NOT NULL,
+     added_at INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS identities_by_user ON identities (user_id)`,
   `CREATE TABLE IF NOT EXISTS login_codes (
      contact TEXT PRIMARY KEY,
      code_hash TEXT NOT NULL,
@@ -86,9 +104,29 @@ const SCHEMA = [
 
 let ready = false;
 
+/**
+ * Move the contact off `users` and into `identities`, once.
+ *
+ * Every account predates the identities table, so their contact lives in a
+ * column. Copying rather than migrating destructively: `users.contact` keeps
+ * working as a display field and as the fallback below, and nothing has to be
+ * rewritten in one go.
+ */
+async function liftContactsToIdentities(db: D1Database): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO identities (contact, kind, user_id, added_at)
+       SELECT contact, contact_kind, id, created_at FROM users
+       WHERE contact IS NOT NULL
+       ON CONFLICT(contact) DO NOTHING`,
+    )
+    .run();
+}
+
 export async function ensureAuthStore(db: D1Database): Promise<void> {
   if (ready) return;
   for (const statement of SCHEMA) await db.prepare(statement).run();
+  await liftContactsToIdentities(db);
   ready = true;
 }
 
@@ -190,12 +228,21 @@ export type VerifyResult =
  * attempt; a right one burns the challenge outright so a code can't be
  * replayed.
  */
-export async function verifyChallenge(
+/**
+ * Check a code and spend it, without touching accounts.
+ *
+ * Signing in and adding a contact to an existing account ask the same question
+ * — can you read what was sent here? — but only one of them should create an
+ * account. Fusing the two meant proving a new contact minted a stray account
+ * that then owned it, and the attach that followed was refused for a clash
+ * with a user who existed only because of the attach.
+ */
+export async function consumeLoginCode(
   db: D1Database,
   contact: Contact,
   submitted: string,
   now = Date.now(),
-): Promise<VerifyResult> {
+): Promise<{ ok: true } | { ok: false; check: ChallengeCheck }> {
   await ensureAuthStore(db);
 
   const row = await db
@@ -203,7 +250,7 @@ export async function verifyChallenge(
     .bind(contact.value)
     .first<{ code_hash: string; created_at: number; attempts: number }>();
 
-  // No challenge at all reads as expired: it's the same situation from the
+  // Nothing outstanding reads as expired: it's indistinguishable from the
   // person's side, and saying "never asked" would confirm the contact exists.
   if (!row) return { ok: false, check: { ok: false, reason: "expired" } };
 
@@ -225,6 +272,17 @@ export async function verifyChallenge(
   }
 
   await db.prepare("DELETE FROM login_codes WHERE contact = ?").bind(contact.value).run();
+  return { ok: true };
+}
+
+export async function verifyChallenge(
+  db: D1Database,
+  contact: Contact,
+  submitted: string,
+  now = Date.now(),
+): Promise<VerifyResult> {
+  const spent = await consumeLoginCode(db, contact, submitted, now);
+  if (!spent.ok) return { ok: false, check: spent.check };
 
   const existing = await findUser(db, contact.value);
   if (existing) {
@@ -251,6 +309,13 @@ export async function verifyChallenge(
        VALUES (?, ?, ?, NULL, ?, ?)`,
     )
     .bind(user.id, user.contact, user.contactKind, now, now)
+    .run();
+  // The contact they just proved is their first way in.
+  await db
+    .prepare(
+      "INSERT INTO identities (contact, kind, user_id, added_at) VALUES (?, ?, ?, ?) ON CONFLICT(contact) DO NOTHING",
+    )
+    .bind(user.contact, user.contactKind, user.id, now)
     .run();
 
   return { ok: true, user, isNew: true };
@@ -319,12 +384,129 @@ function toUser(row: UserRow): User {
 const USER_COLUMNS =
   "id, contact, contact_kind, name, created_at, last_seen_at, last_team_id, last_season_id";
 
+/**
+ * The account a contact signs in to.
+ *
+ * Through `identities`, so a second address added later opens the same account
+ * rather than a new one. The `users.contact` fallback covers the moment before
+ * the lift has run, and costs one query on a miss.
+ */
 async function findUser(db: D1Database, contact: string): Promise<User | null> {
+  const linked = await db
+    .prepare(
+      `SELECT ${USER_COLUMNS.split(", ").map((c) => "u." + c).join(", ")}
+       FROM identities i JOIN users u ON u.id = i.user_id
+       WHERE i.contact = ?`,
+    )
+    .bind(contact)
+    .first<UserRow>();
+  if (linked) return toUser(linked);
+
   const row = await db
     .prepare(`SELECT ${USER_COLUMNS} FROM users WHERE contact = ?`)
     .bind(contact)
     .first<UserRow>();
   return row ? toUser(row) : null;
+}
+
+export interface Identity {
+  contact: string;
+  kind: string;
+  addedAt: number;
+}
+
+export async function identitiesFor(
+  db: D1Database,
+  userId: string,
+): Promise<Identity[]> {
+  await ensureAuthStore(db);
+  const { results } = await db
+    .prepare(
+      "SELECT contact, kind, added_at FROM identities WHERE user_id = ? ORDER BY added_at",
+    )
+    .bind(userId)
+    .all<{ contact: string; kind: string; added_at: number }>();
+  return results.map((row) => ({
+    contact: row.contact,
+    kind: row.kind,
+    addedAt: row.added_at,
+  }));
+}
+
+/**
+ * Attach a contact to an account.
+ *
+ * The caller has to have proved the code sent to it first — an address you
+ * can't read is not yours, and without that check anyone could claim any
+ * address and lock its owner out of their own account.
+ */
+export async function addIdentity(
+  db: D1Database,
+  userId: string,
+  contact: Contact,
+  now = Date.now(),
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  await ensureAuthStore(db);
+  const taken = await db
+    .prepare("SELECT user_id FROM identities WHERE contact = ?")
+    .bind(contact.value)
+    .first<{ user_id: string }>();
+  if (taken) {
+    return {
+      ok: false,
+      reason:
+        taken.user_id === userId
+          ? "That's already on your account."
+          : "That contact belongs to another account.",
+    };
+  }
+
+  await db
+    .prepare(
+      "INSERT INTO identities (contact, kind, user_id, added_at) VALUES (?, ?, ?, ?)",
+    )
+    .bind(contact.value, contact.kind, userId, now)
+    .run();
+  return { ok: true };
+}
+
+/**
+ * Take a contact off an account.
+ *
+ * Never the last one. An account with no contact can't be signed into again,
+ * and there'd be no way back in to fix it.
+ */
+export async function removeIdentity(
+  db: D1Database,
+  userId: string,
+  contact: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  await ensureAuthStore(db);
+  const mine = await identitiesFor(db, userId);
+  if (!mine.some((i) => i.contact === contact)) {
+    return { ok: false, reason: "That isn't on your account." };
+  }
+  if (mine.length <= 1) {
+    return {
+      ok: false,
+      reason: "Add another way to sign in before removing this one.",
+    };
+  }
+
+  await db
+    .prepare("DELETE FROM identities WHERE contact = ? AND user_id = ?")
+    .bind(contact, userId)
+    .run();
+
+  // `users.contact` is what the rest of the app displays and what the fallback
+  // above reads, so it can't be left pointing at something that's gone.
+  const remaining = mine.filter((i) => i.contact !== contact)[0];
+  await db
+    .prepare("UPDATE users SET contact = ?, contact_kind = ? WHERE id = ?")
+    .bind(remaining.contact, remaining.kind, userId)
+    .run();
+
+  return { ok: true };
 }
 
 /** Hand out a session. The plaintext token is returned once and never stored. */

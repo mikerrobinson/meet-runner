@@ -404,6 +404,52 @@ export function rulingId(heatId: string, lane: number): string {
 }
 
 /**
+ * The official result for a lane, as accepted by whoever is running the meet.
+ *
+ * Watches are evidence and rulings are judgements; this is the decision. An
+ * administrator looks at what the watches worked out, and either accepts it or
+ * corrects it and accepts that. Nothing is official until they do.
+ *
+ * Storing the acceptance rather than deriving everything is what makes late
+ * times harmless. A timer's phone that was offline all afternoon can push its
+ * watches whenever it reconnects: the meet reads its results from here, so a
+ * watch arriving afterwards changes nothing on its own. It's still recorded,
+ * still timestamped, and still visible — so in the rare case it *should* change
+ * something, there's enough on file to reopen the question deliberately.
+ *
+ * `athleteId` is stored rather than read off the heat because correcting who
+ * was in a lane is one of the things acceptance is for.
+ */
+export interface AcceptedResult {
+  /** One per lane, like a ruling: `heatId:lane`. */
+  id: string;
+  eventId: string;
+  heatId: string;
+  lane: number;
+  athleteId: string;
+  timeMs: number;
+  status: ResultStatus;
+  acceptedAt: number;
+  /** The account that accepted it. */
+  acceptedBy?: string;
+  /**
+   * What the watches said at the moment of acceptance.
+   *
+   * Kept so the record can answer "what did they actually see?" later, when
+   * the watches themselves may have grown by one that arrived late.
+   */
+  fromWatches?: {
+    timeMs: number;
+    watchCount: number;
+    method: Result["method"];
+  };
+}
+
+export function acceptedResultId(heatId: string, lane: number): string {
+  return `${heatId}:${lane}`;
+}
+
+/**
  * The official time for a lane, worked out from the watches on it.
  *
  * Derived rather than stored, which is what makes concurrent timing safe:
@@ -432,6 +478,53 @@ export interface Result {
    * one kind of result a coach might want to look at twice.
    */
   attributed?: boolean;
+  /**
+   * Set when an administrator has accepted this lane. Until then the numbers
+   * are a proposal worked out from the watches, and nothing is official.
+   */
+  accepted?: boolean;
+  acceptedAt?: number;
+}
+
+/**
+ * How many races one swimmer may be in.
+ *
+ * NFHS caps a high-school swimmer at four events, at most two of them
+ * individual, and states vary — so these are numbers on the meet rather than
+ * constants. Absent means no limit, which is what an inter-squad time trial
+ * wants.
+ */
+export interface EntryLimits {
+  maxIndividual?: number;
+  maxRelays?: number;
+  maxTotal?: number;
+  /** How many entries one team may put in a single race. */
+  maxPerTeamPerEvent?: number;
+}
+
+/**
+ * Who may see a meet's entries before it's swum.
+ *
+ * A lineup is competitive information: at a dual meet, knowing who the other
+ * school is putting in the 200 Free is worth something. "everyone" suits a
+ * friendly meet where lineups are exchanged anyway; "own-team" keeps each
+ * coach to their own until the racing starts.
+ *
+ * Results are unaffected either way — those are public once they exist.
+ */
+export type EntryVisibility = "everyone" | "own-team";
+
+/**
+ * How places turn into points. Nothing computes these yet — the shape is here
+ * so a meet can carry the intent while scoring is built.
+ */
+export interface ScoringRules {
+  /** Points by place, best first: [6, 4, 3, 2, 1] for a dual meet. */
+  individual: number[];
+  /** Relays usually score differently, and fewer of them place: [8, 4]. */
+  relay: number[];
+  /** Dual meets score the girls' and boys' halves as separate contests. */
+  separateByGender: boolean;
 }
 
 export interface MeetOptions {
@@ -447,7 +540,24 @@ export interface MeetOptions {
    * recorded times survive.
    */
   leadGender: Gender;
+  limits: EntryLimits;
+  entryVisibility: EntryVisibility;
+  /**
+   * Whether a swimmer whose account is linked may enter and scratch
+   * themselves. Off by default: most coaches pick the lineup, and the ones who
+   * hand it over want to say so deliberately.
+   */
+  athletesMayEnter: boolean;
+  /** Absent until somebody sets it up; nothing scores a meet yet. */
+  scoring?: ScoringRules;
 }
+
+/** 6-4-3-2-1 individual, 8-4 relay, girls and boys scored apart. */
+export const DUAL_MEET_SCORING: ScoringRules = {
+  individual: [6, 4, 3, 2, 1],
+  relay: [8, 4],
+  separateByGender: true,
+};
 
 /**
  * A stopwatch run in progress. Anchored to an absolute epoch timestamp rather
@@ -497,6 +607,8 @@ export interface MeetDoc {
   watches: WatchTime[];
   /** Per-lane judgements: DQs, no-shows, and coach overrides. */
   rulings: Ruling[];
+  /** Lanes an administrator has signed off. Absent means not yet official. */
+  results: AcceptedResult[];
   progress: Progress;
   timer: TimerState | null;
   /**
@@ -512,7 +624,7 @@ export interface MeetDoc {
   updatedAt: number;
 }
 
-export const MEET_DOC_VERSION = 7;
+export const MEET_DOC_VERSION = 8;
 
 export function isDeleted(meet: Pick<MeetDoc, "deletedAt">): boolean {
   return meet.deletedAt != null;

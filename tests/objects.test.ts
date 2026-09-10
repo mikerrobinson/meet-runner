@@ -61,6 +61,13 @@ const meet = createMeetDoc([home.id, visitor.id], {
     { id: `${heats[0].id}:6:tA`, eventId: events[2].id, heatId: heats[0].id, lane: 6, timerId: "tA", timeMs: 68120, recordedAt: 1757000000009, source: "stopwatch", athleteId: "a9", startedAt: 1757000000000, stoppedAt: 1757000068120 },
   ],
   rulings: [{ id: `${heats[0].id}:4`, eventId: events[2].id, heatId: heats[0].id, lane: 4, status: "DQ" as const, decidedAt: 1757000000007 }],
+  // An administrator's sign-off, which is what makes a time official.
+  results: [{
+    id: `${heats[0].id}:3`, eventId: events[2].id, heatId: heats[0].id, lane: 3,
+    athleteId: "a1", timeMs: 71290, status: "OK" as const,
+    acceptedAt: 1757000000200, acceptedBy: "u1",
+    fromWatches: { timeMs: 71290, watchCount: 2, method: "average" as const },
+  }],
   timer: null, updatedAt: 1757000000100,
 });
 const dead = tombstone(createMeetDoc(home.id, { name: "Cancelled", date: "2026-12-01" }));
@@ -116,6 +123,13 @@ eq(
 eq(bm.heats, meet.heats, "and the lineup itself is untouched by it");
 eq(bm.watches.find((w) => w.lane === 6)?.startedAt, 1757000000000, "start/stop timestamps survive");
 eq(bm.rulings, meet.rulings, "rulings intact");
+eq(bm.results, meet.results, "accepted results intact");
+eq(
+  bm.results[0].fromWatches?.timeMs,
+  71290,
+  "including what the watches said when it was signed off",
+);
+eq(bm.results[0].acceptedBy, "u1", "and who signed it");
 eq(back.meets.some((m) => m.id === dead.id), false, "a deleted meet doesn't come back live");
 eq(objects.filter((o) => o.id === dead.id && o.deletedAt).length, 1, "its tombstone is in the set");
 eq(objects.some((o) => JSON.stringify(o.data).includes("eventIndex")), false, "progress never leaves the device");
@@ -223,7 +237,7 @@ const withTomb = tombstone(meet);
 const deleteAt = Date.now();
 const afterDelete = changedObjects(before, toObjects(teams, athletes, [withTomb]), deleteAt);
 const deletedTypes = [...new Set(afterDelete.filter((o) => o.deletedAt).map((o) => o.type))].sort();
-eq(deletedTypes, ["entry", "heat", "lineup", "meet", "ruling", "watch"], "deleting a meet takes its parts with it");
+eq(deletedTypes, ["entry", "heat", "lineup", "meet", "result", "ruling", "watch"], "deleting a meet takes its parts with it");
 eq(
   afterDelete.some((o) => o.type === "athlete"),
   false,
