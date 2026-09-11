@@ -52,8 +52,18 @@ Everything syncs as small **objects** carrying a **scope**:
 | Scope | Holds |
 | --- | --- |
 | `team:{id}` | team, seasons, enrollments |
-| `meet:{id}` | meet, lineup, entries, heats, watches, rulings, results |
+| `meet:{id}` | meet, lineup, entries, heats, seats, watches, rulings, results |
 | `global` | athletes |
+
+**One object per thing one person decides.** Entries, seats, watches, rulings
+and results are all keyed so that two people working at once write different
+rows. Lanes were the exception until recently — they rode inside the heat as an
+array, so six timers seating their own lane each wrote the whole array from
+whatever they'd last read. Measured against the running app: six simultaneous
+seats, **two survivors**. They're their own objects now (`seatId(heatId, lane)`),
+and `heat.lanes` is rebuilt from them on recompose, so nothing that renders had
+to change. If you ever add a field several people edit concurrently, make it a
+row, not an array.
 
 ### Times: evidence, judgement, decision
 

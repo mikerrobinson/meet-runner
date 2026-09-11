@@ -156,6 +156,77 @@ eq(
   "one meet's objects name exactly the people a device working it needs",
 );
 
+/* ---- lanes, one object each ---- */
+
+// The property this split exists for. Lanes used to ride inside the heat as an
+// array, so two people seating different lanes each wrote the whole thing and
+// one of them lost. Measured against the running app before the change: six
+// timers seating simultaneously, two survivors.
+{
+  const seated = objects.filter((o) => o.type === "seat");
+  eq(seated.length, 2, "a seat per occupied lane, and none for the empty ones");
+  eq(
+    new Set(seated.map((o) => o.id)).size,
+    2,
+    "each keyed by its own lane, so two timers never write the same object",
+  );
+
+  // Two devices, each seating a different lane, from the same starting point.
+  const base = toObjects(teams, athletes, [meet]);
+  const laneOf = (id: string) => heats[0].lanes.indexOf(id) + 1;
+  const free = [1, 2, 3, 4, 5, 6].filter((l) => !heats[0].lanes[l - 1]);
+
+  const withA = {
+    ...meet,
+    heats: [{ ...heats[0], lanes: heats[0].lanes.map((s, i) => (i === free[0] - 1 ? "a9" : s)) }],
+    updatedAt: 1757000001000,
+  };
+  const withB = {
+    ...meet,
+    heats: [{ ...heats[0], lanes: heats[0].lanes.map((s, i) => (i === free[1] - 1 ? "a2" : s)) }],
+    updatedAt: 1757000001000,
+  };
+
+  const deviceA = changedObjects(base, toObjects(teams, athletes, [withA]), 1757000001000);
+  const deviceB = changedObjects(base, toObjects(teams, athletes, [withB]), 1757000001000);
+  eq(deviceA.length, 1, "seating one lane sends one object");
+  eq(deviceA[0].type, "seat", "and it's that lane's seat");
+
+  const both = fromObjects(
+    mergeObjects(mergeObjects(base, deviceA), deviceB),
+  ).meets[0];
+  eq(
+    both.heats[0].lanes[free[0] - 1],
+    "a9",
+    "the first device's swimmer is in their lane",
+  );
+  eq(
+    both.heats[0].lanes[free[1] - 1],
+    "a2",
+    "and the second device's is too — neither write clobbered the other",
+  );
+  eq(
+    both.heats[0].lanes.filter(Boolean).length,
+    4,
+    "along with the two who were already seeded",
+  );
+
+  // Clearing a lane has to travel too, or it would look like nothing changed.
+  const emptied = {
+    ...meet,
+    heats: [{ ...heats[0], lanes: heats[0].lanes.map((s, i) => (i === 2 ? null : s)) }],
+    updatedAt: 1757000002000,
+  };
+  const cleared = changedObjects(base, toObjects(teams, athletes, [emptied]), 1757000002000);
+  const gone = cleared.filter((o) => o.type === "seat" && o.deletedAt);
+  eq(gone.length, 1, "clearing a lane deletes that lane's seat");
+  eq(
+    fromObjects(mergeObjects(base, cleared)).meets[0].heats[0].lanes[2],
+    null,
+    "and the lane comes back empty",
+  );
+}
+
 /* ---- diffing ---- */
 const before = toObjects(teams, athletes, [meet]);
 const withWatch = { ...meet, watches: [...meet.watches, { id: `${heats[0].id}:5:tC`, eventId: events[2].id, heatId: heats[0].id, lane: 5, timerId: "tC", timeMs: 69990, recordedAt: 1757000000008, source: "stopwatch" as const }], updatedAt: Date.now() };
@@ -237,7 +308,7 @@ const withTomb = tombstone(meet);
 const deleteAt = Date.now();
 const afterDelete = changedObjects(before, toObjects(teams, athletes, [withTomb]), deleteAt);
 const deletedTypes = [...new Set(afterDelete.filter((o) => o.deletedAt).map((o) => o.type))].sort();
-eq(deletedTypes, ["entry", "heat", "lineup", "meet", "result", "ruling", "watch"], "deleting a meet takes its parts with it");
+eq(deletedTypes, ["entry", "heat", "lineup", "meet", "result", "ruling", "seat", "watch"], "deleting a meet takes its parts with it");
 eq(
   afterDelete.some((o) => o.type === "athlete"),
   false,

@@ -46,13 +46,20 @@ the account menu, since that menu already covers Profile and sign-out.
 ### 4. An athlete's own screen
 See below — the permission is built and verified, only the screen is missing.
 
-### 5. Entry visibility on the wire
+### 5. Incremental timer snapshot
+`/api/timer/meet` sends the whole meet every poll — roughly 30KB for a
+24-event meet with 96 swimmers, every 3s, per timer. A `since` cursor like the
+one `/api/sync` uses would make an unchanged poll near-empty and let the
+interval come down. Now that lanes are their own objects the deltas are small
+too: a seat is a few hundred bytes, where it used to be the whole heat.
+
+### 6. Entry visibility on the wire
 `meet.options.entryVisibility` is honoured by the entries screen but not by
 sync: a coach who pulls a shared meet still receives every team's entries. The
 UI hides them; the network doesn't. Restricting reads inside the cursor is the
 harder half and was deliberately left.
 
-### 6. Scoring
+### 7. Scoring
 `ScoringRules` and `DUAL_MEET_SCORING` (6-4-3-2-1 / 8-4, split by gender) are
 defined in `types/meet.ts` and computed by nothing.
 

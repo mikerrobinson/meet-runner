@@ -201,7 +201,15 @@ export async function writeAsTimer(
   const enrollable = new Set(enrollableTeamIds);
 
   const allowed = objects.filter((object) => {
-    if (object.deletedAt) return false;
+    // Vacating a lane is a deletion, and the only one a grant may make: the
+    // swimmer a timer just moved has to leave the lane they were in.
+    if (object.deletedAt) {
+      return (
+        object.type === "seat" &&
+        object.scope.kind === "meet" &&
+        object.scope.id === grant.meetId
+      );
+    }
     // A person, and only one nobody has recorded yet. Letting a grant update
     // an existing athlete would let a code taped to a table rename the roster.
     if (object.type === "athlete") {
@@ -213,7 +221,7 @@ export async function writeAsTimer(
     // Seating somebody in the lane a timer says they swam. Built by the server
     // from the meet's own heat — see `seatFromWatch` — never accepted from the
     // phone, which is why a grant still cannot send a heat of its own.
-    if (object.type === "heat" || object.type === "entry") {
+    if (object.type === "seat" || object.type === "entry") {
       return object.scope.kind === "meet" && object.scope.id === grant.meetId;
     }
     if (object.type !== "watch") return false;

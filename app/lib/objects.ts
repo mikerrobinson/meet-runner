@@ -44,6 +44,7 @@ export type SyncObjectType =
   | "lineup"
   | "entry"
   | "heat"
+  | "seat"
   | "watch"
   | "ruling"
   | "result";
@@ -117,6 +118,25 @@ export function entryId(
   athleteId: string,
 ): string {
   return `${meetId}:${eventId}:${athleteId}`;
+}
+
+/**
+ * One lane of one heat, and who is in it.
+ *
+ * Lanes used to travel inside the heat, as an array. That made seating a
+ * whole-heat write, and six timers seating their own lane at the same moment
+ * each wrote the entire array from whatever they had last read — so
+ * last-write-wins kept one of them and lost the rest. Measured: six
+ * simultaneous seats, two survivors.
+ *
+ * Split out, they behave like everything else that several people touch at
+ * once. Entries are already this shape, and so are watches, rulings and
+ * results: one object per thing one person decides. The document still holds
+ * `heat.lanes` as an array, because that's what every screen wants to read —
+ * this is only what goes over the wire.
+ */
+export function seatId(heatId: string, lane: number): string {
+  return `${heatId}:${lane}`;
 }
 
 /* ------------------------------------------------------------- decomposing */
@@ -230,7 +250,29 @@ function meetObjects(meet: MeetDoc): SyncObject[] {
     }
   }
   for (const heat of meet.heats) {
-    objects.push({ id: heat.id, type: "heat", ...stamp, data: heat });
+    // The heat itself is what nobody contends over: which event it belongs to
+    // and where it sits in the order. Its width rides along so the lanes can
+    // be rebuilt without consulting the meet's options.
+    objects.push({
+      id: heat.id,
+      type: "heat",
+      ...stamp,
+      data: {
+        id: heat.id,
+        eventId: heat.eventId,
+        index: heat.index,
+        laneCount: heat.lanes.length,
+      },
+    });
+    heat.lanes.forEach((athleteId, index) => {
+      if (!athleteId) return;
+      objects.push({
+        id: seatId(heat.id, index + 1),
+        type: "seat",
+        ...stamp,
+        data: { heatId: heat.id, lane: index + 1, athleteId },
+      });
+    });
   }
   for (const watch of meet.watches) {
     objects.push({ id: watch.id, type: "watch", ...stamp, data: watch });
@@ -311,8 +353,35 @@ export function fromObjects(objects: SyncObject[]): {
     if (!meet) continue;
     (meet.entries[o.data.eventId] ??= []).push(o.data.athleteId);
   }
-  for (const o of of<Heat>("heat")) {
-    byMeet.get(scopedTo(o))?.heats.push(o.data);
+  for (const o of of<{
+    id: string;
+    eventId: string;
+    index: number;
+    laneCount?: number;
+  }>("heat")) {
+    const meet = byMeet.get(scopedTo(o));
+    if (!meet) continue;
+    meet.heats.push({
+      id: o.data.id,
+      eventId: o.data.eventId,
+      index: o.data.index,
+      // An empty pool until the seats say otherwise. `laneCount` is absent on
+      // anything written before lanes were split out, so the meet's own width
+      // is the fallback.
+      lanes: Array.from(
+        { length: o.data.laneCount ?? meet.options.laneCount },
+        () => null as string | null,
+      ),
+    });
+  }
+  for (const o of of<{ heatId: string; lane: number; athleteId: string }>("seat")) {
+    const meet = byMeet.get(scopedTo(o));
+    const heat = meet?.heats.find((h) => h.id === o.data.heatId);
+    if (!heat) continue;
+    // A seat naming a lane the heat doesn't have is not information.
+    if (o.data.lane >= 1 && o.data.lane <= heat.lanes.length) {
+      heat.lanes[o.data.lane - 1] = o.data.athleteId;
+    }
   }
   for (const o of of<WatchTime>("watch")) {
     byMeet.get(scopedTo(o))?.watches.push(o.data);
@@ -440,10 +509,8 @@ export function referencedAthletes(objects: SyncObject[]): Set<string> {
       case "enrollment":
         if (typeof data.athleteId === "string") ids.add(data.athleteId);
         break;
-      case "heat":
-        for (const lane of (data.lanes as (string | null)[]) ?? []) {
-          if (lane) ids.add(lane);
-        }
+      case "seat":
+        if (typeof data.athleteId === "string") ids.add(data.athleteId);
         break;
       case "watch":
         if (typeof data.athleteId === "string") ids.add(data.athleteId);

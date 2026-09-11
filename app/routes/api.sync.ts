@@ -39,7 +39,7 @@ import type { ObjectScope, SyncObject } from "~/lib/objects";
  * Reading and writing are not the same permission, and inside a meet the
  * question isn't which team you're from — it's whether you're running it.
  *
- *   meet admin   the meet, its lineup, its heats, and every ruling
+ *   meet admin   the meet, its lineup, its heats and seats, and every ruling
  *   coach        their own team, their own swimmers' entries, and watches
  *   athlete      entering and scratching themselves
  *

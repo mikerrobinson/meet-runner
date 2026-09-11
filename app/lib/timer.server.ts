@@ -12,7 +12,12 @@
  */
 
 import { ensureObjectStore } from "./sync.server";
-import { entryId, referencedAthletes, type SyncObject } from "./objects";
+import {
+  entryId,
+  referencedAthletes,
+  seatId,
+  type SyncObject,
+} from "./objects";
 import { seasonForDate } from "./roster";
 import { todayIso } from "~/types/meet";
 import type {
@@ -115,7 +120,38 @@ export async function timerSnapshot(
     (entries[entry.eventId] ??= []).push(entry.athleteId);
   }
 
-  const heats = of("heat").map((row) => row.data as unknown as Heat);
+  // Lanes are their own objects now, so the heat is rebuilt from them — the
+  // same assembly `fromObjects` does for every other reader.
+  const heats: Heat[] = of("heat").map((row) => {
+    const data = row.data as unknown as {
+      id: string;
+      eventId: string;
+      index: number;
+      laneCount?: number;
+    };
+    return {
+      id: data.id,
+      eventId: data.eventId,
+      index: data.index,
+      lanes: Array.from(
+        { length: data.laneCount ?? core.options?.laneCount ?? 6 },
+        () => null as string | null,
+      ),
+    };
+  });
+  const byHeat = new Map(heats.map((heat) => [heat.id, heat] as const));
+  for (const row of of("seat")) {
+    const seat = row.data as unknown as {
+      heatId: string;
+      lane: number;
+      athleteId: string;
+    };
+    const heat = byHeat.get(seat.heatId);
+    if (!heat) continue;
+    if (seat.lane >= 1 && seat.lane <= heat.lanes.length) {
+      heat.lanes[seat.lane - 1] = seat.athleteId;
+    }
+  }
   heats.sort((a, b) => a.eventId.localeCompare(b.eventId) || a.index - b.index);
 
   const mine = of("watch")
@@ -272,33 +308,62 @@ export async function seatFromWatch(
   athleteId: string,
   now = Date.now(),
 ): Promise<SyncObject[]> {
-  const row = await db
+  const { results } = await db
     .prepare(
-      "SELECT data FROM objects WHERE type = 'heat' AND id = ? AND deleted_at IS NULL",
+      `SELECT id, type, data, deleted_at FROM objects
+       WHERE (type = 'heat' AND id = ?) OR (type = 'seat' AND scope = ?)`,
     )
-    .bind(heatId)
-    .first<{ data: string }>();
-  if (!row) return [];
+    .bind(heatId, `meet:${meetId}`)
+    .all<{ id: string; type: string; data: string; deleted_at: number | null }>();
 
-  const heat = JSON.parse(row.data) as Heat;
-  if (heat.lanes[lane - 1] === athleteId) return [];
-  // A lane the heat doesn't have isn't a lane.
-  if (lane < 1 || lane > heat.lanes.length) return [];
+  const heatRow = results.find((r) => r.type === "heat" && !r.deleted_at);
+  if (!heatRow) return [];
+  const heat = JSON.parse(heatRow.data) as {
+    id: string;
+    eventId: string;
+    laneCount?: number;
+  };
 
-  const lanes = heat.lanes.map((occupant) =>
-    occupant === athleteId ? null : occupant,
-  );
-  lanes[lane - 1] = athleteId;
+  const width = heat.laneCount ?? 0;
+  if (lane < 1 || (width > 0 && lane > width)) return [];
+
+  const seats = results
+    .filter((r) => r.type === "seat" && !r.deleted_at)
+    .map((r) => ({
+      id: r.id,
+      ...(JSON.parse(r.data) as { heatId: string; lane: number; athleteId: string }),
+    }))
+    .filter((seat) => seat.heatId === heatId);
+
+  if (seats.some((seat) => seat.lane === lane && seat.athleteId === athleteId)) {
+    return [];
+  }
 
   const objects: SyncObject[] = [
     {
-      id: heat.id,
-      type: "heat",
+      id: seatId(heatId, lane),
+      type: "seat",
       scope: { kind: "meet", id: meetId },
       updatedAt: now,
-      data: { ...heat, lanes },
+      data: { heatId, lane, athleteId },
     },
   ];
+
+  // Whoever was in that lane elsewhere loses the lane and keeps the entry:
+  // an empty lane is a hole the other timer has to fill, which puts the
+  // disagreement in front of somebody instead of leaving two lanes each
+  // claiming the same swimmer.
+  for (const seat of seats) {
+    if (seat.athleteId !== athleteId || seat.lane === lane) continue;
+    objects.push({
+      id: seat.id,
+      type: "seat",
+      scope: { kind: "meet", id: meetId },
+      updatedAt: now,
+      deletedAt: now,
+      data: { heatId, lane: seat.lane, athleteId },
+    });
+  }
 
   // Swimming a race is being in it. Without this, a timer naming somebody who
   // was never entered would seat a swimmer the results then credit to an event
