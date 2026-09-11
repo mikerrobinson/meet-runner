@@ -6,7 +6,7 @@ import { Button, EmptyState, TextInput } from "~/components/ui";
 import { enrollmentIndex, rosterForMeet, seasonForMeet } from "~/lib/roster";
 import { useAppStore } from "~/state/app-store";
 import { canEditEntriesFor, canSeeEntries, useMeetRole } from "~/state/meet-role";
-import { whyNotEnter } from "~/lib/events";
+import { entrySplit, whyNotEnter } from "~/lib/events";
 import { useViewPrefs } from "~/state/view-prefs";
 import {
   byAthlete,
@@ -102,10 +102,22 @@ export default function Registration() {
     [team, seasonId],
   );
 
+  /**
+   * Everyone enterable in this meet, before the screen's own filters.
+   *
+   * Kept separate from `swimmers` because the column counts have to mean the
+   * same thing whatever the Girls/Boys toggle is set to — counting the visible
+   * rows would make a header change when you filtered, which is a header
+   * measuring the wrong thing.
+   */
+  const roster = useMemo(
+    () => (meet ? rosterForMeet(athletes, team, meet) : []),
+    [athletes, team, meet],
+  );
+
   const swimmers = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!meet) return [];
-    return rosterForMeet(athletes, team, meet)
+    return roster
       .filter((s) => genderFilter === "all" || s.gender === genderFilter)
       .filter(
         (s) =>
@@ -113,7 +125,7 @@ export default function Registration() {
           `${s.firstName} ${s.lastName}`.toLowerCase().includes(query),
       )
       .sort(byAthlete(nameOrder));
-  }, [team, genderFilter, search]);
+  }, [roster, genderFilter, search, nameOrder]);
 
   // Changing the filter changes which rows exist. Holding the old scroll
   // offset would leave you looking at an arbitrary slice of the new list
@@ -179,8 +191,17 @@ export default function Registration() {
     );
   }
 
+  // Counts what the grid can actually show. An entry naming somebody who
+  // isn't on the roster — a leftover from a re-import, which mints new ids —
+  // draws no row, so counting it here made the header disagree with the ticks
+  // underneath it.
+  const known = new Set(roster.map((a) => a.id));
   const entryCount = (event?: MeetEvent) =>
-    event ? (meet.entries[event.id] ?? []).length : 0;
+    event ? entrySplit(meet, event.id, known).entered : 0;
+  const orphanCount = meet.events.reduce(
+    (total, event) => total + entrySplit(meet, event.id, known).orphaned,
+    0,
+  );
 
   /** The count line under a column header, phrased for the current filter. */
   const headerCount = (race: Race): string => {
@@ -237,6 +258,18 @@ export default function Registration() {
           "calc(100dvh - var(--app-chrome-top) - var(--app-chrome-bottom) - 1rem)",
       }}
     >
+      {/* A count that doesn't match the ticks below it is the kind of thing
+          somebody notices mid-meet and can't explain. Say it plainly instead. */}
+      {orphanCount > 0 && (
+        <div className="mt-3 shrink-0 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          {orphanCount} {orphanCount === 1 ? "entry points" : "entries point"} at
+          swimmers who aren&rsquo;t on this season&rsquo;s roster, so
+          {orphanCount === 1 ? " it isn't" : " they aren't"} shown below. That
+          usually means the roster was re-imported — which gives everyone new
+          ids and leaves the old entries pointing at the old ones.
+        </div>
+      )}
+
       {SHOW_ROSTER_CONTROLS && (
         <div className="shrink-0 space-y-3 py-3">
           <div className="flex gap-2">

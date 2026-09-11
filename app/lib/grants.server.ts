@@ -210,6 +210,12 @@ export async function writeAsTimer(
     if (object.type === "enrollment") {
       return object.scope.kind === "team" && enrollable.has(object.scope.id);
     }
+    // Seating somebody in the lane a timer says they swam. Built by the server
+    // from the meet's own heat — see `seatFromWatch` — never accepted from the
+    // phone, which is why a grant still cannot send a heat of its own.
+    if (object.type === "heat" || object.type === "entry") {
+      return object.scope.kind === "meet" && object.scope.id === grant.meetId;
+    }
     if (object.type !== "watch") return false;
     return object.scope.kind === "meet" && object.scope.id === grant.meetId;
   });

@@ -9,7 +9,7 @@ import {
 } from "~/lib/api.server";
 import { bearerToken } from "~/lib/auth.server";
 import { grantFor, writeAsTimer } from "~/lib/grants.server";
-import { visitorEnrollment } from "~/lib/timer.server";
+import { seatFromWatch, visitorEnrollment } from "~/lib/timer.server";
 import { watchId } from "~/types/meet";
 import type { Athlete, WatchTime } from "~/types/meet";
 import type { SyncObject } from "~/lib/objects";
@@ -46,6 +46,7 @@ export async function action({ request, context }: Route.ActionArgs) {
     const body = await readJson<{
       watches?: Partial<WatchTime>[];
       athletes?: Array<Partial<Athlete> & { teamId?: string }>;
+      seats?: Array<{ heatId?: string; lane?: number; athleteId?: string }>;
     }>(request);
 
     const now = Date.now();
@@ -121,8 +122,49 @@ export async function action({ request, context }: Route.ActionArgs) {
       });
     }
 
-    if (objects.length === 0) return json({ applied: 0 });
-    return json(await writeAsTimer(db, grant, objects, [...enrollable]));
+    // A timer naming somebody other than whoever the lane holds moves them
+    // into it. Worked out here from the meet's own heat rather than taken from
+    // the phone, which may say who it saw and not what the running order is.
+    //
+    // Seats arrive on their own as well as on a watch: names are sorted out
+    // behind the blocks, and waiting for the race to finish before telling
+    // anyone is too late to be any use.
+    const claims = [
+      ...(body.seats ?? []),
+      ...(body.watches ?? []).map((w) => ({
+        heatId: w.heatId,
+        lane: w.lane,
+        athleteId: w.athleteId,
+      })),
+    ];
+
+    const reseated: SyncObject[] = [];
+    const seen = new Set<string>();
+    for (const claim of claims) {
+      if (!claim.athleteId || !claim.heatId) continue;
+      const lane = Number(claim.lane);
+      if (!Number.isFinite(lane) || lane < 1) continue;
+      // A seat and the watch that follows it say the same thing; applying the
+      // second over the first would be a second write for no change.
+      const key = `${claim.heatId}:${lane}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      reseated.push(
+        ...(await seatFromWatch(
+          db,
+          grant.meetId,
+          claim.heatId,
+          lane,
+          claim.athleteId,
+          now,
+        )),
+      );
+    }
+
+    if (objects.length === 0 && reseated.length === 0) return json({ applied: 0 });
+    return json(
+      await writeAsTimer(db, grant, [...objects, ...reseated], [...enrollable]),
+    );
   } catch (error) {
     return errorResponse(error);
   }

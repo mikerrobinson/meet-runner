@@ -147,21 +147,40 @@ export interface QueuedAthlete extends Athlete {
   teamId?: string;
 }
 
+/**
+ * Who a timer says is in their lane, sent on its own.
+ *
+ * Separate from the watch because it happens at a different moment: names get
+ * sorted out behind the blocks, minutes before anyone touches a stopwatch.
+ * Riding it on the time meant nobody else — not the other timers on that lane,
+ * not the admin desk — knew about a correction until the race was over, which
+ * is exactly too late to be useful.
+ */
+export interface Seat {
+  heatId: string;
+  lane: number;
+  athleteId: string;
+}
+
 export interface QueuedWrite {
   watches: WatchTime[];
   athletes: QueuedAthlete[];
+  seats: Seat[];
 }
 
+const EMPTY_QUEUE: QueuedWrite = { watches: [], athletes: [], seats: [] };
+
 function readQueue(): QueuedWrite {
-  if (typeof localStorage === "undefined") return { watches: [], athletes: [] };
+  if (typeof localStorage === "undefined") return { ...EMPTY_QUEUE };
   try {
     const stored = JSON.parse(localStorage.getItem(QUEUE_KEY) ?? "");
     return {
       watches: Array.isArray(stored?.watches) ? stored.watches : [],
       athletes: Array.isArray(stored?.athletes) ? stored.athletes : [],
+      seats: Array.isArray(stored?.seats) ? stored.seats : [],
     };
   } catch {
-    return { watches: [], athletes: [] };
+    return { ...EMPTY_QUEUE };
   }
 }
 
@@ -172,7 +191,7 @@ function writeQueue(queue: QueuedWrite): void {
 
 export function queueSize(): number {
   const queue = readQueue();
-  return queue.watches.length + queue.athletes.length;
+  return queue.watches.length + queue.athletes.length + queue.seats.length;
 }
 
 /**
@@ -193,6 +212,15 @@ export function enqueue(write: Partial<QueuedWrite>): void {
       queue.athletes.push(athlete);
     }
   }
+  // One seat per lane: changing your mind twice before the start is one
+  // answer, not two.
+  for (const seat of write.seats ?? []) {
+    const at = queue.seats.findIndex(
+      (existing) => existing.heatId === seat.heatId && existing.lane === seat.lane,
+    );
+    if (at >= 0) queue.seats[at] = seat;
+    else queue.seats.push(seat);
+  }
   writeQueue(queue);
 }
 
@@ -206,12 +234,13 @@ export function enqueue(write: Partial<QueuedWrite>): void {
  */
 export async function flush(): Promise<{ sent: number; error?: string }> {
   const queue = readQueue();
-  const waiting = queue.watches.length + queue.athletes.length;
+  const waiting =
+    queue.watches.length + queue.athletes.length + queue.seats.length;
   if (waiting === 0) return { sent: 0 };
 
   try {
     await timerPost("/api/timer/watch", queue);
-    writeQueue({ watches: [], athletes: [] });
+    writeQueue({ ...EMPTY_QUEUE });
     return { sent: waiting };
   } catch (error) {
     return {

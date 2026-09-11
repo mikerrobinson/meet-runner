@@ -5,6 +5,59 @@ Nothing here is committed to — it's a parking lot. Add your own freely.
 
 ---
 
+## Next up
+
+Roughly in the order that made sense when we stopped. Everything below this
+section is still a parking lot — this part isn't.
+
+### 1. Deploy, which needs a schema conversion first
+`scripts/migrate-to-scopes.sql` turns the live `objects` table from
+team/meet columns into a single `scope`. It has been run against a copy of the
+2026-09-07 production backup and verified: 659 rows in, 659 out, correctly
+scoped, and the new code read the result back with all 47 Chaparral athletes,
+5 meets and 82 times intact.
+
+The two steps that touch production have *not* been run:
+
+```sh
+npx wrangler d1 export meet-runner --remote --output backups/prod-$(date +%F).sql
+npx wrangler d1 execute meet-runner --remote --file=scripts/migrate-to-scopes.sql
+npm run deploy
+```
+
+Nothing is lost by it — athletes were already their own rows, and the only
+invented field is a meet learning to name the team it used to belong to.
+
+### 2. Verify the public-shell change with a working device
+`shell.tsx` renders a minimal chrome on `/meets`, `/teams` and `/athletes` when
+local storage isn't ready. Verified for the broken-storage case; **not**
+verified for a signed-in coach with healthy storage, because the browser it was
+tested in had its IndexedDB wedged. Reading the code it should fall through to
+the normal shell once `ready` flips, with a brief flash of the minimal one.
+If the bottom tab bar doesn't come back on `/meets` when signed in, that's the
+change to look at.
+
+### 3. Settle the bottom tab bar
+Deferred with "decide once the screens exist". They exist now. It's still
+Team / Meets / Browse / Settings, which predates meets becoming the home. The
+suggestion on the table was Meets / Teams / Athletes with Settings moving into
+the account menu, since that menu already covers Profile and sign-out.
+
+### 4. An athlete's own screen
+See below — the permission is built and verified, only the screen is missing.
+
+### 5. Entry visibility on the wire
+`meet.options.entryVisibility` is honoured by the entries screen but not by
+sync: a coach who pulls a shared meet still receives every team's entries. The
+UI hides them; the network doesn't. Restricting reads inside the cursor is the
+harder half and was deliberately left.
+
+### 6. Scoring
+`ScoringRules` and `DUAL_MEET_SCORING` (6-4-3-2-1 / 8-4, split by gender) are
+defined in `types/meet.ts` and computed by nothing.
+
+---
+
 ## Features
 
 ### An athlete's own screen
@@ -39,10 +92,12 @@ boys'. Right now you add one and repeat. Could add the pair in lead order from
 one tap.
 
 ### Live updates while a heat is on the clock
-Devices poll every ten seconds, which is fine for registration and setup but
-not for three timers watching each other's watches land. Either a much shorter
-interval while a heat is running, or real server push — which on Workers means
-Durable Objects. The object model underneath is already right for either.
+Polling is at two seconds now (`POLL_MS` in `auto-sync.tsx`), shortened for the
+admin control desk, which watches three timers' watches land on one lane. That
+is about the ceiling of what polling can sensibly do — the honest answer is a
+push channel, which on Workers means Durable Objects. The object model
+underneath is already the right shape for it: scoped, per-object,
+last-write-wins.
 
 ### Tombstone retention
 Deleted objects stay in the table forever; every un-entered swimmer leaves a
@@ -113,6 +168,12 @@ Replace mints new swimmer ids, so entries and results in past meets end up
 pointing at swimmers no longer listed. Matching incoming rows on name and
 reusing the existing id would preserve history. Archive-and-add is the safe path
 mid-season today.
+
+This one has now happened for real, so the symptom is known: the counts said
+"9 entered" and the grid drew three ticks. `entrySplit` in `events.ts` tells
+entries apart from orphans, the entries grid explains itself in a banner, and
+the admin rail marks affected events with an amber `!n`. That surfaces the
+damage; it doesn't repair it. A re-import that matched on name would.
 
 ---
 

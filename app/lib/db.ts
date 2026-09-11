@@ -35,6 +35,9 @@ const TEAM_KEY = "team";
  */
 const ATHLETES_KEY = "athletes";
 
+/** How long to wait for the database to open before giving up on it. */
+const OPEN_TIMEOUT_MS = 5000;
+
 let dbPromise: Promise<IDBDatabase> | null = null;
 
 function openDb(): Promise<IDBDatabase> {
@@ -45,15 +48,41 @@ function openDb(): Promise<IDBDatabase> {
 
   dbPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+    /**
+     * IndexedDB can simply never answer, and does so silently.
+     *
+     * An `open` queued behind a `deleteDatabase` that is itself waiting on a
+     * connection somewhere will sit there indefinitely — no error, no
+     * `onblocked`, nothing. Clearing site data and reloading is the easy way
+     * to produce it, and the symptom was the whole app stuck on "Loading…"
+     * with no way to find out why.
+     *
+     * Failing loudly is much better than hanging: the store turns a rejection
+     * into a screen that explains itself, and the public pages don't need this
+     * database at all.
+     */
+    const timeout = setTimeout(() => {
+      reject(
+        new Error(
+          "This device's storage didn't respond. Close any other Meet Runner tabs and reload.",
+        ),
+      );
+    }, OPEN_TIMEOUT_MS);
+    const settle = <T,>(fn: (value: T) => void) => (value: T) => {
+      clearTimeout(timeout);
+      fn(value);
+    };
     // An upgrade can't run while an older connection is still open, and the
     // browser's way of saying so is to do nothing at all. Without this the
     // app waits forever on a loading screen with nothing in the console.
-    request.onblocked = () =>
+    request.onblocked = settle(() =>
       reject(
         new Error(
           "Another tab has Meet Runner open on an older version. Close it and reload.",
         ),
-      );
+      ),
+    );
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(TEAM_STORE)) {
@@ -63,8 +92,15 @@ function openDb(): Promise<IDBDatabase> {
         db.createObjectStore(MEET_STORE, { keyPath: "id" });
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = settle(() => resolve(request.result));
+    request.onerror = settle(() => reject(request.error));
+  });
+
+  // A rejected promise is cached like any other, so without this a single
+  // failure would be permanent for the life of the tab — including the one a
+  // reload is meant to clear.
+  dbPromise.catch(() => {
+    dbPromise = null;
   });
 
   return dbPromise;

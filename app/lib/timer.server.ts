@@ -12,7 +12,7 @@
  */
 
 import { ensureObjectStore } from "./sync.server";
-import { referencedAthletes, type SyncObject } from "./objects";
+import { entryId, referencedAthletes, type SyncObject } from "./objects";
 import { seasonForDate } from "./roster";
 import { todayIso } from "~/types/meet";
 import type {
@@ -239,6 +239,88 @@ export async function visitorEnrollment(
     updatedAt: now,
     data: enrollment,
   };
+}
+
+/**
+ * Move a swimmer into the lane a timer says they swam.
+ *
+ * A timer correcting a name used to change nothing at all. The claim rode on
+ * the watch, and every reader preferred the seeding — so the one case the
+ * control exists for, a seated lane holding the wrong person, was the one case
+ * it couldn't fix. Tapping the right name appeared to work and didn't.
+ *
+ * So the correction now moves the lineup, with two bounds.
+ *
+ * The first is that the *server* does it, from the meet's own heat, rather
+ * than the phone sending a heat of its own devising. A grant is a QR code
+ * taped to a table; it may say "lane 4 was Dana", and it may not say what the
+ * running order is.
+ *
+ * The second is what happens to whoever was already in that lane elsewhere.
+ * They keep their entry — they're still in the race — but their lane is
+ * emptied rather than quietly reassigned. An empty lane is a hole somebody has
+ * to fill, which puts the disagreement in front of the other timer instead of
+ * leaving two lanes each claiming the same swimmer.
+ *
+ * Returns the objects to write, or none if the lane already says this.
+ */
+export async function seatFromWatch(
+  db: D1Database,
+  meetId: string,
+  heatId: string,
+  lane: number,
+  athleteId: string,
+  now = Date.now(),
+): Promise<SyncObject[]> {
+  const row = await db
+    .prepare(
+      "SELECT data FROM objects WHERE type = 'heat' AND id = ? AND deleted_at IS NULL",
+    )
+    .bind(heatId)
+    .first<{ data: string }>();
+  if (!row) return [];
+
+  const heat = JSON.parse(row.data) as Heat;
+  if (heat.lanes[lane - 1] === athleteId) return [];
+  // A lane the heat doesn't have isn't a lane.
+  if (lane < 1 || lane > heat.lanes.length) return [];
+
+  const lanes = heat.lanes.map((occupant) =>
+    occupant === athleteId ? null : occupant,
+  );
+  lanes[lane - 1] = athleteId;
+
+  const objects: SyncObject[] = [
+    {
+      id: heat.id,
+      type: "heat",
+      scope: { kind: "meet", id: meetId },
+      updatedAt: now,
+      data: { ...heat, lanes },
+    },
+  ];
+
+  // Swimming a race is being in it. Without this, a timer naming somebody who
+  // was never entered would seat a swimmer the results then credit to an event
+  // they aren't registered for.
+  const entryKey = entryId(meetId, heat.eventId, athleteId);
+  const existing = await db
+    .prepare(
+      "SELECT 1 AS ok FROM objects WHERE type = 'entry' AND id = ? AND deleted_at IS NULL",
+    )
+    .bind(entryKey)
+    .first<{ ok: number }>();
+  if (!existing) {
+    objects.push({
+      id: entryKey,
+      type: "entry",
+      scope: { kind: "meet", id: meetId },
+      updatedAt: now,
+      data: { eventId: heat.eventId, athleteId },
+    });
+  }
+
+  return objects;
 }
 
 /** Short labels for a set of teams, keyed by id. */

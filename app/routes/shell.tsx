@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { currentSeason, rosterFor } from "~/lib/roster";
 import { AccountMenu } from "~/components/AccountMenu";
@@ -281,6 +281,14 @@ export default function Shell() {
   const { laneLayout, setLaneLayout } = useViewPrefs();
   const params = useParams();
 
+  // Browsing is server-driven and needs nothing from this device. Blocking it
+  // on local storage meant a visitor with no season — or a device whose
+  // storage was wedged — sat on "Loading…" looking at a page that would have
+  // rendered fine without it.
+  if (publicPath && (!ready || storageError)) {
+    return <PublicShell>{<Outlet />}</PublicShell>;
+  }
+
   if (storageError) {
     return (
       <div className="flex min-h-screen items-center justify-center p-6">
@@ -336,6 +344,11 @@ export default function Shell() {
   const chip = syncLabel(status);
 
   const onRegistration = location.pathname.endsWith("/entries");
+  // Two screens want the whole window rather than a reading column: the
+  // entries grid, whose event columns spread sideways, and the run screens,
+  // where an administrator works from a landscape tablet with the running
+  // order beside the heat.
+  const fullWidth = onRegistration || location.pathname.endsWith("/run");
   const onRun = location.pathname.endsWith("/run");
   const rawGender = new URLSearchParams(location.search).get("g");
   const genderParam = rawGender === "f" || rawGender === "m" ? rawGender : "all";
@@ -385,7 +398,7 @@ export default function Shell() {
             toggles
               ? "grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]"
               : "grid-cols-[minmax(0,1fr)_auto]"
-          } ${onRegistration ? "max-w-none" : "max-w-3xl"}`}
+          } ${fullWidth ? "max-w-none" : "max-w-3xl"}`}
         >
           <div className="min-w-0">
             <h1 className="truncate text-base font-bold leading-tight">{title}</h1>
@@ -416,7 +429,7 @@ export default function Shell() {
           columns can spread across the full window. */}
       <main
         className={`mx-auto px-4 pt-4 pb-[calc(var(--app-chrome-bottom)+1rem)] ${
-          onRegistration ? "max-w-none" : "max-w-3xl"
+          fullWidth ? "max-w-none" : "max-w-3xl"
         }`}
       >
         <Outlet />
@@ -450,6 +463,29 @@ export default function Shell() {
           })}
         </div>
       </nav>
+    </div>
+  );
+}
+
+/**
+ * Enough chrome to read a public page with.
+ *
+ * No team name, no sync chip, no meet tabs — none of those mean anything to
+ * somebody who just opened a link to a results page, and all of them need
+ * local data this device may not have.
+ */
+function PublicShell({ children }: { children: ReactNode }) {
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+      <header className="sticky top-0 z-30 h-[var(--app-chrome-top)] border-b border-slate-200 bg-white/95 pt-[env(safe-area-inset-top)] backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
+        <div className="mx-auto flex h-full max-w-3xl items-center justify-between gap-3 px-4">
+          <Link to="/meets" className="text-base font-bold">
+            Meet Runner
+          </Link>
+          <AccountMenu />
+        </div>
+      </header>
+      <main className="mx-auto max-w-3xl px-4 pt-4 pb-8">{children}</main>
     </div>
   );
 }

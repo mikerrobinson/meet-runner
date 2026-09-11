@@ -274,6 +274,7 @@ export function makeRuling(
   lane: number,
   status: Ruling["status"],
   timeMs?: number,
+  by?: string,
 ): Ruling {
   return {
     id: rulingId(heat.id, lane),
@@ -283,6 +284,7 @@ export function makeRuling(
     status,
     timeMs,
     decidedAt: Date.now(),
+    decidedBy: by,
   };
 }
 

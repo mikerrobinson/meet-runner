@@ -268,4 +268,51 @@ eq(results[1].timeMs, 30010, "lane 4 single");
   eq(activeLanes(quiet, h), [1], "an untouched empty lane doesn't count");
 }
 
+/* ------------------------ a time entered by hand is a claim, not a decision */
+
+// The distinction that matters: an official saying "the time was 2:04.55" and
+// an official saying "this lane is final" are different acts. Folding the
+// first into the second meant undoing a sign-off threw the reading away.
+{
+  const h: Heat = { id: "hC", eventId: "e3", index: 0, lanes: ["s1", null, null, null, null, null] };
+  const watches = [
+    { id: "hC:1:t1", eventId: "e3", heatId: "hC", lane: 1, timerId: "t1", timeMs: 30000, recordedAt: 1, source: "stopwatch" as const },
+  ];
+
+  const raw = { heats: [h], watches, rulings: [] as any[], results: [] as any[] };
+  eq(resultForLane(raw, h, 1)!.timeMs, 30000, "with nothing else, the watch stands");
+
+  // The official reads the pad differently and says so.
+  const called = {
+    ...raw,
+    rulings: [makeRuling(h, 1, "OK", 29870, "admin-1")],
+  };
+  const proposed = resultForLane(called, h, 1)!;
+  eq(proposed.timeMs, 29870, "a time entered by hand outranks the watches");
+  eq(proposed.accepted, undefined, "but entering one is not signing the lane off");
+  eq(called.rulings[0].decidedBy, "admin-1", "and the record says who made the call");
+
+  // Now sign it off, and take the sign-off back.
+  const accepted = acceptResult(called, h, 1, "admin-1")!;
+  eq(accepted.timeMs, 29870, "accepting takes the call, not the raw watch");
+
+  const undone = { ...called, results: [] };
+  eq(
+    resultForLane(undone, h, 1)!.timeMs,
+    29870,
+    "undoing the sign-off returns to the official's reading, not to the watches",
+  );
+
+  // Status and time are two facts about one lane; neither should erase the
+  // other. Marking a DQ after entering a time must keep the time.
+  const dq = makeRuling(h, 1, "DQ", called.rulings[0].timeMs, "admin-1");
+  eq(dq.timeMs, 29870, "a DQ keeps the time that was entered");
+  eq(dq.status, "DQ", "and carries the ruling");
+  eq(
+    resultForLane({ ...raw, rulings: [dq] }, h, 1)!.status,
+    "DQ",
+    "which is what the lane then reads as",
+  );
+}
+
 done();

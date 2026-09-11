@@ -316,3 +316,26 @@ export function teamFullFor(
   );
   return entered.length >= cap;
 }
+
+/**
+ * Entries in an event, split by whether the swimmer still exists.
+ *
+ * These come apart more often than you'd hope. Entries reference athletes by
+ * id, so re-importing a roster — which mints new ids — leaves the old entries
+ * pointing at people who are no longer listed. The registration grid draws a
+ * row per athlete, so an orphaned entry is invisible there while still sitting
+ * in the document, which is how a race can read "9 entered" and show three
+ * ticks.
+ *
+ * Counting them separately is what lets a screen say so instead of quietly
+ * disagreeing with the one next to it.
+ */
+export function entrySplit(
+  meet: Pick<MeetDoc, "entries">,
+  eventId: string,
+  known: Set<string>,
+): { entered: number; orphaned: number } {
+  const ids = meet.entries[eventId] ?? [];
+  const entered = ids.filter((id) => known.has(id)).length;
+  return { entered, orphaned: ids.length - entered };
+}

@@ -24,6 +24,13 @@ import {
 } from "~/lib/timer";
 import { eventName, watchId } from "~/types/meet";
 
+/**
+ * How often this phone asks what changed. Short, because the thing it's
+ * watching for — a name corrected behind the blocks — matters in the minute
+ * before a race and not at all afterwards.
+ */
+const SNAPSHOT_POLL_MS = 3000;
+
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Timing · Meet Runner" }];
 }
@@ -97,6 +104,30 @@ export default function Timer() {
     };
   }, []);
 
+  /**
+   * Pick up what everyone else has changed.
+   *
+   * This screen used to read the meet once, on opening, and never again — so a
+   * lane reassigned at the desk, or a swimmer another timer corrected, simply
+   * never appeared. On a deck that means timing the wrong person with no way
+   * to find out.
+   *
+   * Only while the phone is being looked at: a pocketed screen has nobody
+   * reading it, and its timers get throttled to uselessness anyway.
+   */
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      void load();
+    };
+    const timer = setInterval(refresh, SNAPSHOT_POLL_MS);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [load]);
+
   /* ------------------------------------------------------------- stopwatch */
 
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -161,6 +192,29 @@ export default function Timer() {
     setStartedAt(null);
     setStopped(null);
     setElapsed(0);
+  };
+
+  /**
+   * Say who's in this lane, straight away.
+   *
+   * Queued rather than posted directly so it behaves like a time does: if
+   * there's no signal it waits, and it goes up with everything else when there
+   * is. A swimmer typed in here travels with it, because the name and the
+   * person have to reach the server together or not at all.
+   */
+  const claimLane = (athleteId: string, newcomer?: QueuedAthlete) => {
+    if (!stop || !lane) return;
+    enqueue({
+      seats: [{ heatId: stop.heat.id, lane, athleteId }],
+      ...(newcomer ? { athletes: [newcomer] } : {}),
+    });
+    setWaiting(queueSize());
+    void flush().then(() => {
+      setWaiting(queueSize());
+      // Straight back for the corrected lineup, so the name on screen is the
+      // one everybody else is now looking at.
+      void load();
+    });
   };
 
   const submit = async () => {
@@ -407,11 +461,13 @@ export default function Timer() {
           eventGender={stop.event.gender === "M" ? "M" : "F"}
           onPick={(athlete) => {
             setOverrides((current) => ({ ...current, [laneKey]: athlete.id }));
+            claimLane(athlete.id);
             setPicking(false);
           }}
           onAdd={(athlete) => {
             setAdded((current) => [...current, athlete]);
             setOverrides((current) => ({ ...current, [laneKey]: athlete.id }));
+            claimLane(athlete.id, athlete);
             setPicking(false);
           }}
           onClose={() => setPicking(false)}

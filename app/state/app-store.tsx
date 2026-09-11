@@ -202,13 +202,18 @@ interface AppStore {
     heat: Heat,
     lane: number,
     status: ResultStatus,
+    by?: string,
   ) => void;
-  /** Set the official time by hand, overriding whatever the watches say. */
+  /**
+   * Enter the time by hand. A claim in its own right, recorded with who made
+   * it and when, and outranking the watches wherever it's set.
+   */
   overrideLaneTime: (
     id: string,
     heat: Heat,
     lane: number,
     timeMs: number,
+    by?: string,
   ) => void;
   /** Throw away everything recorded on one lane. */
   clearLaneTimes: (id: string, heat: Heat, lane: number) => void;
@@ -910,24 +915,40 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           };
         }),
 
-      setLaneStatus: (id, heat, lane, status) =>
+      setLaneStatus: (id, heat, lane, status, by) =>
         editMeet(id, (m) => {
+          const existing = m.rulings.find((r) => r.id === rulingId(heat.id, lane));
           const rulings = m.rulings.filter(
             (r) => r.id !== rulingId(heat.id, lane),
           );
-          return status === "OK"
-            ? { ...m, rulings }
-            : { ...m, rulings: [...rulings, makeRuling(heat, lane, status)] };
+          // A status of OK with no typed time is no judgement at all, so the
+          // ruling goes rather than lingering as an empty one.
+          if (status === "OK" && existing?.timeMs === undefined) {
+            return { ...m, rulings };
+          }
+          return {
+            ...m,
+            rulings: [
+              ...rulings,
+              // Keeps whatever time was typed: marking a DQ shouldn't discard
+              // the official's own reading of the clock.
+              makeRuling(heat, lane, status, existing?.timeMs, by),
+            ],
+          };
         }),
 
-      overrideLaneTime: (id, heat, lane, timeMs) =>
-        editMeet(id, (m) => ({
-          ...m,
-          rulings: [
-            ...m.rulings.filter((r) => r.id !== rulingId(heat.id, lane)),
-            makeRuling(heat, lane, "OK", timeMs),
-          ],
-        })),
+      overrideLaneTime: (id, heat, lane, timeMs, by) =>
+        editMeet(id, (m) => {
+          const existing = m.rulings.find((r) => r.id === rulingId(heat.id, lane));
+          return {
+            ...m,
+            rulings: [
+              ...m.rulings.filter((r) => r.id !== rulingId(heat.id, lane)),
+              // And the reverse: typing a time shouldn't quietly undo a DQ.
+              makeRuling(heat, lane, existing?.status ?? "OK", timeMs, by),
+            ],
+          };
+        }),
 
       clearLaneTimes: (id, heat, lane) =>
         editMeet(id, (m) => ({

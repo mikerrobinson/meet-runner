@@ -394,9 +394,20 @@ export interface Ruling {
   heatId: string;
   lane: number;
   status: ResultStatus;
-  /** Set when a coach overrides the watches outright. */
+  /**
+   * A time somebody entered by hand, standing in for what the watches said.
+   *
+   * A claim like any other, and deliberately not folded into the acceptance:
+   * an official saying "the time was 2:04.55" and an official saying "this
+   * lane is final" are different acts, and keeping them apart means undoing a
+   * sign-off returns to the typed time rather than throwing it away.
+   *
+   * It outranks the watches wherever it's set — see `resultForLane`.
+   */
   timeMs?: number;
   decidedAt: number;
+  /** The account that made the call, so the record says who. */
+  decidedBy?: string;
 }
 
 export function rulingId(heatId: string, lane: number): string {

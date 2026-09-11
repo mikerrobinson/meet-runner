@@ -15,11 +15,11 @@ import {
   resultForLane,
   rulingForLane,
 } from "~/lib/timing";
+import { entrySplit } from "~/lib/events";
 import { useAppStore } from "~/state/app-store";
 import { useSession } from "~/state/session";
 import { useViewPrefs } from "~/state/view-prefs";
 import {
-  athleteName,
   displayName,
   eventName,
   findAthlete,
@@ -62,6 +62,13 @@ export function RunControl({ meet }: { meet: MeetDoc }) {
     [store.athletes, store.team, meet],
   );
 
+  // Who this device can actually resolve. An entry naming somebody outside
+  // this set is an orphan — see `entrySplit`.
+  const known = useMemo(
+    () => new Set(store.athletes.map((a) => a.id)),
+    [store.athletes],
+  );
+
   const event = meet.events.find((e) => e.id === openEvent) ?? meet.events[0];
   const heats = useMemo(
     () =>
@@ -82,44 +89,53 @@ export function RunControl({ meet }: { meet: MeetDoc }) {
   }
 
   return (
-    <div className="space-y-4">
-      <EventStrip
-        meet={meet}
-        openEvent={event?.id}
-        onOpen={setOpenEvent}
-      />
+    <>
+      {/* Two panels side by side once there's room: the running order stays
+          put on the left while the heat you're working fills the rest. On a
+          phone they stack, because a rail and a table can't share 390px. */}
+      <div className="lg:grid lg:grid-cols-[minmax(15rem,28%)_minmax(0,1fr)] lg:gap-4">
+        <EventRail
+          meet={meet}
+          known={known}
+          openEvent={event?.id}
+          onOpen={setOpenEvent}
+        />
 
-      {!event ? null : heats.length === 0 ? (
-        <Card>
-          <SectionTitle
-            action={
-              <Button
-                size="sm"
-                onClick={() => store.ensureHeats(meet.id, event.id)}
+        <div className="mt-4 min-w-0 space-y-4 lg:mt-0">
+          {!event ? null : heats.length === 0 ? (
+            <Card>
+              <SectionTitle
+                action={
+                  <Button
+                    size="sm"
+                    onClick={() => store.ensureHeats(meet.id, event.id)}
+                  >
+                    Seed heats
+                  </Button>
+                }
               >
-                Seed heats
-              </Button>
-            }
-          >
-            {eventName(event)}
-          </SectionTitle>
-          <p className="text-sm text-slate-500">
-            {(meet.entries[event.id] ?? []).length} entered, and no heats yet.
-          </p>
-        </Card>
-      ) : (
-        heats.map((heat) => (
-          <HeatCard
-            key={heat.id}
-            meet={meet}
-            event={event}
-            heat={heat}
-            nameOrder={nameOrder}
-            by={by}
-            onAssign={(lane) => setAssigning({ heat, lane })}
-          />
-        ))
-      )}
+                {eventName(event)}
+              </SectionTitle>
+              <p className="text-sm text-slate-500">
+                {entrySplit(meet, event.id, known).entered} entered, and no
+                heats yet.
+              </p>
+            </Card>
+          ) : (
+            heats.map((heat) => (
+              <HeatCard
+                key={heat.id}
+                meet={meet}
+                event={event}
+                heat={heat}
+                nameOrder={nameOrder}
+                by={by}
+                onAssign={(lane) => setAssigning({ heat, lane })}
+              />
+            ))
+          )}
+        </div>
+      </div>
 
       {assigning && (
         <LaneAssignSheet
@@ -144,59 +160,88 @@ export function RunControl({ meet }: { meet: MeetDoc }) {
           onClose={() => setAssigning(null)}
         />
       )}
-    </div>
+    </>
   );
 }
 
 /**
- * Every event, and how far along it is.
+ * The running order, down the side.
  *
- * Kept on screen rather than behind a dropdown: the question an administrator
- * asks most often is "what's left?", and a list answers it without a tap.
+ * A list rather than a wrapping block of buttons. Twenty-four events laid out
+ * as chips reflow into a wall of different-width targets that's genuinely hard
+ * to read down — and reading down is the whole job, because the question an
+ * administrator asks over and over is "what's left?".
  */
-function EventStrip({
+function EventRail({
   meet,
+  known,
   openEvent,
   onOpen,
 }: {
   meet: MeetDoc;
+  known: Set<string>;
   openEvent: string | undefined;
   onOpen: (id: string) => void;
 }) {
   const done = meet.events.filter((e) => eventClosed(meet, e.id)).length;
 
   return (
-    <Card>
+    <Card className="lg:sticky lg:top-4 lg:max-h-[calc(100vh-var(--app-chrome-top)-var(--app-chrome-bottom)-2rem)] lg:overflow-y-auto">
       <SectionTitle>
-        Events — {done} of {meet.events.length} official
+        {done} of {meet.events.length} official
       </SectionTitle>
-      <div className="flex flex-wrap gap-1.5">
+
+      <ol className="-mx-2">
         {meet.events.map((event, index) => {
           const official = eventClosed(meet, event.id);
           const open = event.id === openEvent;
-          const entered = (meet.entries[event.id] ?? []).length;
+          const { entered, orphaned } = entrySplit(meet, event.id, known);
           return (
-            <button
-              key={event.id}
-              type="button"
-              onClick={() => onOpen(event.id)}
-              className={`rounded-lg border px-2.5 py-1.5 text-left text-sm transition-colors ${
-                open
-                  ? "border-blue-600 bg-blue-600 text-white"
-                  : official
-                    ? "border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
-                    : "border-slate-300 bg-white text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-              }`}
-            >
-              <span className="mr-1.5 tabular-nums opacity-60">{index + 1}</span>
-              {eventName(event)}
-              <span className="ml-1.5 text-xs opacity-70">
-                {official ? "✓" : entered > 0 ? entered : "—"}
-              </span>
-            </button>
+            <li key={event.id}>
+              <button
+                type="button"
+                onClick={() => onOpen(event.id)}
+                aria-current={open ? "true" : undefined}
+                className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors ${
+                  open
+                    ? "bg-blue-600 text-white"
+                    : "hover:bg-slate-100 dark:hover:bg-slate-800"
+                }`}
+              >
+                <span
+                  className={`w-5 shrink-0 text-right tabular-nums ${
+                    open ? "text-white/70" : "text-slate-400"
+                  }`}
+                >
+                  {index + 1}
+                </span>
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {eventName(event)}
+                </span>
+                {orphaned > 0 && (
+                  <span
+                    className={`shrink-0 text-xs ${open ? "text-amber-200" : "text-amber-600 dark:text-amber-400"}`}
+                    title={`${orphaned} ${orphaned === 1 ? "entry" : "entries"} point at swimmers who aren't on the roster — most likely from a re-import. They don't appear on the entries grid.`}
+                  >
+                    !{orphaned}
+                  </span>
+                )}
+                <span
+                  className={`shrink-0 text-xs tabular-nums ${
+                    open
+                      ? "text-white/80"
+                      : official
+                        ? "font-semibold text-emerald-600 dark:text-emerald-400"
+                        : "text-slate-500"
+                  }`}
+                >
+                  {official ? "✓" : entered > 0 ? entered : "—"}
+                </span>
+              </button>
+            </li>
           );
         })}
-      </div>
+      </ol>
     </Card>
   );
 }
@@ -316,8 +361,23 @@ function LaneRow({
   // An empty lane nobody has touched is just an empty lane.
   const idle = !seated && !claimed && watches.length === 0 && !ruling && !accepted;
 
-  const save = (override?: { timeMs?: number; status?: ResultStatus }) => {
-    store.acceptLane(meet.id, heat, lane, by, override);
+  /**
+   * Record the call, then sign the lane off.
+   *
+   * Two writes, one tap. The typed time and the status are judgements about
+   * what happened — claims alongside the watches — and the acceptance is the
+   * separate act of saying the lane is final. Keeping them apart is what makes
+   * "Undo" return to the official's own reading rather than back to the raw
+   * watches, and what lets the record say who entered a time and when.
+   */
+  const save = (call?: { timeMs?: number; status?: ResultStatus }) => {
+    if (call?.timeMs !== undefined) {
+      store.overrideLaneTime(meet.id, heat, lane, call.timeMs, by);
+    }
+    if (call?.status !== undefined) {
+      store.setLaneStatus(meet.id, heat, lane, call.status, by);
+    }
+    store.acceptLane(meet.id, heat, lane, by);
     setEditing(false);
     setTyped("");
   };
@@ -344,15 +404,49 @@ function LaneRow({
               per timer
             </span>
           )}
+          {/* A timer naming somebody other than whoever is seated normally
+              moves them, so this only shows while the two disagree — an
+              offline phone that hasn't sent yet, or two timers on one lane
+              each naming a different swimmer. Worth seeing rather than
+              resolving silently. */}
+          {seated && claimed && claimed !== seated && (
+            <span className="block text-xs text-amber-700 dark:text-amber-400">
+              a timer says{" "}
+              {findAthlete(store.athletes, claimed)
+                ? displayName(findAthlete(store.athletes, claimed)!, nameOrder)
+                : "somebody else"}
+            </span>
+          )}
         </button>
       </td>
 
-      {/* What each timer actually sent. The point of showing them all is that
-          a single outlier is obvious at a glance. */}
-      <td className="py-2 pr-2 font-mono text-xs tabular-nums text-slate-500">
-        {watches.length === 0
-          ? "—"
-          : watches.map((w) => formatTime(w.timeMs)).join("  ")}
+      {/* Every timer's own send, one chip each. Shown in full rather than
+          summarised because a single slow thumb is obvious side by side and
+          invisible once averaged — and because the median only means anything
+          if you can see what it chose between. */}
+      <td className="py-2 pr-2">
+        <span className="flex flex-wrap items-center gap-1">
+          {watches.length === 0 && (
+            <span className="text-xs text-slate-400">—</span>
+          )}
+          {watches.map((w) => (
+            <span
+              key={w.id}
+              title={`${w.timerId}${w.source === "typed" ? " (typed)" : ""}`}
+              className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs tabular-nums text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+            >
+              {formatTime(w.timeMs)}
+            </span>
+          ))}
+          {ruling?.timeMs !== undefined && (
+            <span
+              title={`Entered by hand${ruling.decidedBy ? "" : ""} — stands over the watches`}
+              className="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums text-amber-900 dark:bg-amber-950 dark:text-amber-200"
+            >
+              {formatTime(ruling.timeMs)} ✎
+            </span>
+          )}
+        </span>
       </td>
 
       <td className="py-2 pr-2 font-mono tabular-nums">
@@ -430,6 +524,7 @@ function LaneRow({
             <Button
               size="sm"
               variant="ghost"
+              title="Takes the sign-off back. Any time you entered by hand stays."
               onClick={() => store.unacceptLane(meet.id, heat, lane)}
             >
               Undo
@@ -446,7 +541,7 @@ function LaneRow({
                 setEditing(true);
               }}
             >
-              Edit
+              {ruling?.timeMs !== undefined ? "Re-enter" : "Edit"}
             </Button>
             <Button
               size="sm"
