@@ -26,7 +26,8 @@ import {
   type MembershipStatus,
   type Role,
 } from "./identity";
-import { ensureObjectStore } from "./sync.server";
+import { ensureSchema } from "./schema.server";
+import { createSeason, createTeam } from "./teams.server";
 
 /**
  * `users.contact` is the identity, and is unique: signing in with a contact
@@ -566,11 +567,69 @@ export async function userForToken(
 }
 
 /** The bearer token on a request, from the header the client sends. */
+/** The cookie a browser sends on its own, including on a plain navigation. */
+export const SESSION_COOKIE = "mr_session";
+
+/**
+ * The session token on a request, from either place it can be.
+ *
+ * Two carriers, for two kinds of caller. A `fetch` from our own code sends an
+ * `Authorization` header — that's what the outbox and the timer's phone use,
+ * and it's what a script or the QR-code grant can use too. A *navigation*
+ * sends nothing of the sort, and loaders run on navigations: the browser has
+ * to be the one carrying the credential, which means a cookie.
+ *
+ * The header used to be the only carrier, on the grounds that nothing but our
+ * own code could send one — CSRF gone rather than defended against. That was
+ * right while every screen rendered from a client store. It stopped being
+ * available the moment the reading moved into loaders, where an anonymous
+ * request is indistinguishable from being signed out. The cookie is
+ * `SameSite=Lax`, so it rides top-level navigations and not cross-site form
+ * posts, which is the defence the header used to make unnecessary.
+ */
 export function bearerToken(request: Request): string | null {
   const header = request.headers.get("authorization");
-  if (!header) return null;
-  const [scheme, value] = header.split(" ");
-  return scheme?.toLowerCase() === "bearer" && value ? value : null;
+  if (header) {
+    const [scheme, value] = header.split(" ");
+    if (scheme?.toLowerCase() === "bearer" && value) return value;
+  }
+  return cookieToken(request);
+}
+
+export function cookieToken(request: Request): string | null {
+  const jar = request.headers.get("cookie");
+  if (!jar) return null;
+  for (const part of jar.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === SESSION_COOKIE && rest.length) {
+      return decodeURIComponent(rest.join("="));
+    }
+  }
+  return null;
+}
+
+/**
+ * How the session cookie is written and cleared.
+ *
+ * `HttpOnly` because no script needs to read it — the client keeps its own
+ * copy in localStorage for the header path. `Secure` everywhere but localhost,
+ * which has no https to be secure on.
+ */
+export function sessionCookie(
+  token: string | null,
+  request: Request,
+  maxAgeSeconds = 60 * 60 * 24 * 90,
+): string {
+  const https = new URL(request.url).protocol === "https:";
+  const bits = [
+    `${SESSION_COOKIE}=${token ? encodeURIComponent(token) : ""}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    ...(https ? ["Secure"] : []),
+    `Max-Age=${token ? maxAgeSeconds : 0}`,
+  ];
+  return bits.join("; ");
 }
 
 export async function endSession(db: D1Database, token: string): Promise<void> {
@@ -634,61 +693,24 @@ export interface TeamMembership extends Membership {
 async function teamFacts(
   db: D1Database,
 ): Promise<Map<string, { name: string; code: string; athletes: number; meets: number }>> {
-  // The teams are whatever the object store holds; auth doesn't keep its own
-  // copy of a team, so there's nothing here that can disagree with the roster.
-  //
-  // Counted in code rather than by a GROUP BY, because there is nothing to
-  // group on any more: an athlete belongs to no team, and a meet belongs to
-  // every team racing it. The roster is enrollments, and the meets are the
-  // ones naming this team.
-  await ensureObjectStore(db);
+  // Straight off the tables. Auth keeps no copy of a team, so there is nothing
+  // here that can disagree with the roster.
+  await ensureSchema(db);
   const { results } = await db
     .prepare(
-      `SELECT id, type, scope, data FROM objects
-       WHERE deleted_at IS NULL AND type IN ('team', 'enrollment', 'meet')`,
+      `SELECT t.id, t.name, t.code,
+              (SELECT COUNT(DISTINCT athlete_id) FROM enrollments e WHERE e.team_id = t.id) AS athletes,
+              (SELECT COUNT(*) FROM meet_teams mt WHERE mt.team_id = t.id) AS meets
+       FROM teams t`,
     )
-    .all<{ id: string; type: string; scope: string; data: string }>();
+    .all<{ id: string; name: string; code: string; athletes: number; meets: number }>();
 
-  const facts = new Map<
-    string,
-    { name: string; code: string; athletes: number; meets: number }
-  >();
-  const enrolled = new Map<string, Set<string>>();
-
-  for (const row of results) {
-    if (row.type !== "team") continue;
-    const parsed = JSON.parse(row.data) as { name?: string; code?: string };
-    facts.set(row.id, {
-      name: parsed.name ?? "Untitled team",
-      code: parsed.code ?? "",
-      athletes: 0,
-      meets: 0,
-    });
-  }
-
-  for (const row of results) {
-    if (row.type === "enrollment" && row.scope.startsWith("team:")) {
-      const teamId = row.scope.slice("team:".length);
-      const enrollment = JSON.parse(row.data) as { athleteId?: string };
-      if (!enrollment.athleteId) continue;
-      let people = enrolled.get(teamId);
-      if (!people) enrolled.set(teamId, (people = new Set()));
-      people.add(enrollment.athleteId);
-    } else if (row.type === "meet") {
-      const meet = JSON.parse(row.data) as { teamIds?: string[] };
-      for (const teamId of meet.teamIds ?? []) {
-        const fact = facts.get(teamId);
-        if (fact) fact.meets += 1;
-      }
-    }
-  }
-
-  for (const [teamId, people] of enrolled) {
-    const fact = facts.get(teamId);
-    if (fact) fact.athletes = people.size;
-  }
-
-  return facts;
+  return new Map(
+    results.map((row) => [
+      row.id,
+      { name: row.name, code: row.code, athletes: row.athletes, meets: row.meets },
+    ]),
+  );
 }
 
 /** Every team this person belongs to or has asked to join. */
@@ -909,6 +931,7 @@ export async function claimNewTeam(
   db: D1Database,
   userId: string,
   teamId: string,
+  name = "My Team",
   now = Date.now(),
 ): Promise<JoinResult> {
   await ensureAuthStore(db);
@@ -923,6 +946,12 @@ export async function claimNewTeam(
   if ((await teamFacts(db)).has(teamId)) {
     return { ok: false, error: "That team already exists — ask to join it instead." };
   }
+
+  // The team and its first season are created here rather than pushed up by
+  // the device afterwards. A membership pointing at a team that doesn't exist
+  // yet was only ever safe while a client was expected to fill the gap.
+  await createTeam(db, { id: teamId, name }, now);
+  await createSeason(db, { teamId, name: "Current season" });
 
   await db
     .prepare(

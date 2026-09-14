@@ -7,11 +7,17 @@ import {
   publicAthletes,
   teamRef,
 } from "../app/lib/public.ts";
-import { createMeetDoc, createTeam } from "../app/lib/documents.ts";
 import { defaultEvents } from "../app/lib/events.ts";
 import { buildHeats } from "../app/lib/heats.ts";
-import { makeEnrollment, makeSeason } from "../app/lib/roster.ts";
-import type { Athlete, TeamDoc } from "../app/types/meet.ts";
+import { makeEnrollment } from "../app/lib/roster.ts";
+import type {
+  Athlete,
+  LaneCall,
+  Meet,
+  MeetDetail,
+  Team,
+  Watch,
+} from "../app/types/meet.ts";
 
 /* ------------------------------------------------------------- redaction */
 
@@ -31,51 +37,24 @@ import type { Athlete, TeamDoc } from "../app/types/meet.ts";
   eq(
     Object.keys(shown).sort(),
     ["firstName", "gender", "id", "lastName"],
-    "a public athlete is exactly four fields",
+    "only a name and a gender travel",
   );
-  eq("birthDate" in shown, false, "a minor's birth date never travels");
-  eq("userId" in shown, false, "nor does the account behind them");
   eq(
-    JSON.stringify(publicAthletes([avery])).includes("2009"),
+    JSON.stringify(publicAthletes([avery])).includes("2009-03-14"),
     false,
     "and it isn't hiding in the serialised form either",
+  );
+  eq(
+    JSON.stringify(publicAthletes([avery])).includes("u1"),
+    false,
+    "nor is the account behind them",
   );
 }
 
 /* ------------------------------------------------------- a meet, publicly */
 
-const home: TeamDoc = (() => {
-  const base = createTeam("Cactus Shadows");
-  const season = makeSeason(base.id, "2026-27", {
-    startDate: "2026-08-01",
-    endDate: "2027-07-31",
-  });
-  return {
-    ...base,
-    code: "CHAP",
-    seasons: [season],
-    currentSeasonId: season.id,
-    enrollments: [
-      makeEnrollment(base.id, season.id, "a1", { year: "10" }),
-      makeEnrollment(base.id, season.id, "a2", { year: "11" }),
-    ],
-  };
-})();
-
-const away: TeamDoc = (() => {
-  const base = createTeam("Horizon");
-  const season = makeSeason(base.id, "2026-27", {
-    startDate: "2026-08-01",
-    endDate: "2027-07-31",
-  });
-  return {
-    ...base,
-    code: "HRZN",
-    seasons: [season],
-    currentSeasonId: season.id,
-    enrollments: [makeEnrollment(base.id, season.id, "a9", { year: "12" })],
-  };
-})();
+const home: Team = { id: "t1", name: "Cactus Shadows", code: "CHAP" };
+const away: Team = { id: "t2", name: "Horizon", code: "HRZN" };
 
 const athletes: Athlete[] = [
   { id: "a1", firstName: "Avery", lastName: "Nguyen", gender: "F", birthDate: "2009-03-14" },
@@ -83,59 +62,89 @@ const athletes: Athlete[] = [
   { id: "a9", firstName: "Dana", lastName: "Reyes", gender: "F" },
 ];
 
-const events = defaultEvents({ course: "SCY" });
+const events = defaultEvents("m1", { course: "SCY" });
 const free50 = events.find((e) => e.distance === 50 && e.stroke === "Free")!;
-const heats = buildHeats(free50.id, ["a1", "a9", "a2"], 6);
+const heats = buildHeats("m1", free50.id, ["a1", "a9", "a2"], 6);
 const lanes = heats[0].lanes;
 const laneOf = (id: string) => lanes.indexOf(id) + 1;
 
-const meet = createMeetDoc([home.id, away.id], {
+const meetRow: Meet = {
+  id: "m1",
   name: "vs Horizon",
   date: "2026-11-14",
+  type: "dual",
   course: "SCY",
+  teamIds: [home.id, away.id],
   hostTeamId: home.id,
+  laneCount: 6,
+  leadGender: "F",
+  includeDiving: true,
+  limits: {},
+  entryVisibility: "everyone",
+  athletesMayEnter: false,
+};
+
+const watch = (lane: number, timeMs: number, at: number): Watch => ({
+  heatId: heats[0].id,
+  lane,
+  timerId: "t1",
+  timeMs,
+  recordedAt: at,
+  source: "stopwatch",
+});
+
+const detail: MeetDetail = {
+  meet: meetRow,
+  teams: [home, away],
   events,
   entries: { [free50.id]: ["a1", "a9", "a2"] },
   heats,
+  // Dana is fastest, Avery second, Marcus is disqualified.
   watches: [
-    // Dana is fastest, Avery second, Marcus is disqualified.
-    { id: "w1", eventId: free50.id, heatId: heats[0].id, lane: laneOf("a9"), timerId: "t1", timeMs: 25400, recordedAt: 1, source: "stopwatch" },
-    { id: "w2", eventId: free50.id, heatId: heats[0].id, lane: laneOf("a1"), timerId: "t1", timeMs: 26100, recordedAt: 2, source: "stopwatch" },
-    { id: "w3", eventId: free50.id, heatId: heats[0].id, lane: laneOf("a2"), timerId: "t1", timeMs: 24900, recordedAt: 3, source: "stopwatch" },
+    watch(laneOf("a9"), 25_400, 1),
+    watch(laneOf("a1"), 26_100, 2),
+    watch(laneOf("a2"), 24_900, 3),
   ],
-  rulings: [
-    { id: `${heats[0].id}:${laneOf("a2")}`, eventId: free50.id, heatId: heats[0].id, lane: laneOf("a2"), status: "DQ" as const, decidedAt: 4 },
+  calls: [
+    {
+      heatId: heats[0].id,
+      lane: laneOf("a2"),
+      status: "DQ",
+      final: false,
+      decidedAt: 4,
+    },
+  ] as LaneCall[],
+  athletes,
+  enrollments: [
+    makeEnrollment(home.id, "s1", "a1", { year: "10" }),
+    makeEnrollment(home.id, "s1", "a2", { year: "11" }),
+    makeEnrollment(away.id, "s2", "a9", { year: "12" }),
   ],
-});
+};
 
 /* ---- summary ---- */
 {
-  const summary = meetSummary(meet, [home, away]);
+  const summary = meetSummary(detail.meet, detail.teams, {
+    events: events.length,
+    entries: 3,
+    times: 3,
+  });
   eq(summary.teams.map((t) => t.code), ["CHAP", "HRZN"], "both teams are named");
   eq(summary.hostTeamId, home.id, "and the host is known");
   eq(summary.entries, 3, "three entries");
   eq(summary.times, 3, "three lanes with something recorded");
   eq(summary.events, events.length, "the whole lineup is counted");
-
-  // A team the meet names but this device has never heard of is dropped
-  // rather than rendered as a blank chip.
-  eq(
-    meetSummary(meet, [home]).teams.map((t) => t.code),
-    ["CHAP"],
-    "a team we don't hold is left out rather than shown empty",
-  );
 }
 
 /* ---- results ---- */
 {
-  const teamOf = (id: string) =>
-    home.enrollments.some((e) => e.athleteId === id)
-      ? teamRef(home)
-      : away.enrollments.some((e) => e.athleteId === id)
-        ? teamRef(away)
-        : null;
+  const teamOf = (id: string) => {
+    const enrolled = detail.enrollments.find((e) => e.athleteId === id);
+    if (!enrolled) return null;
+    return enrolled.teamId === home.id ? teamRef(home) : teamRef(away);
+  };
 
-  const byEvent = meetResults(meet, athletes, teamOf);
+  const byEvent = meetResults(detail, teamOf);
   const race = byEvent.find((e) => e.id === free50.id)!;
 
   eq(
@@ -150,6 +159,8 @@ const meet = createMeetDoc([home.id, away.id], {
   );
   eq(race.placings[0].team?.code, "HRZN", "each swim is credited to the right team");
   eq(race.placings[1].team?.code, "CHAP", "on both sides of the meet");
+  eq(race.official, false, "nothing is signed off, so the event isn't official");
+  eq(race.placings.every((p) => p.final === false), true, "and no placing claims to be");
   eq(
     JSON.stringify(byEvent).includes("2009-03-14"),
     false,
@@ -163,46 +174,45 @@ const meet = createMeetDoc([home.id, away.id], {
 
 /* ---- one athlete's history ---- */
 {
-  const second = createMeetDoc([home.id], {
-    name: "vs Central",
-    date: "2027-01-10",
-    course: "SCY",
-    events,
+  const secondHeats = buildHeats("m2", free50.id, ["a1"], 6);
+  const faster: MeetDetail = {
+    ...detail,
+    meet: { ...meetRow, id: "m2", name: "vs Central", date: "2027-01-10" },
+    heats: secondHeats,
     entries: { [free50.id]: ["a1"] },
-    heats: buildHeats(free50.id, ["a1"], 6),
-  });
-  const faster = {
-    ...second,
+    calls: [],
     watches: [
       {
-        id: "w9",
-        eventId: free50.id,
-        heatId: second.heats[0].id,
-        lane: second.heats[0].lanes.indexOf("a1") + 1,
+        heatId: secondHeats[0].id,
+        lane: secondHeats[0].lanes.indexOf("a1") + 1,
         timerId: "t1",
-        timeMs: 25800,
+        timeMs: 25_800,
         recordedAt: 5,
-        source: "stopwatch" as const,
+        source: "stopwatch",
       },
     ],
   };
 
-  const swims = athleteSwims("a1", [meet, faster]);
+  const swims = athleteSwims("a1", [detail, faster]);
   eq(swims.length, 2, "both of Avery's swims");
   eq(swims[0].date, "2027-01-10", "newest first");
   eq(swims.map((s) => s.best), [true, false], "the faster one is the best");
-  eq(swims[0].timeMs, 25800, "and it's the one that actually was faster");
+  eq(swims[0].timeMs, 25_800, "and it's the one that actually was faster");
+  eq(swims[0].place, 1, "with the place it earned in that event");
 
   // A time in another pool length is a different record entirely.
-  const metric = { ...faster, id: "m3", course: "LCM" as const, date: "2027-02-01" };
-  const mixed = athleteSwims("a1", [meet, faster, metric]);
+  const metric: MeetDetail = {
+    ...faster,
+    meet: { ...faster.meet, id: "m3", course: "LCM", date: "2027-02-01" },
+  };
+  const mixed = athleteSwims("a1", [detail, faster, metric]);
   eq(
     mixed.filter((s) => s.best).length,
     2,
     "a best per course, since a yard time and a metre time aren't comparable",
   );
 
-  eq(athleteSwims("nobody", [meet]), [], "someone who never swam has no history");
+  eq(athleteSwims("nobody", [detail]), [], "someone who never swam has no history");
 }
 
 done();

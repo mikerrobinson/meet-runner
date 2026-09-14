@@ -8,11 +8,9 @@ import {
 } from "react-router";
 
 import type { Route } from "./+types/root";
-import { AutoSyncProvider } from "./state/auto-sync";
-import { AppStoreProvider } from "./state/app-store";
 import { SessionProvider } from "./state/session";
 import { ViewPrefsProvider } from "./state/view-prefs";
-import { RunClockProvider } from "./state/run-clock";
+import { OutboxProvider } from "./state/outbox";
 import "./app.css";
 
 /**
@@ -71,19 +69,22 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  // Session sits outside the store: who you are decides which season the store
-  // is asked to load, so it has to be settled first.
+  /**
+   * Three providers, and all of them are about this device rather than the
+   * data. `SessionProvider` is who is signed in here, `ViewPrefsProvider` is
+   * how they like to look at things, and `OutboxProvider` is what this device
+   * has said and not yet been acknowledged for.
+   *
+   * Everything else arrives through loaders, which is why there is no store to
+   * wrap the app in any more.
+   */
   return (
     <SessionProvider>
-      <AppStoreProvider>
-        <AutoSyncProvider>
-          <ViewPrefsProvider>
-            <RunClockProvider>
-              <Outlet />
-            </RunClockProvider>
-          </ViewPrefsProvider>
-        </AutoSyncProvider>
-      </AppStoreProvider>
+      <ViewPrefsProvider>
+        <OutboxProvider>
+          <Outlet />
+        </OutboxProvider>
+      </ViewPrefsProvider>
     </SessionProvider>
   );
 }

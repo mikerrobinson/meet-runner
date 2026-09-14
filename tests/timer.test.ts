@@ -7,12 +7,12 @@ import type { Heat } from "../app/types/meet.ts";
 
 /* ------------------------------------------------------- the running order */
 
-const events = defaultEvents({ course: "SCY" }).slice(0, 3);
+const events = defaultEvents("m1", { course: "SCY" }).slice(0, 3);
 // Twelve entrants over six lanes is two heats; four is one. The middle event
 // is left unseeded, which is the case that matters.
 const heats: Heat[] = [
-  ...buildHeats(events[0].id, ["a1", "a2", "a3", "a4", "a5", "a6", "a7"], 6),
-  ...buildHeats(events[2].id, ["a1", "a2"], 6),
+  ...buildHeats("m1", events[0].id, ["a1", "a2", "a3", "a4", "a5", "a6", "a7"], 6),
+  ...buildHeats("m1", events[2].id, ["a1", "a2"], 6),
 ];
 
 {

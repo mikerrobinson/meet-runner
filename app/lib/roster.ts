@@ -1,168 +1,51 @@
 /**
- * Reading a team: which season a date falls in, and who was on the roster.
+ * Season arithmetic, and small helpers over a roster once it's loaded.
  *
- * Pure lookups over the team document, kept out of the components so the rules
- * live in one place — "who can I enter in this meet?" is a question with one
- * answer, and it's here.
+ * Everything that used to walk a `TeamDoc` looking for its seasons and
+ * enrollments is a query now — see `teams.server.ts`. What's left here is the
+ * pure part: which season a date falls in, what next year's season is called,
+ * and who is graduating.
  */
 
 import { generateId } from "./id";
-import type {
-  Enrollment,
-  MeetDoc,
-  Season,
-  Athlete,
-  TeamDoc,
-} from "~/types/meet";
+import type { Enrollment, Season } from "~/types/meet";
 
-/** Whether a season's dates contain a day. An open end is open forever. */
-function covers(season: Season, isoDate: string): boolean {
-  if (season.startDate && isoDate < season.startDate) return false;
-  if (season.endDate && isoDate > season.endDate) return false;
-  return true;
+/**
+ * The season a date falls in.
+ *
+ * A season with neither date covers everything, which is exactly what a roster
+ * carried over from before seasons existed means. Falls back to the team's
+ * current season, then to the most recent one, rather than returning nothing
+ * and leaving the caller to guess.
+ */
+export function seasonForDate(
+  seasons: Season[],
+  currentSeasonId: string | undefined,
+  isoDate: string,
+): Season | undefined {
+  const covering = seasons.find(
+    (s) =>
+      (!s.startDate || s.startDate <= isoDate) &&
+      (!s.endDate || s.endDate >= isoDate),
+  );
+  return covering ?? seasons.find((s) => s.id === currentSeasonId) ?? seasons.at(-1);
 }
 
 export function findSeason(
-  team: TeamDoc,
+  seasons: Season[],
   seasonId: string | undefined,
 ): Season | undefined {
-  return team.seasons.find((s) => s.id === seasonId);
+  return seasons.find((s) => s.id === seasonId);
 }
 
-export function currentSeason(team: TeamDoc): Season | undefined {
-  return findSeason(team, team.currentSeasonId) ?? team.seasons[0];
-}
-
-/**
- * The season a date belongs to.
- *
- * A team's seasons shouldn't overlap, so at most one contains any given day.
- * Where several could (an unbounded season carried over from before seasons
- * existed), the current one wins. A date outside every season — an August time
- * trial before the season officially opens, or a typo — falls back to the
- * current season rather than leaving the caller with no roster at all.
- */
-export function seasonForDate(
-  team: TeamDoc,
-  isoDate: string,
-): Season | undefined {
-  const matches = team.seasons.filter((s) => covers(s, isoDate));
-  if (matches.length === 0) return currentSeason(team);
-  return (
-    matches.find((s) => s.id === team.currentSeasonId) ??
-    matches[matches.length - 1]
-  );
-}
-
-/** The season a meet is swum in — derived from its date, never stored. */
-export function seasonForMeet(
-  team: TeamDoc,
-  meet: Pick<MeetDoc, "date">,
-): Season | undefined {
-  return seasonForDate(team, meet.date);
-}
-
-export function enrollmentsIn(team: TeamDoc, seasonId: string): Enrollment[] {
-  return team.enrollments.filter((e) => e.seasonId === seasonId);
-}
-
-/** Enrollments for a season keyed by athlete, for rows that need it per athlete. */
+/** Enrollments by athlete id, for a screen that has the roster in hand. */
 export function enrollmentIndex(
-  team: TeamDoc,
-  seasonId: string | undefined,
+  enrollments: Enrollment[],
 ): Map<string, Enrollment> {
-  return new Map(
-    team.enrollments
-      .filter((e) => e.seasonId === seasonId)
-      .map((e) => [e.athleteId, e] as const),
-  );
+  return new Map(enrollments.map((e) => [e.athleteId, e] as const));
 }
 
-export function enrollmentFor(
-  team: TeamDoc,
-  athleteId: string,
-  seasonId: string | undefined,
-): Enrollment | undefined {
-  return team.enrollments.find(
-    (e) => e.athleteId === athleteId && e.seasonId === seasonId,
-  );
-}
-
-/**
- * Everyone who can be entered in a race this season, in the order given.
- *
- * Athletes are global, so the roster is an intersection rather than a field:
- * these people, filtered to the ones this team enrolled this season. Callers
- * sort — display order is a naming preference, not a roster fact.
- */
-export function rosterFor(
-  athletes: Athlete[],
-  team: TeamDoc,
-  seasonId: string | undefined,
-): Athlete[] {
-  if (!seasonId) return [];
-  const active = new Set(
-    team.enrollments
-      .filter((e) => e.seasonId === seasonId && e.status === "active")
-      .map((e) => e.athleteId),
-  );
-  return athletes.filter((s) => active.has(s.id));
-}
-
-/** Who's enterable in this meet: the roster of the season it falls in. */
-export function rosterForMeet(
-  athletes: Athlete[],
-  team: TeamDoc,
-  meet: Pick<MeetDoc, "date">,
-): Athlete[] {
-  return rosterFor(athletes, team, seasonForMeet(team, meet)?.id);
-}
-
-/**
- * Everyone racing a meet, across all of its teams.
- *
- * What a heat sheet is drawn from, and what a timer's picker offers. A swimmer
- * enrolled by two of the teams present appears once.
- */
-export function rosterForMeetTeams(
-  athletes: Athlete[],
-  teams: TeamDoc[],
-  meet: Pick<MeetDoc, "date" | "teamIds">,
-): Athlete[] {
-  const racing = teams.filter((t) => meet.teamIds.includes(t.id));
-  const ids = new Set(
-    racing.flatMap((team) => rosterForMeet(athletes, team, meet).map((a) => a.id)),
-  );
-  return athletes.filter((a) => ids.has(a.id));
-}
-
-/**
- * Which of a meet's teams an athlete is racing for.
- *
- * Derived from enrollments rather than stored on the entry: the enrollment
- * already says who they swam for in the season the meet falls in, so a swimmer
- * who changes schools between seasons has their history stay correct without
- * anyone editing an old meet. Returns null for someone with no enrollment in
- * any team present — an unaffiliated entry.
- */
-export function teamForAthleteAt(
-  teams: TeamDoc[],
-  meet: Pick<MeetDoc, "date" | "teamIds">,
-  athleteId: string,
-): TeamDoc | null {
-  for (const team of teams) {
-    if (!meet.teamIds.includes(team.id)) continue;
-    const seasonId = seasonForMeet(team, meet)?.id;
-    if (!seasonId) continue;
-    const enrolled = team.enrollments.some(
-      (e) => e.athleteId === athleteId && e.seasonId === seasonId,
-    );
-    if (enrolled) return team;
-  }
-  return null;
-}
-
-/** The ISO day before this one, for closing a season the day a new one opens. */
+/** The day before an ISO date, for closing one season as the next opens. */
 export function dayBefore(isoDate: string): string {
   const date = new Date(`${isoDate}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() - 1);
@@ -172,48 +55,27 @@ export function dayBefore(isoDate: string): string {
 export function makeSeason(
   teamId: string,
   name: string,
-  dates: { startDate?: string; endDate?: string } = {},
+  startDate?: string,
+  endDate?: string,
 ): Season {
-  return {
-    id: generateId(),
-    teamId,
-    name,
-    startDate: dates.startDate || undefined,
-    endDate: dates.endDate || undefined,
-  };
-}
-
-export function makeEnrollment(
-  teamId: string,
-  seasonId: string,
-  athleteId: string,
-  facts: { year?: string; squad?: string; status?: Enrollment["status"] } = {},
-): Enrollment {
-  return {
-    id: generateId(),
-    teamId,
-    seasonId,
-    athleteId,
-    year: facts.year ?? "",
-    squad: facts.squad || undefined,
-    status: facts.status ?? "active",
-  };
+  return { id: generateId(), teamId, name, startDate, endDate };
 }
 
 /**
- * Grades advance on their own between seasons — "10" becomes "11". Anything
- * that isn't a plain number ("Fr", "Senior") is left as written, because
- * guessing at a coach's shorthand is worse than leaving it to them.
+ * Next year's grade.
+ *
+ * Numeric grades advance; anything else is left exactly as written. The
+ * temptation is to map "Fr" to "So", and the reason not to is that a roster
+ * CSV contains whatever a school types — "Fr", "9th", "Freshman", "FR" — and a
+ * ladder that half-works silently mislabels every row it doesn't recognise. A
+ * grade left alone is visibly unchanged, which a coach can fix in a second.
  */
 export function nextYear(year: string): string {
   const value = Number(year.trim());
   return Number.isInteger(value) && value > 0 ? String(value + 1) : year;
 }
 
-/**
- * The label the next season would have. "2026-27" becomes "2027-28"; anything
- * that isn't in that shape is left to the coach to name.
- */
+/** "2026-27" becomes "2027-28"; a bare year increments; anything else is "". */
 export function nextSeasonName(name: string): string {
   const trimmed = name.trim();
 
@@ -230,8 +92,31 @@ export function nextSeasonName(name: string): string {
   return `${start}-${end}`;
 }
 
-/** Whether a year reads as a final one — used to leave graduates behind. */
+/**
+ * Whether somebody in this year leaves at the end of the season.
+ *
+ * Numeric grades only, for the same reason `nextYear` advances only those: a
+ * guess about "Sr" that is wrong quietly archives somebody still on the team.
+ */
 export function isGraduating(year: string, finalYear = 12): boolean {
   const value = Number(year.trim());
   return Number.isInteger(value) && value >= finalYear;
+}
+
+/** A roster row, with an id derived so re-enrolling the same person updates. */
+export function makeEnrollment(
+  teamId: string,
+  seasonId: string,
+  athleteId: string,
+  facts: { year?: string; squad?: string; status?: Enrollment["status"] } = {},
+): Enrollment {
+  return {
+    id: `${seasonId}:${athleteId}`,
+    teamId,
+    seasonId,
+    athleteId,
+    year: facts.year ?? "",
+    squad: facts.squad,
+    status: facts.status ?? "active",
+  };
 }

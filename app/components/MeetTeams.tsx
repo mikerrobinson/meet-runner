@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Banner, Button, Card, SectionTitle, TextInput } from "./ui";
 import { request } from "~/lib/http";
 import type { PublicTeam } from "~/lib/public";
-import type { MeetDoc } from "~/types/meet";
+import type { Meet } from "~/types/meet";
 
 /**
  * Who's racing.
@@ -22,7 +22,7 @@ export function MeetTeams({
   homeTeamId,
   onChange,
 }: {
-  meet: MeetDoc;
+  meet: Meet;
   /** This device's own team. Always racing, and never removable. */
   homeTeamId: string;
   onChange: (patch: { teamIds: string[]; hostTeamId?: string }) => void;

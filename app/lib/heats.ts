@@ -1,6 +1,6 @@
 import { generateId } from "./id";
-import { heatTouched } from "./timing";
-import type { Heat, LaneCount, MeetDoc } from "~/types/meet";
+import { heatTouched, type TimingRows } from "./timing";
+import type { Heat, LaneCount } from "~/types/meet";
 
 /**
  * Lane assignment order, fastest lane first. Standard practice puts the top
@@ -32,6 +32,7 @@ export function laneOrder(laneCount: LaneCount): number[] {
  * fill lanes from the middle outward.
  */
 export function buildHeats(
+  meetId: string,
   eventId: string,
   athleteIds: string[],
   laneCount: LaneCount,
@@ -56,7 +57,7 @@ export function buildHeats(
       lanes[order[i] - 1] = athleteId;
     });
 
-    heats.push({ id: generateId(), eventId, index, lanes });
+    heats.push({ id: generateId(), meetId, eventId, index, lanes });
   }
 
   return heats;
@@ -72,8 +73,8 @@ export function shuffle<T>(items: T[]): T[] {
   return copy;
 }
 
-export function heatsForEvent(meet: MeetDoc, eventId: string): Heat[] {
-  return meet.heats
+export function heatsForEvent(heats: Heat[], eventId: string): Heat[] {
+  return heats
     .filter((h) => h.eventId === eventId)
     .sort((a, b) => a.index - b.index);
 }
@@ -97,17 +98,19 @@ export function heatsForEvent(meet: MeetDoc, eventId: string): Heat[] {
  * to work.
  */
 export function reseedHeats(
-  meet: Pick<MeetDoc, "heats" | "watches" | "rulings" | "results" | "options">,
+  rows: TimingRows & { heats: Heat[] },
+  meetId: string,
   eventId: string,
   entrants: string[],
+  laneCount: LaneCount,
 ): Heat[] | null {
-  const existing = meet.heats
+  const existing = rows.heats
     .filter((h) => h.eventId === eventId)
     .sort((a, b) => a.index - b.index);
-  if (existing.some((heat) => heatTouched(meet, heat))) return null;
+  if (existing.some((heat) => heatTouched(rows, heat))) return null;
 
   const byIndex = new Map(existing.map((h) => [h.index, h.id] as const));
-  return buildHeats(eventId, entrants, meet.options.laneCount).map((heat) => ({
+  return buildHeats(meetId, eventId, entrants, laneCount).map((heat) => ({
     ...heat,
     id: byIndex.get(heat.index) ?? heat.id,
   }));

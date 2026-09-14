@@ -13,8 +13,6 @@
  */
 
 import { SyncError } from "./api.server";
-import { ensureObjectStore, pushObjects } from "./sync.server";
-import type { SyncObject } from "./objects";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS meet_grants (
@@ -183,63 +181,6 @@ export async function revokeGrants(
  * attach it to. A timer cannot touch the running order, the entries, the
  * heats, or a coach's rulings, whatever they send.
  */
-export async function writeAsTimer(
-  db: D1Database,
-  grant: Grant,
-  objects: SyncObject[],
-  /**
-   * Teams a roster entry may be written into — the ones racing this meet.
-   * Enrollments are minted by the server from the meet's own facts, never
-   * accepted from a phone, so this only has to confirm the server's own work.
-   */
-  enrollableTeamIds: string[] = [],
-): Promise<{ applied: number }> {
-  // Queried directly below, so the table has to exist before pushObjects would
-  // otherwise have created it.
-  await ensureObjectStore(db);
-  const newcomers = await unknownAthletes(db, objects);
-  const enrollable = new Set(enrollableTeamIds);
-
-  const allowed = objects.filter((object) => {
-    // Vacating a lane is a deletion, and the only one a grant may make: the
-    // swimmer a timer just moved has to leave the lane they were in.
-    if (object.deletedAt) {
-      return (
-        object.type === "seat" &&
-        object.scope.kind === "meet" &&
-        object.scope.id === grant.meetId
-      );
-    }
-    // A person, and only one nobody has recorded yet. Letting a grant update
-    // an existing athlete would let a code taped to a table rename the roster.
-    if (object.type === "athlete") {
-      return object.scope.kind === "global" && newcomers.has(object.id);
-    }
-    if (object.type === "enrollment") {
-      return object.scope.kind === "team" && enrollable.has(object.scope.id);
-    }
-    // Seating somebody in the lane a timer says they swam. Built by the server
-    // from the meet's own heat — see `seatFromWatch` — never accepted from the
-    // phone, which is why a grant still cannot send a heat of its own.
-    if (object.type === "seat" || object.type === "entry") {
-      return object.scope.kind === "meet" && object.scope.id === grant.meetId;
-    }
-    if (object.type !== "watch") return false;
-    return object.scope.kind === "meet" && object.scope.id === grant.meetId;
-  });
-
-  if (allowed.length !== objects.length) {
-    // A refusal, not a fault: the phone sent something a grant doesn't cover,
-    // and saying "Server error" would send a volunteer looking for a problem
-    // with the app instead of telling them what happened.
-    throw new SyncError(
-      "A timing code can record times and add swimmers, nothing else.",
-      403,
-    );
-  }
-  const { applied } = await pushObjects(db, allowed);
-  return { applied };
-}
 
 /**
  * Which of the athletes in a batch the server has never seen.
@@ -247,26 +188,3 @@ export async function writeAsTimer(
  * A timer may introduce a person; they may not edit one. The difference is
  * whether the id already exists, so it's a lookup rather than a judgement.
  */
-async function unknownAthletes(
-  db: D1Database,
-  objects: SyncObject[],
-): Promise<Set<string>> {
-  const ids = objects
-    .filter((object) => object.type === "athlete")
-    .map((object) => object.id);
-  if (ids.length === 0) return new Set();
-
-  const known = new Set<string>();
-  for (let start = 0; start < ids.length; start += 40) {
-    const slice = ids.slice(start, start + 40);
-    const { results } = await db
-      .prepare(
-        `SELECT id FROM objects WHERE type = 'athlete'
-           AND id IN (${slice.map(() => "?").join(", ")})`,
-      )
-      .bind(...slice)
-      .all<{ id: string }>();
-    for (const row of results) known.add(row.id);
-  }
-  return new Set(ids.filter((id) => !known.has(id)));
-}

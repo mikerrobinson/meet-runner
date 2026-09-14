@@ -1,13 +1,24 @@
 import { generateId } from "./id";
 import { DIVING_DISTANCE, isDiving, isRelay, raceKey } from "~/types/meet";
 import type {
+  EntryLimits,
   EventGender,
   Gender,
   MeetCourse,
-  MeetDoc,
   MeetEvent,
   Stroke,
 } from "~/types/meet";
+
+/**
+ * What the entry-limit checks need: the programme, who's in what, and the
+ * caps. A loader has all three; nothing here wants a whole meet.
+ */
+export interface EntryContext {
+  events: MeetEvent[];
+  /** eventId -> athleteIds registered in it. */
+  entries: Record<string, string[]>;
+  limits: EntryLimits;
+}
 
 /**
  * A standard high-school dual meet, in the order it's swum — relays included,
@@ -58,12 +69,26 @@ export function dualMeetRaceCount(includeDiving: boolean): number {
     : DUAL_MEET_ORDER.filter((e) => e.stroke !== "Diving").length;
 }
 
+/**
+ * A new event.
+ *
+ * `position` is left at zero: the order of a lineup is the order of the array
+ * the caller is building, and `renumber` stamps it on the way to the database.
+ * Keeping the two apart means every list operation here — adding diving,
+ * flipping the lead gender, converting distances — is ordinary array work.
+ */
 export function makeEvent(
+  meetId: string,
   distance: number,
   stroke: Stroke,
   gender: EventGender = "Open",
 ): MeetEvent {
-  return { id: generateId(), distance, stroke, gender };
+  return { id: generateId(), meetId, position: 0, distance, stroke, gender };
+}
+
+/** Stamp array order onto `position`, ready to be written. */
+export function renumber(events: MeetEvent[]): MeetEvent[] {
+  return events.map((event, position) => ({ ...event, position }));
 }
 
 export function otherGender(gender: Gender): Gender {
@@ -77,7 +102,9 @@ export function otherGender(gender: Gender): Gender {
  * back, with `leadGender` going first. "open" collapses that to one race per
  * event, which suits an inter-squad meet or a time trial.
  */
-export function defaultEvents({
+export function defaultEvents(
+  meetId: string,
+  {
   mode = "split",
   leadGender = "F",
   includeDiving = true,
@@ -87,17 +114,20 @@ export function defaultEvents({
   leadGender?: Gender;
   includeDiving?: boolean;
   course?: MeetCourse;
-} = {}): MeetEvent[] {
+  } = {},
+): MeetEvent[] {
   const order = standardOrder(course, includeDiving);
 
   if (mode === "open") {
-    return order.map((e) => makeEvent(e.distance, e.stroke, "Open"));
+    return renumber(order.map((e) => makeEvent(meetId, e.distance, e.stroke, "Open")));
   }
   const second = otherGender(leadGender);
-  return order.flatMap((e) => [
-    makeEvent(e.distance, e.stroke, leadGender),
-    makeEvent(e.distance, e.stroke, second),
-  ]);
+  return renumber(
+    order.flatMap((e) => [
+      makeEvent(meetId, e.distance, e.stroke, leadGender),
+      makeEvent(meetId, e.distance, e.stroke, second),
+    ]),
+  );
 }
 
 /**
@@ -115,6 +145,7 @@ function isSplitLineup(events: MeetEvent[]): boolean {
  * shape — a gendered pair in a split meet, a single event otherwise.
  */
 export function withDiving(
+  meetId: string,
   events: MeetEvent[],
   leadGender: Gender,
 ): MeetEvent[] {
@@ -122,10 +153,10 @@ export function withDiving(
 
   const diving = isSplitLineup(events)
     ? [
-        makeEvent(DIVING_DISTANCE, "Diving", leadGender),
-        makeEvent(DIVING_DISTANCE, "Diving", otherGender(leadGender)),
+        makeEvent(meetId, DIVING_DISTANCE, "Diving", leadGender),
+        makeEvent(meetId, DIVING_DISTANCE, "Diving", otherGender(leadGender)),
       ]
-    : [makeEvent(DIVING_DISTANCE, "Diving", "Open")];
+    : [makeEvent(meetId, DIVING_DISTANCE, "Diving", "Open")];
 
   const lastFifty = events.reduce(
     (found, e, i) => (e.distance === 50 && e.stroke === "Free" ? i : found),
@@ -236,14 +267,14 @@ export interface EntryTally {
 
 /** What a swimmer is already in, counted the way the limits are written. */
 export function tallyEntries(
-  meet: Pick<MeetDoc, "entries" | "events">,
+  ctx: Pick<EntryContext, "entries" | "events">,
   athleteId: string,
 ): EntryTally {
-  const byId = new Map(meet.events.map((e) => [e.id, e] as const));
+  const byId = new Map(ctx.events.map((e) => [e.id, e] as const));
   let individual = 0;
   let relay = 0;
 
-  for (const [eventId, ids] of Object.entries(meet.entries)) {
+  for (const [eventId, ids] of Object.entries(ctx.entries)) {
     if (!ids.includes(athleteId)) continue;
     const event = byId.get(eventId);
     // Diving holds a place in the running order but isn't a swim, so it
@@ -267,17 +298,17 @@ export function tallyEntries(
  * already in, so re-checking an existing entry never reports a breach.
  */
 export function whyNotEnter(
-  meet: Pick<MeetDoc, "entries" | "events" | "options">,
+  ctx: EntryContext,
   athleteId: string,
   eventId: string,
 ): string | null {
-  const event = meet.events.find((e) => e.id === eventId);
+  const event = ctx.events.find((e) => e.id === eventId);
   if (!event) return "That race isn't in this meet.";
-  if ((meet.entries[eventId] ?? []).includes(athleteId)) return null;
+  if ((ctx.entries[eventId] ?? []).includes(athleteId)) return null;
   if (isDiving(event)) return null;
 
-  const { limits } = meet.options;
-  const tally = tallyEntries(meet, athleteId);
+  const { limits } = ctx;
+  const tally = tallyEntries(ctx, athleteId);
   const relay = isRelay(event);
 
   if (relay && limits.maxRelays !== undefined && tally.relay >= limits.maxRelays) {
@@ -305,37 +336,30 @@ export function whyNotEnter(
  * because their team already has enough in that heat.
  */
 export function teamFullFor(
-  meet: Pick<MeetDoc, "entries" | "options">,
+  ctx: Pick<EntryContext, "entries" | "limits">,
   eventId: string,
   teamAthleteIds: Set<string>,
 ): boolean {
-  const cap = meet.options.limits.maxPerTeamPerEvent;
+  const cap = ctx.limits.maxPerTeamPerEvent;
   if (cap === undefined) return false;
-  const entered = (meet.entries[eventId] ?? []).filter((id) =>
+  const entered = (ctx.entries[eventId] ?? []).filter((id) =>
     teamAthleteIds.has(id),
   );
   return entered.length >= cap;
 }
 
 /**
- * Entries in an event, split by whether the swimmer still exists.
+ * How many swimmers are in an event.
  *
- * These come apart more often than you'd hope. Entries reference athletes by
- * id, so re-importing a roster — which mints new ids — leaves the old entries
- * pointing at people who are no longer listed. The registration grid draws a
- * row per athlete, so an orphaned entry is invisible there while still sitting
- * in the document, which is how a race can read "9 entered" and show three
- * ticks.
- *
- * Counting them separately is what lets a screen say so instead of quietly
- * disagreeing with the one next to it.
+ * This used to return an orphan count alongside it. Entries referenced
+ * athletes by id, a roster re-import minted new ids, and the leftovers counted
+ * without rendering — which is how a race read "9 entered" above three ticks.
+ * With entries as rows and a loader that fetches exactly the people its rows
+ * name, there is nothing left to be orphaned from.
  */
-export function entrySplit(
-  meet: Pick<MeetDoc, "entries">,
+export function enteredCount(
+  entries: Record<string, string[]>,
   eventId: string,
-  known: Set<string>,
-): { entered: number; orphaned: number } {
-  const ids = meet.entries[eventId] ?? [];
-  const entered = ids.filter((id) => known.has(id)).length;
-  return { entered, orphaned: ids.length - entered };
+): number {
+  return (entries[eventId] ?? []).length;
 }

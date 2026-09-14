@@ -1,6 +1,18 @@
 import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 import type { Route } from "./+types/team";
+import { useFetcher } from "react-router";
+import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
+import { teamAccess } from "~/lib/access.server";
+import { membershipsFor } from "~/lib/auth.server";
+import {
+  enrol,
+  getTeam,
+  listSeasons,
+  roster as rosterFor,
+} from "~/lib/teams.server";
+import { putAthlete } from "~/lib/athletes.server";
+import { todayIso } from "~/types/meet";
 import { AthleteSheet } from "~/components/AthleteSheet";
 import {
   Banner,
@@ -11,9 +23,9 @@ import {
   TextInput,
 } from "~/components/ui";
 import { downloadFile, parseRosterCsv, toCsv } from "~/lib/csv";
-import { currentSeason, enrollmentsIn } from "~/lib/roster";
+import { seasonForDate } from "~/lib/roster";
 import { allResults } from "~/lib/timing";
-import { useAppStore, type RosterEntry } from "~/state/app-store";
+import type { RosterEntry } from "~/lib/csv";
 import { useViewPrefs } from "~/state/view-prefs";
 import {
   byAthlete,
@@ -33,8 +45,98 @@ const TEMPLATE = toCsv([
   ["Marcus", "Hill", "M", "12", "2007-11-02", "Gold"],
 ]);
 
-export default function Team() {
-  const { team, athletes, meets, enrol } = useAppStore();
+/**
+ * The coach's own roster, for the season they're in.
+ *
+ * Which team that is comes from the account's memberships rather than from
+ * whatever a device happened to be holding — a coach signing in on a borrowed
+ * iPad gets their own roster, not the last one that touched it.
+ */
+export async function loader({ request, context }: Route.LoaderArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  const db = requireDb(env);
+  const user = await currentUser(request, env);
+  if (!user) return { team: null, season: null, roster: [], swimCounts: {} };
+
+  const memberships = (await membershipsFor(db, user.id)).filter(
+    (m) => m.status === "active",
+  );
+  const teamId =
+    memberships.find((m) => m.teamId === user.lastTeamId)?.teamId ??
+    memberships[0]?.teamId;
+  if (!teamId) return { team: null, season: null, roster: [], swimCounts: {} };
+
+  const team = await getTeam(db, teamId);
+  const seasons = await listSeasons(db, teamId);
+  const season = seasonForDate(seasons, team?.currentSeasonId, todayIso()) ?? null;
+  const rows = season ? await rosterFor(db, teamId, season.id) : [];
+
+  // How many meets each swimmer has a time in — one aggregate rather than
+  // deriving every result on the client just to count them.
+  const { results } = await db
+    .prepare(
+      `SELECT s.athlete_id AS id, COUNT(DISTINCT w.meet_id) AS n
+       FROM seats s JOIN watches w ON w.heat_id = s.heat_id AND w.lane = s.lane
+       GROUP BY s.athlete_id`,
+    )
+    .all<{ id: string; n: number }>();
+
+  return {
+    team,
+    season,
+    roster: rows,
+    swimCounts: Object.fromEntries(results.map((r) => [r.id, r.n])),
+  };
+}
+
+/** Importing a roster, and adding one swimmer at a time. */
+export async function action({ request, context }: Route.ActionArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  const db = requireDb(env);
+  const user = await currentUser(request, env);
+
+  const form = await request.formData();
+  const teamId = String(form.get("teamId") ?? "");
+  const seasonId = String(form.get("seasonId") ?? "");
+  const access = await teamAccess(db, teamId, user);
+  if (!access.coach) {
+    throw new Response("Only a coach of this team can change the roster.", {
+      status: 403,
+    });
+  }
+
+  const entries = JSON.parse(String(form.get("entries") ?? "[]")) as RosterEntry[];
+  const mode = String(form.get("mode") ?? "append");
+
+  // "Replace" clears this season's roster and nobody's history: the athletes
+  // themselves stay, so past meets keep their names and times. Re-importing
+  // used to mint new ids, which left every old entry pointing at somebody who
+  // no longer appeared anywhere.
+  if (mode === "replace") {
+    await db
+      .prepare("DELETE FROM enrollments WHERE team_id = ? AND season_id = ?")
+      .bind(teamId, seasonId)
+      .run();
+  }
+
+  for (const entry of entries) {
+    const athlete = await putAthlete(db, entry.athlete);
+    await enrol(db, {
+      teamId,
+      seasonId,
+      athleteId: athlete.id,
+      year: entry.year,
+      squad: entry.squad,
+    });
+  }
+
+  return { ok: true, added: entries.length };
+}
+
+export default function Team({ loaderData }: Route.ComponentProps) {
+  const { team, season, roster } = loaderData;
+  const swimCounts = new Map(Object.entries(loaderData.swimCounts));
+  const fetcher = useFetcher();
   const { nameOrder } = useViewPrefs();
   const [warnings, setWarnings] = useState<string[]>([]);
   const [incoming, setIncoming] = useState<RosterEntry[] | null>(null);
@@ -43,52 +145,37 @@ export default function Team() {
   const [showArchived, setShowArchived] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  /** How many meets each athlete has a time in — shown on the roster row. */
-  const swimCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const meet of meets) {
-      const seen = new Set<string>();
-      for (const result of allResults(meet)) {
-        if (seen.has(result.athleteId)) continue;
-        seen.add(result.athleteId);
-        counts.set(result.athleteId, (counts.get(result.athleteId) ?? 0) + 1);
-      }
-    }
-    return counts;
-  }, [meets]);
+  const enrolled = roster;
+  const active = enrolled.filter((r) => r.enrollment.status === "active");
+  const inactive = enrolled.filter((r) => r.enrollment.status !== "active");
 
-  const season = currentSeason(team);
-  const enrolled = useMemo(
-    () => (season ? enrollmentsIn(team, season.id) : []),
-    [team, season],
-  );
+  const save = (entries: RosterEntry[], mode: "append" | "replace") => {
+    if (!team || !season) return;
+    fetcher.submit(
+      {
+        teamId: team.id,
+        seasonId: season.id,
+        mode,
+        entries: JSON.stringify(entries),
+      },
+      { method: "post" },
+    );
+  };
 
   const handleFile = async (file: File) => {
     const { entries, warnings: issues } = parseRosterCsv(await file.text());
     setWarnings(issues);
     if (entries.length === 0) return;
-    if (enrolled.length === 0) enrol(entries, "replace");
+    if (enrolled.length === 0) save(entries, "replace");
     else setIncoming(entries);
   };
-
-  const byId = useMemo(
-    () => new Map(athletes.map((s) => [s.id, s] as const)),
-    [athletes],
-  );
-  const active = enrolled.filter((e) => e.status === "active");
-  const inactive = enrolled.filter((e) => e.status !== "active");
 
   const visible = useMemo(() => {
     const query = search.trim().toLowerCase();
     return (showArchived ? enrolled : active)
-      .map((enrollment) => ({ enrollment, athlete: byId.get(enrollment.athleteId) }))
-      .filter(
-        (row): row is { enrollment: Enrollment; athlete: Athlete } =>
-          row.athlete !== undefined &&
-          (!query || athleteName(row.athlete).toLowerCase().includes(query)),
-      )
+      .filter((row) => !query || athleteName(row.athlete).toLowerCase().includes(query))
       .sort((a, b) => byAthlete(nameOrder)(a.athlete, b.athlete));
-  }, [enrolled, active, byId, showArchived, search, nameOrder]);
+  }, [enrolled, active, showArchived, search, nameOrder]);
 
   return (
     <div className="space-y-4">
@@ -223,7 +310,7 @@ export default function Team() {
               <Button
                 variant="primary"
                 onClick={() => {
-                  enrol(incoming, "append");
+                  save(incoming, "append");
                   setIncoming(null);
                 }}
               >
@@ -232,7 +319,7 @@ export default function Team() {
               <Button
                 variant="danger"
                 onClick={() => {
-                  enrol(incoming, "replace");
+                  save(incoming, "replace");
                   setIncoming(null);
                 }}
               >
@@ -263,7 +350,7 @@ export default function Team() {
           title="Add swimmer"
           onClose={() => setAdding(false)}
           onSave={(athlete, facts) => {
-            enrol([{ athlete: athlete, ...facts }], "append");
+            save([{ athlete, ...facts }], "append");
             setAdding(false);
           }}
         />

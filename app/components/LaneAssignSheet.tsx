@@ -9,7 +9,7 @@ import {
   athleteName,
   type Enrollment,
   type Heat,
-  type MeetDoc,
+  type MeetDetail,
   type NameOrder,
   type Athlete,
 } from "~/types/meet";
@@ -28,7 +28,7 @@ interface Candidate {
  * swim while walking up behind the blocks.
  */
 export function LaneAssignSheet({
-  meet,
+  detail,
   roster,
   enrollments,
   nameOrder,
@@ -37,7 +37,7 @@ export function LaneAssignSheet({
   onAssign,
   onClose,
 }: {
-  meet: MeetDoc;
+  detail: MeetDetail;
   /** This meet's season roster — anyone off it can't be entered. */
   roster: Athlete[];
   /** Their year and squad this season, keyed by athlete id. */
@@ -50,10 +50,10 @@ export function LaneAssignSheet({
 }) {
   const [search, setSearch] = useState("");
 
-  const event = meet.events.find((e) => e.id === heat.eventId);
+  const event = detail.events.find((e) => e.id === heat.eventId);
 
   const candidates = useMemo<Candidate[]>(() => {
-    const heatsInEvent = meet.heats
+    const heatsInEvent = detail.heats
       .filter((h) => h.eventId === heat.eventId)
       .sort((a, b) => a.index - b.index);
 
@@ -65,7 +65,7 @@ export function LaneAssignSheet({
     }
 
     const swum = new Set(
-      allResults(meet)
+      allResults(detail)
         .filter((r) => r.eventId === heat.eventId)
         .map((r) => r.athleteId),
     );
@@ -88,7 +88,7 @@ export function LaneAssignSheet({
         if (aFree !== bFree) return aFree - bFree;
         return byAthlete(nameOrder)(a.athlete, b.athlete);
       });
-  }, [roster, nameOrder, meet, heat.eventId, event, search]);
+  }, [roster, nameOrder, detail, heat.eventId, event, search]);
 
   return (
     <Sheet open title={`Lane ${lane} · who's swimming?`} onClose={onClose}>

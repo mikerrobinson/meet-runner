@@ -1,16 +1,24 @@
 import { generateId } from "./id";
 import { formatTime } from "./time";
-import { enrollmentFor, seasonForMeet } from "./roster";
 import { allResults } from "./timing";
 import {
   eventName,
   athleteName,
-  type Gender,
-  type MeetDoc,
   type Athlete,
-  type TeamDoc,
+  type Enrollment,
+  type Gender,
+  type MeetDetail,
 } from "~/types/meet";
-import type { RosterEntry } from "~/state/app-store";
+
+/**
+ * One row of a roster import: the person, plus what's true of them this
+ * season. The two halves land in different tables, so they travel as a pair.
+ */
+export interface RosterEntry {
+  athlete: Athlete;
+  year: string;
+  squad?: string;
+}
 
 /** RFC-4180-ish parser: handles quoted fields, embedded commas, and CRLF. */
 export function parseCsv(text: string): string[][] {
@@ -268,14 +276,12 @@ export function toCsv(rows: Array<Array<string | number>>): string {
  * finish place.
  */
 export function resultsToCsv(
-  meet: MeetDoc,
-  team: TeamDoc,
-  athletes: Athlete[],
+  detail: MeetDetail,
+  /** Year and squad as of this meet, keyed by athlete. Empty is fine. */
+  enrollments: Map<string, Enrollment> = new Map(),
 ): string {
-  const byId = new Map(athletes.map((a) => [a.id, a] as const));
-  // Their year and squad as of this meet, not as of today.
-  const seasonId = seasonForMeet(team, meet)?.id;
-  const heats = new Map(meet.heats.map((h) => [h.id, h] as const));
+  const byId = new Map(detail.athletes.map((a) => [a.id, a] as const));
+  const heats = new Map(detail.heats.map((h) => [h.id, h] as const));
 
   const rows: Array<Array<string | number>> = [
     [
@@ -295,9 +301,9 @@ export function resultsToCsv(
     ],
   ];
 
-  const results = allResults(meet);
+  const results = allResults(detail);
 
-  meet.events.forEach((event, eventIndex) => {
+  detail.events.forEach((event, eventIndex) => {
     const eventResults = results.filter((r) => r.eventId === event.id);
 
     // Place is scored across the whole event, not within a heat.
@@ -317,7 +323,7 @@ export function resultsToCsv(
 
     for (const result of ordered) {
       const athlete = byId.get(result.athleteId);
-      const enrolled = enrollmentFor(team, result.athleteId, seasonId);
+      const enrolled = enrollments.get(result.athleteId);
       rows.push([
         eventIndex + 1,
         eventName(event),

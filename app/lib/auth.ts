@@ -145,10 +145,11 @@ export async function signOut(everywhere = false): Promise<void> {
 export async function askToJoin(
   teamId: string,
   create = false,
+  name?: string,
 ): Promise<Session & { claimed: boolean }> {
   const body = await request<Session & { claimed: boolean }>("/api/memberships", {
     method: "POST",
-    body: JSON.stringify({ teamId, create }),
+    body: JSON.stringify({ teamId, create, name }),
   });
   return { ...normalize(body), claimed: body.claimed };
 }

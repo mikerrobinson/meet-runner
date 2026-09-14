@@ -10,9 +10,8 @@ import {
 } from "~/lib/api.server";
 import { canUseTeam, membershipIn, teamMembers } from "~/lib/auth.server";
 import { isCoach } from "~/lib/identity";
-import { ensureObjectStore, pushObjects } from "~/lib/sync.server";
+import { getAthlete, linkAthleteToUser, athleteForUser } from "~/lib/athletes.server";
 import type { Athlete } from "~/types/meet";
-import type { SyncObject } from "~/lib/objects";
 
 /**
  * Attach an account to a swimmer, or take it off again.
@@ -59,32 +58,14 @@ export async function action({ params, request, context }: Route.ActionArgs) {
       }
     }
 
-    await ensureObjectStore(db);
-    const row = await db
-      .prepare(
-        "SELECT data FROM objects WHERE type = 'athlete' AND id = ? AND deleted_at IS NULL",
-      )
-      .bind(params.athleteId)
-      .first<{ data: string }>();
-    if (!row) throw new SyncError("No such athlete", 404);
-
-    const athlete = JSON.parse(row.data) as Athlete;
+    const athlete = await getAthlete(db, params.athleteId);
+    if (!athlete) throw new SyncError("No such athlete", 404);
 
     // One account, one swimmer. Two roster rows claiming the same person is a
     // mistake worth refusing rather than quietly allowing.
     if (body.userId) {
-      const { results } = await db
-        .prepare(
-          "SELECT id, data FROM objects WHERE type = 'athlete' AND deleted_at IS NULL",
-        )
-        .all<{ id: string; data: string }>();
-      const clash = results.find(
-        (other) =>
-          other.id !== athlete.id &&
-          (JSON.parse(other.data) as Athlete).userId === body.userId,
-      );
-      if (clash) {
-        const held = JSON.parse(clash.data) as Athlete;
+      const held = await athleteForUser(db, body.userId);
+      if (held && held.id !== athlete.id) {
         throw new SyncError(
           `That account is already ${held.firstName} ${held.lastName}.`.trim(),
           409,
@@ -92,15 +73,8 @@ export async function action({ params, request, context }: Route.ActionArgs) {
       }
     }
 
-    const updated: Athlete = { ...athlete, userId: body.userId || undefined };
-    const object: SyncObject = {
-      id: athlete.id,
-      type: "athlete",
-      scope: { kind: "global" },
-      updatedAt: Date.now(),
-      data: updated,
-    };
-    await pushObjects(db, [object]);
+    await linkAthleteToUser(db, athlete.id, body.userId || null);
+    const updated = { ...athlete, userId: body.userId || undefined };
 
     return json({ athlete: updated });
   } catch (error) {

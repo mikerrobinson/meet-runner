@@ -8,11 +8,8 @@ import {
 } from "~/lib/api.server";
 import { membershipsFor } from "~/lib/auth.server";
 import { listPublicTeams } from "~/lib/public.server";
-import { pushObjects } from "~/lib/sync.server";
-import { createTeam } from "~/lib/documents";
-import { normalizeTeamCode } from "~/types/meet";
+import { createSeason, createTeam } from "~/lib/teams.server";
 import { requireUser, readJson, SyncError } from "~/lib/api.server";
-import type { SyncObject } from "~/lib/objects";
 
 /**
  * The teams this server knows about.
@@ -60,10 +57,6 @@ export async function loader({ request, context }: Route.LoaderArgs) {
  * claim it later — the meets it already appears in are unaffected, because
  * they reference it by id.
  *
- * Not part of `/api/sync` on purpose. That endpoint refuses writes outside the
- * caller's own team, which is exactly the boundary that makes a shared meet
- * safe; creating a *different* team is a deliberate act with its own door.
- *
  * Signing in is required. Not because a team is sensitive — it isn't — but
  * because an unauthenticated create endpoint is an invitation to fill the
  * table with junk.
@@ -89,31 +82,11 @@ export async function action({ request, context }: Route.ActionArgs) {
     // meant to prevent.
     if (clash) return json({ team: clash, created: false });
 
-    const team = createTeam(name);
-    team.code = normalizeTeamCode(body.code ?? "");
-    const season = team.seasons[0];
-
-    const objects: SyncObject[] = [
-      {
-        id: team.id,
-        type: "team",
-        scope: { kind: "team", id: team.id },
-        updatedAt: team.updatedAt,
-        data: {
-          name: team.name,
-          code: team.code,
-          currentSeasonId: team.currentSeasonId,
-        },
-      },
-      {
-        id: season.id,
-        type: "season",
-        scope: { kind: "team", id: team.id },
-        updatedAt: team.updatedAt,
-        data: season,
-      },
-    ];
-    await pushObjects(db, objects);
+    const team = await createTeam(db, { name, code: body.code });
+    // A team with no season can hold no roster, and every path that adds one
+    // asks which season it's for. Minting it here means an opponent created
+    // mid-setup is immediately usable.
+    await createSeason(db, { teamId: team.id, name: "Current season" });
 
     return json({
       team: {

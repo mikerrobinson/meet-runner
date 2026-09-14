@@ -1,20 +1,64 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from "react-router";
-import { currentSeason, rosterFor } from "~/lib/roster";
+import {
+  Link,
+  NavLink,
+  Outlet,
+  useLocation,
+  useNavigation,
+  useParams,
+  useRouteLoaderData,
+} from "react-router";
+import type { Route } from "./+types/shell";
 import { AccountMenu } from "~/components/AccountMenu";
-import { useAppStore } from "~/state/app-store";
-import { syncLabel, useSyncStatus } from "~/state/auto-sync";
-import { useSession } from "~/state/session";
 import { useViewPrefs } from "~/state/view-prefs";
-import { useRunClock } from "~/state/run-clock";
-import { LANE_LAYOUTS, meetSubtitle, type LaneLayout } from "~/types/meet";
+import { useOutbox } from "~/state/outbox";
+import { currentUser, type SyncEnv } from "~/lib/api.server";
+import { membershipsFor } from "~/lib/auth.server";
+import { getTeam, listSeasons } from "~/lib/teams.server";
+import { seasonForDate } from "~/lib/roster";
+import { ensureSchema } from "~/lib/schema.server";
+import { LANE_LAYOUTS, meetSubtitle, todayIso, type LaneLayout } from "~/types/meet";
+import type { loader as meetLoader } from "./meet-layout";
 
-const CHIP_TONES: Record<string, string> = {
-  good: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200",
-  busy: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200",
-  warn: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
-  muted: "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
-};
+/**
+ * The chrome, and what it needs to draw itself.
+ *
+ * Which team's name sits in the header, and how many swimmers are on it. That
+ * is all — the screens under here load their own data. It used to wait on a
+ * client store reading IndexedDB before anything could render at all, which is
+ * why there were three separate "Loading…" states and a wedged-storage
+ * message; a server-rendered page has none of those states to be in.
+ */
+export async function loader({ request, context }: Route.LoaderArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  if (!env.DB) return { team: null, rosterCount: 0, seasonName: "" };
+
+  const user = await currentUser(request, env);
+  if (!user) return { team: null, rosterCount: 0, seasonName: "" };
+
+  await ensureSchema(env.DB);
+  const memberships = await membershipsFor(env.DB, user.id);
+  const active = memberships.filter((m) => m.status === "active");
+  const teamId =
+    active.find((m) => m.teamId === user.lastTeamId)?.teamId ?? active[0]?.teamId;
+  if (!teamId) return { team: null, rosterCount: 0, seasonName: "" };
+
+  const team = await getTeam(env.DB, teamId);
+  const seasons = await listSeasons(env.DB, teamId);
+  const season = seasonForDate(seasons, team?.currentSeasonId, todayIso());
+  const count = season
+    ? await env.DB.prepare(
+        "SELECT COUNT(*) AS n FROM enrollments WHERE team_id = ? AND season_id = ? AND status = 'active'",
+      )
+        .bind(teamId, season.id)
+        .first<{ n: number }>()
+    : null;
+
+  return {
+    team,
+    rosterCount: count?.n ?? 0,
+    seasonName: season?.name ?? "",
+  };
+}
 
 interface Tab {
   to: string;
@@ -178,172 +222,41 @@ function layoutOptions(
   }));
 }
 
-/**
- * Make sure this device is holding the right season, and send it somewhere
- * useful when it isn't.
- *
- * The rule is that local data wins. A device that already has the season keeps
- * working with no network and no session — which is the state a phone is in
- * when the pool wifi drops mid-meet, and no time to be asked to sign in. Only
- * a device holding nothing has to be told who it belongs to.
- *
- * Returns what to show while that's being settled, or null to carry on.
- */
-/**
- * Routes that don't need this device to hold a season.
- *
- * Browsing is public — a parent opening a link to results has no account, no
- * team, and nothing in local storage, and sending them to a sign-in screen
- * would defeat the entire point of publishing results. The deck screens still
- * require a season, because a stopwatch with no roster behind it is useless.
- */
-const PUBLIC_PREFIXES = ["/teams", "/athletes", "/meets"];
-
-function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-  );
-}
-
-function useSeasonForSession(publicPath: boolean): string | null {
-  const { ready, hasLocalData, chooseTeam, team } = useAppStore();
-  const session = useSession();
-  const navigate = useNavigate();
-  const [error, setError] = useState<string | null>(null);
-  // One adoption at a time, and never the same team twice: `chooseTeam`
-  // changes the store, which re-runs this effect.
-  const adopting = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!ready || session.status === "loading") return;
-    // A visitor reading a public page is not a device that has lost its
-    // season, and must not be redirected as though it were.
-    if (publicPath) return;
-
-    if (!hasLocalData) {
-      if (session.status === "out") {
-        navigate("/sign-in", { replace: true });
-        return;
-      }
-      if (!session.openTeamId) {
-        navigate("/join", { replace: true });
-        return;
-      }
-    }
-
-    const wanted = session.openTeamId;
-    if (!wanted || wanted === team.id || adopting.current === wanted) return;
-
-    // A device already working in a season this person belongs to stays put.
-    // Following `openTeamId` here would drag a coach off the team they're
-    // standing beside every time they opened the app on a second one.
-    const belongsHere = session.memberships.some(
-      (m) => m.teamId === team.id && m.status === "active",
-    );
-    if (hasLocalData && belongsHere) return;
-
-    adopting.current = wanted;
-    chooseTeam(wanted)
-      .catch((err) =>
-        setError(err instanceof Error ? err.message : "Couldn't load that season."),
-      )
-      .finally(() => {
-        adopting.current = null;
-      });
-  }, [ready, hasLocalData, publicPath, session, team.id, chooseTeam, navigate]);
-
-  // Keep the account's idea of where this person is up to date, so their next
-  // device opens the same place. Guarded by what was last sent rather than by
-  // what came back, since recording it updates the session and would otherwise
-  // set this off again.
-  const remembered = useRef<string | null>(null);
-  useEffect(() => {
-    if (!ready || !hasLocalData || session.status !== "in") return;
-    if (!session.memberships.some((m) => m.teamId === team.id && m.status === "active")) {
-      return;
-    }
-    const place = `${team.id}:${team.currentSeasonId}`;
-    if (remembered.current === place) return;
-    remembered.current = place;
-    session.rememberPlace(team.id, team.currentSeasonId);
-  }, [ready, hasLocalData, session, team.id, team.currentSeasonId]);
-
-  if (error) return error;
-  if (!hasLocalData) return "";
-  return null;
-}
-
-export default function Shell() {
-  const { ready, storageError, hasLocalData, team, athletes, meets } = useAppStore();
+export default function Shell({ loaderData }: Route.ComponentProps) {
   const location = useLocation();
-  const publicPath = isPublicPath(location.pathname);
-  const settling = useSeasonForSession(publicPath);
-  const status = useSyncStatus();
+  const navigation = useNavigation();
   const { laneLayout, setLaneLayout } = useViewPrefs();
-  const { clock } = useRunClock();
+  const outbox = useOutbox();
   const params = useParams();
+  const meetData = useRouteLoaderData<typeof meetLoader>("routes/meet-layout");
+  const openMeet = meetData?.detail?.meet ?? null;
+  const team = loaderData.team;
 
-  // Browsing is server-driven and needs nothing from this device. Blocking it
-  // on local storage meant a visitor with no season — or a device whose
-  // storage was wedged — sat on "Loading…" looking at a page that would have
-  // rendered fine without it.
-  if (publicPath && (!ready || storageError)) {
-    return <PublicShell>{<Outlet />}</PublicShell>;
-  }
-
-  if (storageError) {
-    return (
-      <div className="flex min-h-screen items-center justify-center p-6">
-        <div className="max-w-sm text-center">
-          <p className="text-lg font-bold">Can&rsquo;t open this device&rsquo;s storage</p>
-          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-            {storageError}
-          </p>
-          <p className="mt-2 text-xs text-slate-500">
-            Nothing has been lost — the season is still on this device and on
-            the server.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!ready) {
-    return (
-      <div className="flex min-h-screen items-center justify-center text-slate-400">
-        Loading…
-      </div>
-    );
-  }
-
-  // This device has no season yet — either it's on its way, or fetching it
-  // failed and there's something to say about that. Public pages render
-  // regardless: they read from the server and need nothing local.
-  if (settling !== null && !publicPath) {
-    return (
-      <div className="flex min-h-screen items-center justify-center p-6 text-center">
-        {settling ? (
-          <div className="max-w-sm">
-            <p className="text-lg font-bold">Couldn&rsquo;t open that season</p>
-            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-              {settling}
-            </p>
-          </div>
-        ) : (
-          <p className="text-slate-400">Loading…</p>
-        )}
-      </div>
-    );
-  }
-
-  const openMeet = params.meetId
-    ? meets.find((m) => m.id === params.meetId)
-    : undefined;
-  // The sections belong to the URL, not to whether this device holds the meet.
-  // A parent opening a link to somebody else's meet still gets Info and
-  // Results; the sections that need local data say so when they're reached.
   const tabs = params.meetId ? meetTabs(params.meetId) : TOP_TABS;
-  const chip = syncLabel(status);
+
+  /**
+   * The right-hand status: what this device still owes the server.
+   *
+   * A count of queued writes rather than a background engine's mood. It is
+   * zero almost always, says a number when the wifi is being difficult, and
+   * says so plainly when something was refused outright — which the engine
+   * this replaced could not, because it retried an unfixable 400 forever
+   * behind a chip that just said "Retrying…".
+   */
+  const waiting = outbox.pending.length;
+  const status: { text: string; tone: string } | null = outbox.error
+    ? { text: "Not saved", tone: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200" }
+    : waiting > 0
+      ? {
+          text: `${waiting} to send`,
+          tone: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200",
+        }
+      : navigation.state !== "idle"
+        ? {
+            text: "Loading…",
+            tone: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-200",
+          }
+        : null;
 
   const onRegistration = location.pathname.endsWith("/entries");
   // Two screens want the whole window rather than a reading column: the
@@ -355,11 +268,6 @@ export default function Shell() {
   const rawGender = new URLSearchParams(location.search).get("g");
   const genderParam = rawGender === "f" || rawGender === "m" ? rawGender : "all";
 
-  // Rearranging the stop buttons under a running clock is how a lane gets
-  // missed, so the layout is fixed until the heat is off the clock. Asked of
-  // this device's own stopwatch — somebody else starting a heat elsewhere is
-  // no reason to hold this header still.
-  const heatLive = clock != null;
   const toggles = onRegistration ? (
     <HeaderToggles
       label="Filter roster by gender"
@@ -368,24 +276,21 @@ export default function Shell() {
   ) : onRun && openMeet ? (
     <HeaderToggles
       label="Stopwatch button layout"
-      disabled={heatLive}
       options={layoutOptions(
-        openMeet.options.laneCount,
+        openMeet.laneCount,
         laneLayout,
         setLaneLayout,
       )}
     />
   ) : null;
 
-  const title =
-    openMeet?.name ?? (hasLocalData || !publicPath ? team.name : "Meet Runner");
+  const title = openMeet?.name ?? team?.name ?? "Meet Runner";
   const subtitle = onRegistration
     ? undefined
     : openMeet
       ? meetSubtitle(openMeet)
-      : location.pathname.startsWith("/team") ||
-          location.pathname.startsWith("/athletes")
-        ? `${rosterFor(athletes, team, team.currentSeasonId).length} swimmers · ${currentSeason(team)?.name ?? ""}`
+      : team && location.pathname.startsWith("/team")
+        ? `${loaderData.rosterCount} swimmers · ${loaderData.seasonName}`
         : undefined;
 
   return (
@@ -415,14 +320,20 @@ export default function Shell() {
 
           {toggles && <div className="justify-self-center">{toggles}</div>}
 
-          {/* Sync state and the account control share the right-hand cell.
-              The chip is about this device; the circle is about the person. */}
+          {/* Status and the account control share the right-hand cell. The
+              chip is about what the app is doing; the circle is about the
+              person. */}
           <div className="flex items-center gap-2 justify-self-end">
-            <span
-              className={`rounded-full px-2 py-1 text-xs font-semibold ${CHIP_TONES[chip.tone]}`}
-            >
-              {chip.text}
-            </span>
+            {status && (
+              <button
+                type="button"
+                onClick={outbox.error ? outbox.dismiss : undefined}
+                title={outbox.error ?? undefined}
+                className={`rounded-full px-2 py-1 text-xs font-semibold ${status.tone}`}
+              >
+                {status.text}
+              </button>
+            )}
             <AccountMenu />
           </div>
         </div>
@@ -471,25 +382,3 @@ export default function Shell() {
   );
 }
 
-/**
- * Enough chrome to read a public page with.
- *
- * No team name, no sync chip, no meet tabs — none of those mean anything to
- * somebody who just opened a link to a results page, and all of them need
- * local data this device may not have.
- */
-function PublicShell({ children }: { children: ReactNode }) {
-  return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-      <header className="sticky top-0 z-30 h-[var(--app-chrome-top)] border-b border-slate-200 bg-white/95 pt-[env(safe-area-inset-top)] backdrop-blur dark:border-slate-800 dark:bg-slate-900/95">
-        <div className="mx-auto flex h-full max-w-3xl items-center justify-between gap-3 px-4">
-          <Link to="/meets" className="text-base font-bold">
-            Meet Runner
-          </Link>
-          <AccountMenu />
-        </div>
-      </header>
-      <main className="mx-auto max-w-3xl px-4 pt-4 pb-8">{children}</main>
-    </div>
-  );
-}

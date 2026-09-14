@@ -25,11 +25,12 @@ import { eventName, isDiving } from "~/types/meet";
 import type {
   Athlete,
   Gender,
+  Meet,
   MeetCourse,
-  MeetDoc,
+  MeetDetail,
   MeetType,
   Result,
-  TeamDoc,
+  Team,
 } from "~/types/meet";
 
 /* ------------------------------------------------------------------ people */
@@ -85,7 +86,7 @@ export interface TeamRef {
   code: string;
 }
 
-export function teamRef(team: TeamDoc): TeamRef {
+export function teamRef(team: Team): TeamRef {
   return { id: team.id, name: team.name, code: team.code };
 }
 
@@ -106,16 +107,17 @@ export interface PublicMeetSummary {
   times: number;
 }
 
-export function meetSummary(meet: MeetDoc, teams: TeamDoc[]): PublicMeetSummary {
-  const named = meet.teamIds
-    .map((id) => teams.find((team) => team.id === id))
-    .filter((team): team is TeamDoc => team !== undefined)
-    .map(teamRef);
-
-  const lanes = new Set<string>();
-  for (const watch of meet.watches) lanes.add(`${watch.heatId}:${watch.lane}`);
-  for (const ruling of meet.rulings) lanes.add(`${ruling.heatId}:${ruling.lane}`);
-
+/**
+ * A meet as a list row.
+ *
+ * The counts arrive already aggregated — `listMeets` asks the database for
+ * them rather than loading six meets in full to render three numbers each.
+ */
+export function meetSummary(
+  meet: Meet,
+  teams: Team[],
+  counts: { events: number; entries: number; times: number },
+): PublicMeetSummary {
   return {
     id: meet.id,
     name: meet.name,
@@ -123,14 +125,11 @@ export function meetSummary(meet: MeetDoc, teams: TeamDoc[]): PublicMeetSummary 
     type: meet.type,
     course: meet.course,
     location: meet.location,
-    teams: named,
+    teams: teams.map(teamRef),
     hostTeamId: meet.hostTeamId,
-    events: meet.events.length,
-    entries: Object.values(meet.entries).reduce(
-      (total, list) => total + list.length,
-      0,
-    ),
-    times: lanes.size,
+    events: counts.events,
+    entries: counts.entries,
+    times: counts.times,
   };
 }
 
@@ -147,13 +146,11 @@ export interface PublicPlacing {
   /** How the official time was arrived at — "median of three", and so on. */
   method: Result["method"];
   watchCount: number;
-  /** Nobody was seeded here; a timer said who it was. */
-  attributed: boolean;
   /**
    * Signed off by whoever is running the meet. Until then these numbers are
    * what the watches worked out, and the meet isn't official.
    */
-  accepted: boolean;
+  final: boolean;
 }
 
 export interface PublicEventResults {
@@ -185,15 +182,14 @@ export interface PublicMeetDetail extends PublicMeetSummary {
  * "who was disqualified" is part of the record.
  */
 export function meetResults(
-  meet: MeetDoc,
-  athletes: Athlete[],
+  detail: MeetDetail,
   teamOf: (athleteId: string) => TeamRef | null,
 ): PublicEventResults[] {
-  const byId = new Map(athletes.map((a) => [a.id, a] as const));
-  const heatNumber = new Map(meet.heats.map((h) => [h.id, h.index + 1] as const));
-  const results = allResults(meet);
+  const byId = new Map(detail.athletes.map((a) => [a.id, a] as const));
+  const heatNumber = new Map(detail.heats.map((h) => [h.id, h.index + 1] as const));
+  const results = allResults(detail);
 
-  return meet.events.map((event) => {
+  return detail.events.map((event) => {
     const forEvent = results
       .filter((result) => result.eventId === event.id)
       .sort((a, b) => {
@@ -218,8 +214,7 @@ export function meetResults(
         status: result.status,
         method: result.method,
         watchCount: result.watchCount,
-        attributed: result.attributed === true,
-        accepted: result.accepted === true,
+        final: result.final === true,
       };
     });
 
@@ -230,7 +225,7 @@ export function meetResults(
       stroke: event.stroke,
       gender: event.gender,
       placings: isDiving(event) ? [] : placings,
-      official: isDiving(event) ? false : eventClosed(meet, event.id),
+      official: isDiving(event) ? false : eventClosed(detail, event.id),
     };
   });
 }
@@ -248,6 +243,8 @@ export interface AthleteSwim {
   raceKey: string;
   timeMs: number;
   status: Result["status"];
+  /** Place within that event, across all of its heats. */
+  place: number | null;
   /** True for the fastest clean swim of this race in this course. */
   best: boolean;
 }
@@ -266,17 +263,29 @@ export interface PublicAthleteDetail extends PublicAthlete {
  */
 export function athleteSwims(
   athleteId: string,
-  meets: MeetDoc[],
+  meets: MeetDetail[],
 ): AthleteSwim[] {
   const swims: AthleteSwim[] = [];
 
-  for (const meet of meets) {
-    const events = new Map(meet.events.map((e) => [e.id, e] as const));
-    for (const result of allResults(meet)) {
+  for (const detail of meets) {
+    const meet = detail.meet;
+    const events = new Map(detail.events.map((e) => [e.id, e] as const));
+    const all = allResults(detail);
+    for (const result of all) {
       if (result.athleteId !== athleteId) continue;
       const event = events.get(result.eventId);
       if (!event || isDiving(event)) continue;
+
+      // Place is scored across the whole event, not within a heat.
+      const ranked = all
+        .filter((r) => r.eventId === event.id && r.status === "OK")
+        .sort((a, b) => a.timeMs - b.timeMs);
+      const at = ranked.findIndex(
+        (r) => r.heatId === result.heatId && r.lane === result.lane,
+      );
+
       swims.push({
+        place: at >= 0 ? at + 1 : null,
         meetId: meet.id,
         meetName: meet.name,
         date: meet.date,

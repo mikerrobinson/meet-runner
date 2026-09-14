@@ -4,9 +4,9 @@ import type { Route } from "./+types/results";
 import { Button, Card, EmptyState, SectionTitle } from "~/components/ui";
 import { downloadFile, resultsToCsv } from "~/lib/csv";
 import { formatTime } from "~/lib/time";
-import { enrollmentIndex, seasonForMeet } from "~/lib/roster";
+import { enrollmentIndex } from "~/lib/roster";
 import { allResults, recordedCount } from "~/lib/timing";
-import { useAppStore } from "~/state/app-store";
+import { useMeet } from "./meet-layout";
 import { eventName, athleteName, type Result } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
@@ -14,27 +14,25 @@ export function meta({}: Route.MetaArgs) {
 }
 
 export default function Results() {
-  const { team, athletes, meets } = useAppStore();
-  const { meetId } = useParams();
+  const { detail } = useMeet();
+  const meet = detail.meet;
   const [openEvent, setOpenEvent] = useState<string | null>(null);
-
-  const meet = meets.find((m) => m.id === meetId);
 
   // Names come from the roster, so a spelling fixed later shows up here too.
   const byId = useMemo(
-    () => new Map(athletes.map((s) => [s.id, s] as const)),
-    [athletes],
+    () => new Map(detail.athletes.map((a) => [a.id, a] as const)),
+    [detail.athletes],
   );
 
   // Squad as it was that season, not as it is now.
   const enrollments = useMemo(
-    () => enrollmentIndex(team, meet ? seasonForMeet(team, meet)?.id : undefined),
-    [team, meet],
+    () => enrollmentIndex(detail.enrollments),
+    [detail.enrollments],
   );
 
   const byEvent = useMemo(() => {
     const map = new Map<string, Result[]>();
-    for (const result of meet ? allResults(meet) : []) {
+    for (const result of allResults(detail)) {
       const list = map.get(result.eventId) ?? [];
       list.push(result);
       map.set(result.eventId, list);
@@ -47,13 +45,11 @@ export default function Results() {
       });
     }
     return map;
-  }, [meet]);
-
-  if (!meet) return null;
+  }, [detail]);
 
   const slug = `${meet.name.replace(/[^\w-]+/g, "-").toLowerCase()}-${meet.date}`;
 
-  if (recordedCount(meet) === 0) {
+  if (recordedCount(detail) === 0) {
     return (
       <EmptyState title="No times recorded yet">
         Times show up here as you run heats.
@@ -72,7 +68,7 @@ export default function Results() {
             onClick={() =>
               downloadFile(
                 `${slug}-results.csv`,
-                resultsToCsv(meet, team, athletes),
+                resultsToCsv(detail, enrollments),
                 "text/csv",
               )
             }
@@ -93,12 +89,12 @@ export default function Results() {
           </Button>
         </div>
         <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-          {recordedCount(meet)} time{recordedCount(meet) === 1 ? "" : "s"} across{" "}
+          {recordedCount(detail)} time{recordedCount(detail) === 1 ? "" : "s"} across{" "}
           {byEvent.size} event{byEvent.size === 1 ? "" : "s"}.
         </p>
       </Card>
 
-      {meet.events.map((event, index) => {
+      {detail.events.map((event, index) => {
         const results = byEvent.get(event.id) ?? [];
         if (results.length === 0) return null;
         const open = openEvent === event.id;

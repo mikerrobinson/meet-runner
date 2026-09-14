@@ -6,7 +6,6 @@ import { askToJoin } from "~/lib/auth";
 import { APP_HOME } from "./home";
 import { describeContact } from "~/lib/identity";
 import { generateId } from "~/lib/id";
-import { useAppStore } from "~/state/app-store";
 import { useSession } from "~/state/session";
 
 export function meta({}: Route.MetaArgs) {
@@ -23,7 +22,6 @@ export function meta({}: Route.MetaArgs) {
  */
 export default function Join() {
   const session = useSession();
-  const { startFreshTeam } = useAppStore();
   const navigate = useNavigate();
   const location = useLocation() as { state?: { notice?: string } };
 
@@ -77,19 +75,15 @@ export default function Join() {
   /**
    * Register the id first, then build the team around it.
    *
-   * That order matters: the team doesn't reach the server until this device
-   * syncs, and an id nobody owns in the meantime is an id somebody else could
-   * claim.
    */
   const startTeam = async () => {
     const teamId = generateId();
     setBusy(teamId);
     setError(null);
     try {
-      const next = await askToJoin(teamId, true);
-      // The team has to exist on this device before the effect above sends us
-      // into it, or the shell would arrive at a season that isn't there yet.
-      startFreshTeam(name.trim() || "My Team", teamId);
+      // The server mints the team and the membership together; there is no
+      // local copy to create first any more.
+      const next = await askToJoin(teamId, true, name.trim() || "My Team");
       session.adopt(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't start the team.");

@@ -10,15 +10,20 @@ import {
   requireUser,
   type SyncEnv,
 } from "~/lib/api.server";
-import { canUseTeam } from "~/lib/auth.server";
 import { activeGrant, issueGrant, revokeGrants } from "~/lib/grants.server";
+import { meetAccess, mayEditMeet } from "~/lib/access.server";
+import { getMeet } from "~/lib/meets.server";
 
 /**
  * The coach's end of the QR code.
  *
- *   GET    ?meetId=      -> whether a link is live, and when it dies
- *   POST   { meetId, teamId, date } -> a fresh link, retiring the old one
- *   DELETE { meetId }    -> kill it now
+ *   GET    ?meetId=   -> whether a link is live, and when it dies
+ *   POST   { meetId }  -> a fresh link, retiring the old one
+ *   DELETE { meetId }  -> kill it now
+ *
+ * The meet's own date and host team are read here rather than accepted from
+ * the caller. A client may ask for a code; it doesn't get to say which team's
+ * authority it is issued under, or when it should expire.
  *
  * Issuing is also how you revoke, which is why there's no separate rotate:
  * a coach who thinks the code has got out taps the same button and prints a
@@ -46,13 +51,18 @@ export async function action({ request, context }: Route.ActionArgs) {
   try {
     const db = requireDb(env);
     const user = await requireUser(request, env);
-    const body = await readJson<{ meetId?: string; teamId?: string; date?: string }>(
-      request,
-    );
-    if (!body.meetId || !body.teamId) throw new SyncError("Which meet?", 400);
+    const body = await readJson<{ meetId?: string }>(request);
+    if (!body.meetId) throw new SyncError("Which meet?", 400);
 
-    const allowed = await canUseTeam(db, user.id, body.teamId);
-    if (!allowed.ok) throw new SyncError(allowed.reason, 403);
+    // Whoever runs the meet may hand out timing codes for it. Asked of the
+    // meet rather than of a team, because a meet belongs to no team.
+    const access = await meetAccess(db, body.meetId, user);
+    if (!mayEditMeet(access)) {
+      throw new SyncError("Whoever is running this meet issues its codes.", 403);
+    }
+
+    const meet = await getMeet(db, body.meetId);
+    if (!meet) throw new SyncError("No such meet", 404);
 
     if (request.method === "DELETE") {
       await revokeGrants(db, body.meetId);
@@ -61,9 +71,9 @@ export async function action({ request, context }: Route.ActionArgs) {
     if (request.method !== "POST") throw new SyncError("Use POST or DELETE", 405);
 
     const { token, expiresAt } = await issueGrant(db, {
-      id: body.meetId,
-      teamId: body.teamId,
-      date: body.date ?? new Date().toISOString().slice(0, 10),
+      id: meet.id,
+      teamId: meet.hostTeamId ?? meet.teamIds[0] ?? "",
+      date: meet.date,
     });
 
     return json({

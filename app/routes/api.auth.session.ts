@@ -13,6 +13,7 @@ import {
   bearerToken,
   endAllSessions,
   endSession,
+  sessionCookie,
   membershipIn,
   sessionPayload,
   setLastPlace,
@@ -54,7 +55,7 @@ export async function action({ request, context }: Route.ActionArgs) {
         const token = bearerToken(request);
         if (token) await endSession(db, token);
       }
-      return json({ user: null });
+      return json({ user: null }, 200, { "set-cookie": sessionCookie(null, request) });
     }
 
     if (request.method !== "PATCH") throw new SyncError("Use PATCH or DELETE", 405);

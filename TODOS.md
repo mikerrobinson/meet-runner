@@ -7,33 +7,66 @@ Nothing here is committed to — it's a parking lot. Add your own freely.
 
 ## Next up
 
-Roughly in the order that made sense when we stopped. Everything below this
-section is still a parking lot — this part isn't.
+Rewritten 2026-09-13, after the rebuild onto a server-authoritative model. The
+old list below this section is still a parking lot; this part isn't.
 
-### 1. Settle site navigation - bottom tab bar, top left header, profile dropdown
+### 1. Live updates while a meet is running
 
-Bottom bar nav was deferred with "decide once the screens exist". They exist now. It's still
-Team / Meets / Browse / Settings, which predates meets becoming the home. The
-suggestion on the table was Meets / Teams / Athletes with Settings moving into
-the account menu, since that menu already covers Profile and sign-out.
+The one real gap. Screens read from loaders, and a loader only re-runs when
+something on *this* device navigates or finishes a write — so the control desk
+does not see a time arriving from a phone until somebody touches something. On
+a deck that is the difference between watching times land and refreshing.
 
-### 2. An athlete's own screen
+Two options, in order of cost:
 
-See below — the permission is built and verified, only the screen is missing.
+- **Poll the meet route.** A `useRevalidator` on an interval while the run and
+  entries screens are visible. Perhaps twenty lines. Was ~2s before, which is
+  about the ceiling of what polling can sensibly do.
+- **Push, via a Durable Object per meet.** The honest answer, and now a much
+  smaller job than it was: one object holding a meet's rows and fanning changes
+  out over a socket. The write endpoints are already small and single-row,
+  which is the shape a DO wants.
 
-### 3. Entry visibility on the wire
+Do the first now; the second when it's worth it.
 
-`meet.options.entryVisibility` is honoured by the entries screen but not by
-sync: a coach who pulls a shared meet still receives every team's entries. The
-UI hides them; the network doesn't. Restricting reads inside the cursor is the
-harder half and was deliberately left.
+### 2. The stopwatch screen has had the least use
+
+`run.tsx` compiles and renders, and the control desk has been exercised
+properly against a real database — the deck stopwatch has not been driven
+through a whole heat since the rewrite. Before a meet: START, stop several
+lanes, Reset, Next heat, and the lane sheet's "Replace my time".
+
+Known cosmetic thing: on a *re-swim*, lanes carrying times from the previous
+swim render green with those times rather than a red STOP, so it's not obvious
+which lanes still need taking here. Tapping them works.
+
+### 3. Two things dropped in the rebuild, if you want them back
+
+- **Whole-season JSON import**, under Settings. Export stays. Restoring a
+  season into a shared server is a genuinely different operation from restoring
+  a device, and it wasn't worth guessing at.
+- **"Add swimmer" on the entries grid.** It wrote a roster row from the entries
+  screen; that's the team screen's job now. Cheap to add back as a shortcut.
 
 ### 4. Scoring
 
 `ScoringRules` and `DUAL_MEET_SCORING` (6-4-3-2-1 / 8-4, split by gender) are
-defined in `types/meet.ts` and computed by nothing.
+defined in `types/meet.ts` and computed by nothing. The biggest genuinely
+missing feature, and the entries/results shape is ready for it.
 
----
+### 5. Settle the site navigation
+
+Bottom bar is still Team / Meets / Browse / Settings, which predates meets
+becoming the home. The suggestion on the table was Meets / Teams / Athletes
+with Settings moving into the account menu, since that menu already covers
+profile and sign-out.
+
+### 6. An athlete's own screen
+
+The permission is built and enforced (`athletesMayEnter` + `mayEnter`); the
+screen is missing. A swimmer wants their own short list — the races in the next
+meet, which ones they're in, and the limits counting down as they pick — not
+the coach's grid. This is the use case the app was originally built for.
 
 ## Features
 
@@ -72,21 +105,7 @@ In a split lineup, adding "100 Fly" nearly always means adding both girls' and
 boys'. Right now you add one and repeat. Could add the pair in lead order from
 one tap.
 
-### Live updates while a heat is on the clock
 
-Polling is at two seconds now (`POLL_MS` in `auto-sync.tsx`), shortened for the
-admin control desk, which watches three timers' watches land on one lane. That
-is about the ceiling of what polling can sensibly do — the honest answer is a
-push channel, which on Workers means Durable Objects. The object model
-underneath is already the right shape for it: scoped, per-object,
-last-write-wins.
-
-### Tombstone retention
-
-Deleted objects stay in the table forever; every un-entered swimmer leaves a
-row. Harmless for a long while, but it wants a rule eventually — and you can't
-safely purge until every device has seen the deletion, which is an argument for
-tracking device cursors.
 
 ### SD3 import and export
 
@@ -126,13 +145,6 @@ A relay lane is currently held by a single swimmer standing in for the squad.
 Letting a lane be labelled "Blue A" / "Gold B" instead would read better, at the
 cost of a real relay model.
 
-### Service worker (offline cold launch)
-
-Installed to the home screen, the app still needs the network for the _first_
-load of a session. Discussed in detail and deliberately deferred — if we do it:
-network-first HTML, cache-on-demand for hashed assets with no eviction,
-`/api/*` untouched, no `skipWaiting`. The conservative shape matters; the
-aggressive one risks serving a stale build that can't be fixed remotely.
 
 ### Column striping on registration
 
@@ -142,6 +154,12 @@ checkerboard — worth trying only if rows alone aren't enough on a wide grid.
 ---
 
 ## Safety / correctness
+
+### ~~Roster "Replace" orphans entries~~ — gone with the rewrite
+
+Enrollment ids are derived from season and athlete, so a re-import updates rows
+rather than minting new people, and `meetDetail` fetches exactly the people its
+rows name. There is nothing left to be orphaned from.
 
 ### False-start recovery
 
@@ -155,18 +173,6 @@ accident, one gesture instead of seven.
 It sits bottom-right, big and blue, and ending a heat early drops times for any
 lane that hadn't stopped. Could require a confirm while lanes are outstanding.
 
-### Roster "Replace" orphans entries
-
-Replace mints new swimmer ids, so entries and results in past meets end up
-pointing at swimmers no longer listed. Matching incoming rows on name and
-reusing the existing id would preserve history. Archive-and-add is the safe path
-mid-season today.
-
-This one has now happened for real, so the symptom is known: the counts said
-"9 entered" and the grid drew three ticks. `entrySplit` in `events.ts` tells
-entries apart from orphans, the entries grid explains itself in a banner, and
-the admin rail marks affected events with an amber `!n`. That surfaces the
-damage; it doesn't repair it. A re-import that matched on name would.
 
 ---
 
@@ -189,6 +195,9 @@ damage; it doesn't repair it. A re-import that matched on name would.
   retype.
 - **Dead search box.** The registration search filter is still in the row
   expression but unreachable while `SHOW_ROSTER_CONTROLS` is `false`.
+- **The old "Add / Replace" import prompt** on the team screen now posts to an
+  action rather than a store, so the note above about it rendering below the
+  fold is worth re-checking against the rewritten screen before acting on it.
 - **Diving is display-only.** By design — it shows on registration and holds
   its place in the running order, but carries no scores, so it never appears on
   the Results screen or in the CSV export. If dual-meet scoring lands, diving

@@ -1,25 +1,25 @@
 /**
- * Reading the object store for anyone who asks.
+ * The reading side, over the real tables.
  *
- * The browsing half of the app. Sync exists to keep a pool deck working with
- * no signal; this exists so a parent can open a link and see the results. They
- * read the same objects and share no code path beyond that, which is the point
- * — the sync engine stopped having to grow an opinion about who may read what.
+ * These are the queries behind both the browse screens and the public JSON
+ * API — one query and one projection, called twice, rather than a second read
+ * path built because the sync engine could only ever serve your own team.
  *
- * Rows come back through `fromObjects`, the same recomposition the client uses,
- * so there is one definition of what a meet is rather than a second one written
- * in SQL. Shaping and redaction then happen in `public.ts`, which is pure.
+ * Everything that leaves here goes through the projections in `public.ts`,
+ * which name the fields that may travel rather than deleting the ones that
+ * mustn't. Birth dates and contact details never appear.
  */
 
-import { ensureObjectStore } from "./sync.server";
-import { fromObjects, scopeKey, type ObjectScope, type SyncObject } from "./objects";
-import { teamForAthleteAt } from "./roster";
+import { ensureSchema } from "./schema.server";
+import { ensureAuthStore } from "./auth.server";
+import { athleteRow, type AthleteRow } from "./athletes.server";
+import { teamRow, type TeamRow } from "./teams.server";
+import { listMeets, meetDetail } from "./meets.server";
 import {
   athleteSwims,
   meetResults,
   meetSummary,
   publicAthlete,
-  publicAthletes,
   teamRef,
   type PublicAthlete,
   type PublicAthleteDetail,
@@ -28,161 +28,79 @@ import {
   type PublicTeam,
   type TeamRef,
 } from "./public";
-import type { Athlete, MeetDoc, TeamDoc } from "~/types/meet";
-
-interface Row {
-  id: string;
-  type: string;
-  scope: string;
-  updated_at: number;
-  deleted_at: number | null;
-  data: string;
-}
-
-function toSyncObject(row: Row): SyncObject {
-  const [kind, ...rest] = row.scope.split(":");
-  const id = rest.join(":");
-  return {
-    id: row.id,
-    type: row.type as SyncObject["type"],
-    scope:
-      row.scope === "global"
-        ? { kind: "global" }
-        : kind === "meet"
-          ? { kind: "meet", id }
-          : { kind: "team", id },
-    updatedAt: row.updated_at,
-    deletedAt: row.deleted_at ?? undefined,
-    data: JSON.parse(row.data),
-  };
-}
-
-/** Everything in a set of scopes, recomposed into documents. */
-async function readScopes(
-  db: D1Database,
-  scopes: ObjectScope[],
-): Promise<{ teams: TeamDoc[]; athletes: Athlete[]; meets: MeetDoc[] }> {
-  const keys = [...new Set(scopes.map(scopeKey))];
-  if (keys.length === 0) return { teams: [], athletes: [], meets: [] };
-
-  const { results } = await db
-    .prepare(
-      `SELECT id, type, scope, updated_at, deleted_at, data FROM objects
-       WHERE scope IN (${keys.map(() => "?").join(", ")}) AND deleted_at IS NULL`,
-    )
-    .bind(...keys)
-    .all<Row>();
-
-  return fromObjects(results.map(toSyncObject));
-}
-
-/** Athletes by id, in one round trip per batch. */
-async function readAthletes(
-  db: D1Database,
-  ids: string[],
-): Promise<Athlete[]> {
-  const wanted = [...new Set(ids)];
-  if (wanted.length === 0) return [];
-
-  const found: Athlete[] = [];
-  for (let start = 0; start < wanted.length; start += 40) {
-    const slice = wanted.slice(start, start + 40);
-    const { results } = await db
-      .prepare(
-        `SELECT data FROM objects WHERE type = 'athlete' AND deleted_at IS NULL
-           AND id IN (${slice.map(() => "?").join(", ")})`,
-      )
-      .bind(...slice)
-      .all<{ data: string }>();
-    found.push(...results.map((row) => JSON.parse(row.data) as Athlete));
-  }
-  return found;
-}
-
-/** Which teams have somebody signed in as a coach. */
-async function claimedTeamIds(db: D1Database): Promise<Set<string>> {
-  try {
-    const { results } = await db
-      .prepare(
-        "SELECT DISTINCT team_id FROM memberships WHERE status = 'active'",
-      )
-      .all<{ team_id: string }>();
-    return new Set(results.map((row) => row.team_id));
-  } catch {
-    // No memberships table yet — nobody has ever signed in, so nothing is
-    // claimed. A fresh deployment should still be able to list its teams.
-    return new Set();
-  }
-}
+import type { Athlete } from "~/types/meet";
 
 /* ------------------------------------------------------------------- teams */
 
-export async function listPublicTeams(db: D1Database): Promise<PublicTeam[]> {
-  await ensureObjectStore(db);
+/** Counts per team, in one pass rather than one query each. */
+async function teamCounts(
+  db: D1Database,
+  teamIds: string[],
+): Promise<Map<string, { athletes: number; meets: number; times: number }>> {
+  const counts = new Map<string, { athletes: number; meets: number; times: number }>();
+  if (teamIds.length === 0) return counts;
+  const holes = teamIds.map(() => "?").join(", ");
 
+  const [people, meets, claimed] = await Promise.all([
+    db.prepare(
+      `SELECT team_id, COUNT(DISTINCT athlete_id) AS n FROM enrollments
+       WHERE team_id IN (${holes}) GROUP BY team_id`,
+    ).bind(...teamIds).all<{ team_id: string; n: number }>(),
+    db.prepare(
+      `SELECT team_id, COUNT(*) AS n FROM meet_teams
+       WHERE team_id IN (${holes}) GROUP BY team_id`,
+    ).bind(...teamIds).all<{ team_id: string; n: number }>(),
+    db.prepare(
+      `SELECT mt.team_id AS team_id, COUNT(DISTINCT w.heat_id || ':' || w.lane) AS n
+       FROM meet_teams mt JOIN watches w ON w.meet_id = mt.meet_id
+       WHERE mt.team_id IN (${holes}) GROUP BY mt.team_id`,
+    ).bind(...teamIds).all<{ team_id: string; n: number }>(),
+  ]);
+
+  for (const id of teamIds) counts.set(id, { athletes: 0, meets: 0, times: 0 });
+  for (const row of people.results) counts.get(row.team_id)!.athletes = row.n;
+  for (const row of meets.results) counts.get(row.team_id)!.meets = row.n;
+  for (const row of claimed.results) counts.get(row.team_id)!.times = row.n;
+  return counts;
+}
+
+/**
+ * Which teams somebody has signed in as a coach of.
+ *
+ * `memberships` belongs to the account tables rather than the domain schema,
+ * so this is the one query that spans both — and on a database nobody has
+ * signed into yet, the auth side may not exist at all.
+ */
+async function claimedTeams(db: D1Database): Promise<Set<string>> {
+  await ensureAuthStore(db);
   const { results } = await db
-    .prepare(
-      `SELECT id, type, scope, data FROM objects
-       WHERE deleted_at IS NULL AND type IN ('team', 'enrollment', 'meet', 'watch')`,
-    )
-    .all<{ id: string; type: string; scope: string; data: string }>();
+    .prepare("SELECT DISTINCT team_id FROM memberships WHERE status = 'active'")
+    .all<{ team_id: string }>();
+  return new Set(results.map((r) => r.team_id));
+}
 
-  const claimed = await claimedTeamIds(db);
-  const teams = new Map<string, PublicTeam>();
-  const enrolled = new Map<string, Set<string>>();
-  const meetTeams = new Map<string, string[]>();
-  const watchesPerMeet = new Map<string, number>();
+export async function listPublicTeams(db: D1Database): Promise<PublicTeam[]> {
+  await ensureSchema(db);
+  const { results } = await db.prepare("SELECT * FROM teams ORDER BY name").all<TeamRow>();
+  const ids = results.map((r) => r.id);
+  const [counts, claimed] = await Promise.all([
+    teamCounts(db, ids),
+    claimedTeams(db),
+  ]);
 
-  for (const row of results) {
-    if (row.type !== "team") continue;
-    const data = JSON.parse(row.data) as { name?: string; code?: string };
-    teams.set(row.id, {
-      id: row.id,
-      name: data.name ?? "Untitled team",
-      code: data.code ?? "",
-      claimed: claimed.has(row.id),
-      athletes: 0,
-      meets: 0,
-      times: 0,
-    });
-  }
-
-  for (const row of results) {
-    if (row.type === "enrollment" && row.scope.startsWith("team:")) {
-      const teamId = row.scope.slice("team:".length);
-      const data = JSON.parse(row.data) as { athleteId?: string };
-      if (!data.athleteId) continue;
-      let people = enrolled.get(teamId);
-      if (!people) enrolled.set(teamId, (people = new Set()));
-      people.add(data.athleteId);
-    } else if (row.type === "meet") {
-      const data = JSON.parse(row.data) as { teamIds?: string[] };
-      meetTeams.set(row.id, data.teamIds ?? []);
-      for (const teamId of data.teamIds ?? []) {
-        const team = teams.get(teamId);
-        if (team) team.meets += 1;
-      }
-    } else if (row.type === "watch" && row.scope.startsWith("meet:")) {
-      const meetId = row.scope.slice("meet:".length);
-      watchesPerMeet.set(meetId, (watchesPerMeet.get(meetId) ?? 0) + 1);
-    }
-  }
-
-  for (const [teamId, people] of enrolled) {
-    const team = teams.get(teamId);
-    if (team) team.athletes = people.size;
-  }
-
-  // A meet's times count for every team racing it, since both were there.
-  for (const [meetId, teamIds] of meetTeams) {
-    const times = watchesPerMeet.get(meetId) ?? 0;
-    for (const teamId of teamIds) {
-      const team = teams.get(teamId);
-      if (team) team.times += times;
-    }
-  }
-
-  return [...teams.values()].sort((a, b) => a.name.localeCompare(b.name));
+  return results.map((row) => {
+    const team = teamRow(row);
+    const count = counts.get(row.id) ?? { athletes: 0, meets: 0, times: 0 };
+    return {
+      id: team.id,
+      name: team.name,
+      code: team.code,
+      claimed: claimed.has(team.id),
+      athletes: count.athletes,
+      meets: count.meets,
+      times: count.times,
+    };
+  });
 }
 
 /**
@@ -205,120 +123,112 @@ export async function publicTeamDetail(
   db: D1Database,
   teamId: string,
 ): Promise<PublicTeamDetail | null> {
-  await ensureObjectStore(db);
+  await ensureSchema(db);
+  const row = await db
+    .prepare("SELECT * FROM teams WHERE id = ?")
+    .bind(teamId)
+    .first<TeamRow>();
+  if (!row) return null;
+  const team = teamRow(row);
 
-  const { teams } = await readScopes(db, [{ kind: "team", id: teamId }]);
-  const team = teams.find((t) => t.id === teamId);
-  if (!team) return null;
+  const [seasons, roster, counts, claimed, meets] = await Promise.all([
+    db.prepare(
+      "SELECT * FROM seasons WHERE team_id = ? ORDER BY COALESCE(start_date, ''), name",
+    ).bind(teamId).all<{
+      id: string;
+      name: string;
+      start_date: string | null;
+      end_date: string | null;
+    }>(),
+    db.prepare(
+      `SELECT e.season_id, e.year, e.squad, e.status,
+              a.id, a.first_name, a.last_name, a.gender, a.birth_date, a.user_id
+       FROM enrollments e JOIN athletes a ON a.id = e.athlete_id
+       WHERE e.team_id = ? ORDER BY a.last_name, a.first_name`,
+    ).bind(teamId).all<
+      AthleteRow & { season_id: string; year: string; squad: string | null; status: string }
+    >(),
+    teamCounts(db, [teamId]),
+    claimedTeams(db),
+    listMeets(db, { teamId }),
+  ]);
 
-  const people = await readAthletes(
-    db,
-    team.enrollments.map((e) => e.athleteId),
-  );
-  const byId = new Map(people.map((a) => [a.id, a] as const));
-  const claimed = await claimedTeamIds(db);
-
-  const seasons = [...team.seasons]
-    .sort((a, b) => (b.startDate ?? "").localeCompare(a.startDate ?? ""))
-    .map((season) => ({
-      id: season.id,
-      name: season.name,
-      startDate: season.startDate,
-      endDate: season.endDate,
-      roster: team.enrollments
-        .filter((e) => e.seasonId === season.id && byId.has(e.athleteId))
-        .map((e) => ({
-          ...publicAthlete(byId.get(e.athleteId)!),
-          year: e.year,
-          squad: e.squad,
-          active: e.status === "active",
-        }))
-        .sort(
-          (a, b) =>
-            a.lastName.localeCompare(b.lastName) ||
-            a.firstName.localeCompare(b.firstName),
-        ),
-    }));
-
-  const meets = await listPublicMeets(db, { teamId });
+  const count = counts.get(teamId) ?? { athletes: 0, meets: 0, times: 0 };
 
   return {
     id: team.id,
     name: team.name,
     code: team.code,
     claimed: claimed.has(team.id),
-    athletes: new Set(team.enrollments.map((e) => e.athleteId)).size,
-    times: meets.reduce((total, meet) => total + meet.times, 0),
-    seasons,
-    meets,
+    athletes: count.athletes,
+    times: count.times,
+    seasons: seasons.results.map((season) => ({
+      id: season.id,
+      name: season.name,
+      startDate: season.start_date ?? undefined,
+      endDate: season.end_date ?? undefined,
+      roster: roster.results
+        .filter((r) => r.season_id === season.id)
+        .map((r) => ({
+          ...publicAthlete(athleteRow(r)),
+          year: r.year,
+          squad: r.squad ?? undefined,
+          active: r.status !== "inactive",
+        })),
+    })),
+    meets: meets.map((row) =>
+      meetSummary(row.meet, row.teams, {
+        events: row.eventCount,
+        entries: row.entryCount,
+        times: row.timedLanes,
+      }),
+    ),
   };
 }
 
 /* ------------------------------------------------------------------- meets */
 
-/** Every meet, newest first. Optionally only those one team is racing. */
 export async function listPublicMeets(
   db: D1Database,
   options: { teamId?: string } = {},
 ): Promise<PublicMeetSummary[]> {
-  await ensureObjectStore(db);
-
-  const { results } = await db
-    .prepare(
-      `SELECT id, type, scope, updated_at, deleted_at, data FROM objects
-       WHERE deleted_at IS NULL
-         AND type IN ('meet', 'lineup', 'entry', 'watch', 'ruling', 'team')`,
-    )
-    .all<Row>();
-
-  const { teams, meets } = fromObjects(results.map(toSyncObject));
-
-  return meets
-    .filter((meet) => !options.teamId || meet.teamIds.includes(options.teamId))
-    .map((meet) => meetSummary(meet, teams))
-    .sort((a, b) => b.date.localeCompare(a.date) || a.name.localeCompare(b.name));
+  const rows = await listMeets(db, options);
+  return rows.map((row) =>
+    meetSummary(row.meet, row.teams, {
+      events: row.eventCount,
+      entries: row.entryCount,
+      times: row.timedLanes,
+    }),
+  );
 }
 
 export async function publicMeetDetail(
   db: D1Database,
   meetId: string,
 ): Promise<PublicMeetDetail | null> {
-  await ensureObjectStore(db);
+  const detail = await meetDetail(db, meetId);
+  if (!detail) return null;
 
-  const { meets } = await readScopes(db, [{ kind: "meet", id: meetId }]);
-  const meet = meets.find((m) => m.id === meetId);
-  if (!meet) return null;
-
-  const { teams } = await readScopes(
-    db,
-    meet.teamIds.map((id): ObjectScope => ({ kind: "team", id })),
-  );
-
-  // Everyone the meet refers to, plus everyone its teams enrolled — a heat
-  // sheet names people who haven't swum yet.
-  const referenced = new Set<string>();
-  for (const list of Object.values(meet.entries)) {
-    for (const id of list) referenced.add(id);
-  }
-  for (const heat of meet.heats) {
-    for (const lane of heat.lanes) if (lane) referenced.add(lane);
-  }
-  for (const watch of meet.watches) {
-    if (watch.athleteId) referenced.add(watch.athleteId);
-  }
-  for (const team of teams) {
-    for (const enrollment of team.enrollments) referenced.add(enrollment.athleteId);
-  }
-
-  const athletes = await readAthletes(db, [...referenced]);
+  // Which team each swimmer was racing for, from the enrollments this meet
+  // already loaded. A visiting swimmer is on their own school's roster, not
+  // on the host's, which is the whole reason athletes are global.
+  const teams = new Map(detail.teams.map((t) => [t.id, teamRef(t)] as const));
   const teamOf = (athleteId: string): TeamRef | null => {
-    const team = teamForAthleteAt(teams, meet, athleteId);
-    return team ? teamRef(team) : null;
+    const enrolled = detail.enrollments.find((e) => e.athleteId === athleteId);
+    return enrolled ? (teams.get(enrolled.teamId) ?? null) : null;
   };
 
+  const entries = Object.values(detail.entries).reduce((n, ids) => n + ids.length, 0);
+  const lanes = new Set(detail.watches.map((w) => `${w.heatId}:${w.lane}`));
+  for (const call of detail.calls) lanes.add(`${call.heatId}:${call.lane}`);
+
   return {
-    ...meetSummary(meet, teams),
-    results: meetResults(meet, athletes, teamOf),
+    ...meetSummary(detail.meet, detail.teams, {
+      events: detail.events.length,
+      entries,
+      times: lanes.size,
+    }),
+    results: meetResults(detail, teamOf),
   };
 }
 
@@ -328,119 +238,105 @@ export async function listPublicAthletes(
   db: D1Database,
   options: { q?: string; limit?: number } = {},
 ): Promise<Array<PublicAthlete & { teams: TeamRef[] }>> {
-  await ensureObjectStore(db);
+  await ensureSchema(db);
+  const limit = Math.min(options.limit ?? 200, 500);
+  const q = options.q?.trim();
 
-  const { results } = await db
+  const { results } = q
+    ? await db
+        .prepare(
+          `SELECT * FROM athletes WHERE last_name LIKE ?1 OR first_name LIKE ?1
+           ORDER BY last_name, first_name LIMIT ?2`,
+        )
+        .bind(`%${q}%`, limit)
+        .all<AthleteRow>()
+    : await db
+        .prepare("SELECT * FROM athletes ORDER BY last_name, first_name LIMIT ?")
+        .bind(limit)
+        .all<AthleteRow>();
+
+  if (results.length === 0) return [];
+  const ids = results.map((r) => r.id);
+  const holes = ids.map(() => "?").join(", ");
+
+  const { results: links } = await db
     .prepare(
-      `SELECT id, type, scope, data FROM objects
-       WHERE deleted_at IS NULL AND type IN ('athlete', 'enrollment', 'team')`,
+      `SELECT DISTINCT e.athlete_id, t.id, t.name, t.code
+       FROM enrollments e JOIN teams t ON t.id = e.team_id
+       WHERE e.athlete_id IN (${holes})`,
     )
-    .all<{ id: string; type: string; scope: string; data: string }>();
+    .bind(...ids)
+    .all<{ athlete_id: string; id: string; name: string; code: string }>();
 
-  const teams = new Map<string, TeamRef>();
-  const people: Athlete[] = [];
-  const teamsOf = new Map<string, Set<string>>();
-
-  for (const row of results) {
-    if (row.type === "team") {
-      const data = JSON.parse(row.data) as { name?: string; code?: string };
-      teams.set(row.id, {
-        id: row.id,
-        name: data.name ?? "Untitled team",
-        code: data.code ?? "",
-      });
-    } else if (row.type === "athlete") {
-      people.push(JSON.parse(row.data) as Athlete);
-    }
+  const teamsOf = new Map<string, TeamRef[]>();
+  for (const link of links) {
+    const list = teamsOf.get(link.athlete_id) ?? [];
+    list.push({ id: link.id, name: link.name, code: link.code });
+    teamsOf.set(link.athlete_id, list);
   }
 
-  for (const row of results) {
-    if (row.type !== "enrollment" || !row.scope.startsWith("team:")) continue;
-    const teamId = row.scope.slice("team:".length);
-    const data = JSON.parse(row.data) as { athleteId?: string };
-    if (!data.athleteId) continue;
-    let list = teamsOf.get(data.athleteId);
-    if (!list) teamsOf.set(data.athleteId, (list = new Set()));
-    list.add(teamId);
-  }
-
-  const needle = options.q?.trim().toLowerCase();
-  return publicAthletes(people)
-    .filter(
-      (a) =>
-        !needle ||
-        `${a.firstName} ${a.lastName}`.toLowerCase().includes(needle),
-    )
-    .map((a) => ({
-      ...a,
-      teams: [...(teamsOf.get(a.id) ?? [])]
-        .map((id) => teams.get(id))
-        .filter((t): t is TeamRef => t !== undefined),
-    }))
-    .sort(
-      (a, b) =>
-        a.lastName.localeCompare(b.lastName) ||
-        a.firstName.localeCompare(b.firstName),
-    )
-    .slice(0, options.limit ?? 500);
+  return results.map((row) => ({
+    ...publicAthlete(athleteRow(row)),
+    teams: teamsOf.get(row.id) ?? [],
+  }));
 }
 
 export async function publicAthleteDetail(
   db: D1Database,
   athleteId: string,
 ): Promise<PublicAthleteDetail | null> {
-  await ensureObjectStore(db);
+  await ensureSchema(db);
+  const row = await db
+    .prepare("SELECT * FROM athletes WHERE id = ?")
+    .bind(athleteId)
+    .first<AthleteRow>();
+  if (!row) return null;
+  const athlete: Athlete = athleteRow(row);
 
-  const [athlete] = await readAthletes(db, [athleteId]);
-  if (!athlete) return null;
-
-  // Which teams have ever enrolled them, and in which seasons.
-  const { results: enrollments } = await db
+  const { results: enrolled } = await db
     .prepare(
-      `SELECT scope, data FROM objects
-       WHERE type = 'enrollment' AND deleted_at IS NULL`,
+      `SELECT t.id, t.name, t.code, s.name AS season
+       FROM enrollments e
+       JOIN teams t ON t.id = e.team_id
+       JOIN seasons s ON s.id = e.season_id
+       WHERE e.athlete_id = ?`,
     )
-    .all<{ scope: string; data: string }>();
+    .bind(athleteId)
+    .all<{ id: string; name: string; code: string; season: string }>();
 
-  const teamIds = new Set<string>();
-  const seasonIds = new Map<string, string[]>();
-  for (const row of enrollments) {
-    const data = JSON.parse(row.data) as { athleteId?: string; seasonId?: string };
-    if (data.athleteId !== athleteId || !row.scope.startsWith("team:")) continue;
-    const teamId = row.scope.slice("team:".length);
-    teamIds.add(teamId);
-    if (data.seasonId) {
-      (seasonIds.get(teamId) ?? seasonIds.set(teamId, []).get(teamId)!).push(
-        data.seasonId,
-      );
-    }
+  const teams = new Map<string, TeamRef & { seasons: string[] }>();
+  for (const row of enrolled) {
+    const existing = teams.get(row.id) ?? {
+      id: row.id,
+      name: row.name,
+      code: row.code,
+      seasons: [],
+    };
+    if (!existing.seasons.includes(row.season)) existing.seasons.push(row.season);
+    teams.set(row.id, existing);
   }
 
-  const { teams } = await readScopes(
-    db,
-    [...teamIds].map((id): ObjectScope => ({ kind: "team", id })),
-  );
+  // The meets they actually swam in, rather than every meet in the database.
+  const { results: meetIds } = await db
+    .prepare(
+      `SELECT DISTINCT meet_id FROM (
+         SELECT meet_id FROM entries WHERE athlete_id = ?1
+         UNION SELECT meet_id FROM seats WHERE athlete_id = ?1)`,
+    )
+    .bind(athleteId)
+    .all<{ meet_id: string }>();
 
-  // Every meet those teams raced — that's where this person's swims can be.
-  const meetSummaries = await listPublicMeets(db);
-  const theirMeetIds = meetSummaries
-    .filter((summary) => summary.teams.some((t) => teamIds.has(t.id)))
-    .map((summary) => summary.id);
-
-  const { meets } = await readScopes(
-    db,
-    theirMeetIds.map((id): ObjectScope => ({ kind: "meet", id })),
+  const details = await Promise.all(
+    meetIds.map((row) => meetDetail(db, row.meet_id)),
   );
 
   return {
     ...publicAthlete(athlete),
-    teams: teams.map((team) => ({
-      ...teamRef(team),
-      seasons: team.seasons
-        .filter((s) => seasonIds.get(team.id)?.includes(s.id))
-        .map((s) => s.name),
-    })),
-    swims: athleteSwims(athleteId, meets),
+    teams: [...teams.values()],
+    swims: athleteSwims(
+      athleteId,
+      details.filter((d): d is NonNullable<typeof d> => d !== null),
+    ),
   };
 }
 
@@ -459,7 +355,7 @@ export async function userDashboard(
   db: D1Database,
   userId: string,
 ): Promise<UserDashboard | null> {
-  await ensureObjectStore(db);
+  await ensureSchema(db);
 
   const user = await db
     .prepare("SELECT id, name FROM users WHERE id = ?")
@@ -468,40 +364,51 @@ export async function userDashboard(
   if (!user) return null;
 
   const { results: memberships } = await db
-    .prepare(
-      "SELECT team_id, role, status FROM memberships WHERE user_id = ?",
-    )
+    .prepare("SELECT team_id, role, status FROM memberships WHERE user_id = ?")
     .bind(userId)
     .all<{ team_id: string; role: string; status: string }>();
 
-  const { teams } = await readScopes(
-    db,
-    memberships.map((m): ObjectScope => ({ kind: "team", id: m.team_id })),
-  );
+  const teamIds = memberships.map((m) => m.team_id);
+  const teams: Array<TeamRef & { role: string; status: string }> = [];
+  if (teamIds.length > 0) {
+    const { results } = await db
+      .prepare(
+        `SELECT * FROM teams WHERE id IN (${teamIds.map(() => "?").join(", ")})`,
+      )
+      .bind(...teamIds)
+      .all<TeamRow>();
+    for (const row of results) {
+      const membership = memberships.find((m) => m.team_id === row.id)!;
+      teams.push({
+        ...teamRef(teamRow(row)),
+        role: membership.role,
+        status: membership.status,
+      });
+    }
+  }
 
-  const allMeets = await listPublicMeets(db);
-  const mine = new Set(memberships.map((m) => m.team_id));
+  const linked = await db
+    .prepare("SELECT * FROM athletes WHERE user_id = ?")
+    .bind(userId)
+    .first<AthleteRow>();
 
-  // The athlete record this account is, if a coach has linked one.
-  const { results: linked } = await db
-    .prepare(
-      "SELECT data FROM objects WHERE type = 'athlete' AND deleted_at IS NULL",
-    )
-    .all<{ data: string }>();
-  const athlete = linked
-    .map((row) => JSON.parse(row.data) as Athlete)
-    .find((a) => a.userId === userId);
+  // Every meet their teams are racing, newest first.
+  const meets: PublicMeetSummary[] = [];
+  const seen = new Set<string>();
+  for (const teamId of teamIds) {
+    for (const row of await listPublicMeets(db, { teamId })) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      meets.push(row);
+    }
+  }
+  meets.sort((a, b) => b.date.localeCompare(a.date));
 
   return {
     userId: user.id,
     name: user.name,
-    teams: memberships.flatMap((m) => {
-      const team = teams.find((t) => t.id === m.team_id);
-      return team
-        ? [{ ...teamRef(team), role: m.role, status: m.status }]
-        : [];
-    }),
-    meets: allMeets.filter((meet) => meet.teams.some((t) => mine.has(t.id))),
-    athlete: athlete ? publicAthlete(athlete) : null,
+    teams,
+    meets,
+    athlete: linked ? publicAthlete(athleteRow(linked)) : null,
   };
 }

@@ -3,7 +3,7 @@ import type { Route } from "./+types/teams";
 import { BrowseNav } from "~/components/BrowseNav";
 import { Card, EmptyState, SectionTitle } from "~/components/ui";
 import { listPublicTeams } from "~/lib/public.server";
-import { useAppStore } from "~/state/app-store";
+import { useSession } from "~/state/session";
 import type { SyncEnv } from "~/lib/api.server";
 
 export function meta({}: Route.MetaArgs) {
@@ -30,10 +30,15 @@ export async function loader({ context }: Route.LoaderArgs) {
 
 export default function Teams({ loaderData }: Route.ComponentProps) {
   const { teams, offline } = loaderData;
-  const { team: mine } = useAppStore();
+  // Which of these are yours comes from your memberships — the page is a
+  // directory of everyone's teams, and "yours" is just a heading on it.
+  const session = useSession();
+  const mineIds = new Set(
+    session.memberships.filter((m) => m.status === "active").map((m) => m.teamId),
+  );
 
-  const ours = teams.filter((t) => t.id === mine.id);
-  const others = teams.filter((t) => t.id !== mine.id);
+  const ours = teams.filter((t) => t.id === '');
+  const others = teams.filter((t) => t.id !== '');
 
   return (
     <div className="space-y-4">

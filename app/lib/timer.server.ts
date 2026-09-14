@@ -2,34 +2,19 @@
  * What a timer's phone is allowed to know.
  *
  * Deliberately not the season. A device that scanned a QR code taped to a
- * timing table gets one meet's running order, the lanes, the names needed to
+ * timing table gets one meet's running order, its lanes, the names needed to
  * fill the picker, and its own times — and nothing else. No birth dates, no
  * other meets, no other timers' watches.
  *
- * The shape is the general one now: read a meet's scope, then the people those
- * objects refer to. `referencedAthletes` is the same rule any client uses to
- * work out which of the global roster it actually needs.
+ * It's a projection of `meetDetail` rather than a second assembly of the same
+ * rows. There used to be a hand-written copy of the heat/seat join in here,
+ * and a second copy of the seating rule; both have gone, which is most of the
+ * point of moving the timer onto the same tables as everything else.
  */
 
-import { ensureObjectStore } from "./sync.server";
-import {
-  entryId,
-  referencedAthletes,
-  seatId,
-  type SyncObject,
-} from "./objects";
-import { seasonForDate } from "./roster";
-import { todayIso } from "~/types/meet";
-import type {
-  Enrollment,
-  Entries,
-  Heat,
-  MeetEvent,
-  Season,
-  TeamDoc,
-  WatchTime,
-} from "~/types/meet";
+import { meetDetail } from "./meets.server";
 import type { Grant } from "./grants.server";
+import type { Heat, MeetEvent, Watch } from "~/types/meet";
 
 /** A team as a timer needs it: something to tap, and an id to send back. */
 export interface TimerTeam {
@@ -59,24 +44,18 @@ export interface TimerSnapshot {
   };
   /**
    * What to call athletes with no team of their own at this meet. The host
-   * where there is one, so a timer standing at a home meet sees the home team
-   * named rather than the word "Home".
+   * where there is one, so a timer at a home meet sees the home team named
+   * rather than the word "Home".
    */
   ownTeam: string;
   /** In running order. */
   events: MeetEvent[];
   heats: Heat[];
-  entries: Entries;
+  /** eventId -> athleteIds registered in it. */
+  entries: Record<string, string[]>;
   athletes: TimerAthlete[];
   /** Only this device's own times. Another timer's is not a hint. */
-  mine: WatchTime[];
-}
-
-interface Row {
-  id: string;
-  type: string;
-  scope: string;
-  data: string;
+  mine: Watch[];
 }
 
 export async function timerSnapshot(
@@ -85,389 +64,44 @@ export async function timerSnapshot(
   timerId: string,
   now = Date.now(),
 ): Promise<TimerSnapshot | null> {
-  await ensureObjectStore(db);
+  const detail = await meetDetail(db, grant.meetId);
+  if (!detail) return null;
 
-  const { results: meetRows } = await db
-    .prepare(
-      `SELECT id, type, scope, data FROM objects
-       WHERE scope = ? AND deleted_at IS NULL`,
-    )
-    .bind(`meet:${grant.meetId}`)
-    .all<Row>();
-
-  const parsed = meetRows.map((row) => ({
-    ...row,
-    data: JSON.parse(row.data) as Record<string, unknown>,
-  }));
-  const of = (type: string) => parsed.filter((row) => row.type === type);
-
-  const core = of("meet")[0]?.data as
-    | {
-        name?: string;
-        date?: string;
-        teamIds?: string[];
-        hostTeamId?: string;
-        options?: { laneCount?: number };
-      }
-    | undefined;
-  if (!core) return null;
-
-  const lineup = of("lineup")[0]?.data as { events?: MeetEvent[] } | undefined;
-
-  const entries: Entries = {};
-  for (const row of of("entry")) {
-    const entry = row.data as unknown as { eventId: string; athleteId: string };
-    (entries[entry.eventId] ??= []).push(entry.athleteId);
-  }
-
-  // Lanes are their own objects now, so the heat is rebuilt from them — the
-  // same assembly `fromObjects` does for every other reader.
-  const heats: Heat[] = of("heat").map((row) => {
-    const data = row.data as unknown as {
-      id: string;
-      eventId: string;
-      index: number;
-      laneCount?: number;
-    };
-    return {
-      id: data.id,
-      eventId: data.eventId,
-      index: data.index,
-      lanes: Array.from(
-        { length: data.laneCount ?? core.options?.laneCount ?? 6 },
-        () => null as string | null,
-      ),
-    };
-  });
-  const byHeat = new Map(heats.map((heat) => [heat.id, heat] as const));
-  for (const row of of("seat")) {
-    const seat = row.data as unknown as {
-      heatId: string;
-      lane: number;
-      athleteId: string;
-    };
-    const heat = byHeat.get(seat.heatId);
-    if (!heat) continue;
-    if (seat.lane >= 1 && seat.lane <= heat.lanes.length) {
-      heat.lanes[seat.lane - 1] = seat.athleteId;
-    }
-  }
-  heats.sort((a, b) => a.eventId.localeCompare(b.eventId) || a.index - b.index);
-
-  const mine = of("watch")
-    .map((row) => row.data as unknown as WatchTime)
-    .filter((watch) => watch.timerId === timerId);
-
-  // The teams racing, and the people they've enrolled. A timer needs both:
-  // names to pick from, and short labels to group them under.
-  const teamIds = core.teamIds ?? [];
-  const teams = await teamsByCode(db, teamIds);
-  const enrolledBy = await enrollmentsByTeam(db, teamIds);
-
+  // Short labels to group the picker under, from the teams actually racing.
+  const label = new Map(detail.teams.map((t) => [t.id, t.code || t.name] as const));
   const teamOf = new Map<string, string>();
-  for (const [teamId, athleteIds] of enrolledBy) {
-    for (const athleteId of athleteIds) {
-      if (!teamOf.has(athleteId)) teamOf.set(athleteId, teams.get(teamId) ?? "");
+  for (const enrolled of detail.enrollments) {
+    if (!teamOf.has(enrolled.athleteId)) {
+      teamOf.set(enrolled.athleteId, label.get(enrolled.teamId) ?? "");
     }
   }
 
-  // Everyone this meet refers to, plus everyone entered by a team racing it —
-  // a swimmer nobody has seeded yet still has to be pickable.
-  const wanted = new Set([
-    ...referencedAthletes(
-      meetRows.map(
-        (row): SyncObject => ({
-          id: row.id,
-          type: row.type as SyncObject["type"],
-          scope: { kind: "meet", id: grant.meetId },
-          updatedAt: 0,
-          data: JSON.parse(row.data),
-        }),
-      ),
-    ),
-    ...teamOf.keys(),
-  ]);
-
-  const athletes = await athletesByIds(db, [...wanted], teamOf);
-  const host = core.hostTeamId ? teams.get(core.hostTeamId) : undefined;
+  const host = detail.meet.hostTeamId
+    ? label.get(detail.meet.hostTeamId)
+    : undefined;
 
   return {
     serverTime: now,
     expiresAt: grant.expiresAt,
     meet: {
-      id: grant.meetId,
-      name: core.name ?? "Meet",
-      date: core.date ?? "",
-      laneCount: core.options?.laneCount ?? 6,
-      teams: teamIds
-        .map((id) => ({ id, name: teams.get(id) ?? "" }))
-        .filter((team) => team.name !== ""),
+      id: detail.meet.id,
+      name: detail.meet.name,
+      date: detail.meet.date,
+      laneCount: detail.meet.laneCount,
+      teams: detail.teams.map((t) => ({ id: t.id, name: t.name })),
     },
-    ownTeam: host || teams.get(teamIds[0] ?? "") || "Home",
-    events: lineup?.events ?? [],
-    heats,
-    entries,
-    athletes,
-    mine,
+    ownTeam: host || label.get(detail.meet.teamIds[0] ?? "") || "Home",
+    events: detail.events,
+    heats: detail.heats,
+    entries: detail.entries,
+    // Selected fields only — a timer never receives a birth date, which is the
+    // one thing on an athlete record worth guarding.
+    athletes: detail.athletes.map((a) => ({
+      id: a.id,
+      firstName: a.firstName,
+      lastName: a.lastName,
+      team: teamOf.get(a.id) || undefined,
+    })),
+    mine: detail.watches.filter((w) => w.timerId === timerId),
   };
-}
-
-/**
- * Put a swimmer a timer typed in onto the roster of the team they named.
- *
- * The enrollment is minted *here*, from the meet's own facts, rather than
- * accepted from the phone. A timer may say "this is a Horizon swimmer"; they
- * may not say which team document to write into, or which season, and the
- * difference is what keeps a grant from reaching a team's roster generally.
- *
- * Returns null when the team isn't racing this meet, or has no season covering
- * its date — in which case the swimmer still gets recorded, just unaffiliated.
- */
-export async function visitorEnrollment(
-  db: D1Database,
-  meetId: string,
-  teamId: string,
-  athleteId: string,
-  now = Date.now(),
-): Promise<SyncObject | null> {
-  const { results } = await db
-    .prepare(
-      `SELECT id, type, data FROM objects
-       WHERE deleted_at IS NULL
-         AND ((type = 'meet' AND id = ?) OR (type IN ('team', 'season') AND scope = ?))`,
-    )
-    .bind(meetId, `team:${teamId}`)
-    .all<{ id: string; type: string; data: string }>();
-
-  const meetRow = results.find((row) => row.type === "meet");
-  const teamRow = results.find((row) => row.type === "team");
-  if (!meetRow || !teamRow) return null;
-
-  const meet = JSON.parse(meetRow.data) as { teamIds?: string[]; date?: string };
-  if (!meet.teamIds?.includes(teamId)) return null;
-
-  const team = JSON.parse(teamRow.data) as { currentSeasonId?: string };
-  const seasons = results
-    .filter((row) => row.type === "season")
-    .map((row) => JSON.parse(row.data) as Season);
-
-  const season = seasonForDate(
-    { seasons, currentSeasonId: team.currentSeasonId ?? "" } as TeamDoc,
-    meet.date ?? todayIso(),
-  );
-  if (!season) return null;
-
-  const enrollment: Enrollment = {
-    // Derived, not generated: the same timer re-sending the same swimmer must
-    // not enroll them twice.
-    id: `${season.id}:${athleteId}`,
-    teamId,
-    seasonId: season.id,
-    athleteId,
-    year: "",
-    status: "active",
-  };
-
-  return {
-    id: enrollment.id,
-    type: "enrollment",
-    scope: { kind: "team", id: teamId },
-    updatedAt: now,
-    data: enrollment,
-  };
-}
-
-/**
- * Move a swimmer into the lane a timer says they swam.
- *
- * A timer correcting a name used to change nothing at all. The claim rode on
- * the watch, and every reader preferred the seeding — so the one case the
- * control exists for, a seated lane holding the wrong person, was the one case
- * it couldn't fix. Tapping the right name appeared to work and didn't.
- *
- * So the correction now moves the lineup, with two bounds.
- *
- * The first is that the *server* does it, from the meet's own heat, rather
- * than the phone sending a heat of its own devising. A grant is a QR code
- * taped to a table; it may say "lane 4 was Dana", and it may not say what the
- * running order is.
- *
- * The second is what happens to whoever was already in that lane elsewhere.
- * They keep their entry — they're still in the race — but their lane is
- * emptied rather than quietly reassigned. An empty lane is a hole somebody has
- * to fill, which puts the disagreement in front of the other timer instead of
- * leaving two lanes each claiming the same swimmer.
- *
- * Returns the objects to write, or none if the lane already says this.
- */
-export async function seatFromWatch(
-  db: D1Database,
-  meetId: string,
-  heatId: string,
-  lane: number,
-  athleteId: string,
-  now = Date.now(),
-): Promise<SyncObject[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT id, type, data, deleted_at FROM objects
-       WHERE (type = 'heat' AND id = ?) OR (type = 'seat' AND scope = ?)`,
-    )
-    .bind(heatId, `meet:${meetId}`)
-    .all<{ id: string; type: string; data: string; deleted_at: number | null }>();
-
-  const heatRow = results.find((r) => r.type === "heat" && !r.deleted_at);
-  if (!heatRow) return [];
-  const heat = JSON.parse(heatRow.data) as {
-    id: string;
-    eventId: string;
-    laneCount?: number;
-  };
-
-  const width = heat.laneCount ?? 0;
-  if (lane < 1 || (width > 0 && lane > width)) return [];
-
-  const seats = results
-    .filter((r) => r.type === "seat" && !r.deleted_at)
-    .map((r) => ({
-      id: r.id,
-      ...(JSON.parse(r.data) as { heatId: string; lane: number; athleteId: string }),
-    }))
-    .filter((seat) => seat.heatId === heatId);
-
-  if (seats.some((seat) => seat.lane === lane && seat.athleteId === athleteId)) {
-    return [];
-  }
-
-  const objects: SyncObject[] = [
-    {
-      id: seatId(heatId, lane),
-      type: "seat",
-      scope: { kind: "meet", id: meetId },
-      updatedAt: now,
-      data: { heatId, lane, athleteId },
-    },
-  ];
-
-  // Whoever was in that lane elsewhere loses the lane and keeps the entry:
-  // an empty lane is a hole the other timer has to fill, which puts the
-  // disagreement in front of somebody instead of leaving two lanes each
-  // claiming the same swimmer.
-  for (const seat of seats) {
-    if (seat.athleteId !== athleteId || seat.lane === lane) continue;
-    objects.push({
-      id: seat.id,
-      type: "seat",
-      scope: { kind: "meet", id: meetId },
-      updatedAt: now,
-      deletedAt: now,
-      data: { heatId, lane: seat.lane, athleteId },
-    });
-  }
-
-  // Swimming a race is being in it. Without this, a timer naming somebody who
-  // was never entered would seat a swimmer the results then credit to an event
-  // they aren't registered for.
-  const entryKey = entryId(meetId, heat.eventId, athleteId);
-  const existing = await db
-    .prepare(
-      "SELECT 1 AS ok FROM objects WHERE type = 'entry' AND id = ? AND deleted_at IS NULL",
-    )
-    .bind(entryKey)
-    .first<{ ok: number }>();
-  if (!existing) {
-    objects.push({
-      id: entryKey,
-      type: "entry",
-      scope: { kind: "meet", id: meetId },
-      updatedAt: now,
-      data: { eventId: heat.eventId, athleteId },
-    });
-  }
-
-  return objects;
-}
-
-/** Short labels for a set of teams, keyed by id. */
-async function teamsByCode(
-  db: D1Database,
-  teamIds: string[],
-): Promise<Map<string, string>> {
-  if (teamIds.length === 0) return new Map();
-  const { results } = await db
-    .prepare(
-      `SELECT id, data FROM objects WHERE type = 'team' AND deleted_at IS NULL
-         AND id IN (${teamIds.map(() => "?").join(", ")})`,
-    )
-    .bind(...teamIds)
-    .all<{ id: string; data: string }>();
-
-  return new Map(
-    results.map((row) => {
-      const team = JSON.parse(row.data) as { name?: string; code?: string };
-      return [row.id, team.code || team.name || ""] as const;
-    }),
-  );
-}
-
-/** Who each team has enrolled, across every season — the picker wants names. */
-async function enrollmentsByTeam(
-  db: D1Database,
-  teamIds: string[],
-): Promise<Map<string, string[]>> {
-  if (teamIds.length === 0) return new Map();
-  const { results } = await db
-    .prepare(
-      `SELECT scope, data FROM objects
-       WHERE type = 'enrollment' AND deleted_at IS NULL
-         AND scope IN (${teamIds.map(() => "?").join(", ")})`,
-    )
-    .bind(...teamIds.map((id) => `team:${id}`))
-    .all<{ scope: string; data: string }>();
-
-  const byTeam = new Map<string, string[]>();
-  for (const row of results) {
-    const teamId = row.scope.slice("team:".length);
-    const enrollment = JSON.parse(row.data) as { athleteId?: string };
-    if (!enrollment.athleteId) continue;
-    (byTeam.get(teamId) ?? byTeam.set(teamId, []).get(teamId)!).push(
-      enrollment.athleteId,
-    );
-  }
-  return byTeam;
-}
-
-/**
- * Names for the picker. Selected fields only — a timer never receives a birth
- * date, which is the one thing on an athlete record worth guarding.
- */
-async function athletesByIds(
-  db: D1Database,
-  ids: string[],
-  teamOf: Map<string, string>,
-): Promise<TimerAthlete[]> {
-  if (ids.length === 0) return [];
-
-  const athletes: TimerAthlete[] = [];
-  for (let start = 0; start < ids.length; start += 40) {
-    const slice = ids.slice(start, start + 40);
-    const { results } = await db
-      .prepare(
-        `SELECT id, data FROM objects WHERE type = 'athlete' AND deleted_at IS NULL
-           AND id IN (${slice.map(() => "?").join(", ")})`,
-      )
-      .bind(...slice)
-      .all<{ id: string; data: string }>();
-
-    for (const row of results) {
-      const athlete = JSON.parse(row.data) as TimerAthlete;
-      athletes.push({
-        id: athlete.id,
-        firstName: athlete.firstName,
-        lastName: athlete.lastName,
-        team: teamOf.get(athlete.id) || undefined,
-      });
-    }
-  }
-  return athletes;
 }

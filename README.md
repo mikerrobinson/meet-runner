@@ -1,14 +1,21 @@
 # Meet Runner
 
-A phone/iPad app for managing a high-school swim team and high-school swim meets:
-ability to add edit teams and their rosters (which carry across the years), ability to manage schedule of meets/entries, ability to run a meet including individual timer and coach's multi-lane
-stopwatch.
+An app for running a high-school swim meet from a pool deck: rosters that carry
+across seasons, a schedule of meets, an entries grid, and the timing itself —
+volunteers with phones behind each lane, a coach with a multi-lane stopwatch,
+and an administrator at a table deciding what stands.
 
-Local-first. Everything lives on the device, so the app keeps working on a pool
-deck with no signal. It backs itself up to the server in the background as you
-go, and catches up on its own once signal returns.
+The shape of the problem is the paper system it replaces. Two or three timers
+stand behind each lane with stopwatches. They ask who's in the lane, take a
+time, and write the team, the name and the time on a sheet. A runner collects
+the sheets and hands them to an administrator, who types them into a
+spreadsheet and eventually scores the meet. This app crowd-sources that data
+entry and pre-fills it from each team's entries. **Where the app disagrees with
+the paper, the paper is usually right.**
 
-## How it's organised
+---
+
+## The model
 
 Three things, and only one of them owns anything.
 
@@ -17,402 +24,218 @@ they swim for a school, a club, or both, so fixing a spelling in March fixes
 January's results too. Nobody is ever deleted, because results reference people
 by id forever.
 
-**A team** owns its seasons, and says through *enrollments* who swam for it and
-when. It does not hold its athletes. That's what lets two schools racing the
-same swimmer point at one person rather than keeping a copy each, and what
-keeps a visiting swimmer off the home roster. Taking someone off the roster
-ends their enrollment; the person stays.
+**A team** owns its seasons and says, through *enrollments*, who swam for it and
+when. It does not hold its athletes. That is what lets two schools racing the
+same swimmer point at one person rather than keeping a copy each, and what keeps
+a visiting swimmer off the home roster. Taking someone off the roster ends their
+enrollment; the person stays.
 
-**A meet** is one day's racing between one or more teams, and belongs to none
-of them. It carries `teamIds` referencing real teams, so a dual meet is a
-single shared thing both schools open — rather than two half-copies where the
-entries land on one and the times on the other.
+**A meet** is one day's racing between one or more teams, and belongs to none of
+them. It references teams by id, so a dual meet is a single shared thing both
+schools open — rather than two half-copies where the entries land on one and the
+times on the other.
 
 A team can exist without an owner. Setting up a meet against a school that has
 never used the app mints an *unclaimed* team; a coach from there claims it
 later, and the meets it already appears in are unaffected.
 
-The bottom bar changes with where you are. At the top level it's **Team /
-Meets / Browse / Settings**; open a meet and it becomes that meet's modes with
-a way back out, so Run stays one thumb tap away while a heat is in the water.
+### Running a meet: four rows
 
-## Team
+| Row | Key | Written by | Contention |
+| --- | --- | --- | --- |
+| `heat` | `id` | admin | none — the running order is the admin's |
+| `seat` | `heat_id, lane` | admin **or** timer | last write wins |
+| `watch` | `heat_id, lane, timer_id` | anyone racing | none — one row per person |
+| `call` | `heat_id, lane` | admin | last write wins |
 
-The roster: import a CSV, add swimmers by hand, or tap through to a swimmer for
-their details and every time they've swum, grouped by event with a best-time
-marker and a link to each meet. Archiving is the only way off the roster.
+**A seat is the only answer to who is in a lane.** The coach seeding an event,
+the admin correcting the desk, and the timer fixing a name behind the blocks all
+write the same row, and the last one wins — because it is one person deciding
+one thing. There is no second opinion riding on a watch, no vote between claims,
+and no server-side rule reconciling the two. On paper, the name the timer writes
+*is* the fact.
 
-Names are ordered and written per **Settings → Name order**, which applies to
-the roster, registration, the lane buttons and the lane picker. It's a
-per-device preference rather than a team setting — with teams now shared, a
-visiting coach shouldn't change how the host reads its own roster.
+**A watch is evidence and is never overwritten.** One row per timer per lane.
+Several on a lane produce a *proposed* time by the hand-timing rules: one stands
+alone, two are averaged, three or more take the middle — which is the point of a
+third watch, since it outvotes a slow thumb rather than dragging the average
+toward it. Times truncate to hundredths, never round up: a time you didn't swim
+is not a time.
 
-## Meets
+**A call is the decision, and there is exactly one per lane.** Status, the
+official's own reading of the clock, and whether it's signed off — three fields
+of one decision, folded onto whatever is already there. Marking a DQ keeps a
+typed time; typing a time keeps a DQ.
 
-The season's schedule, newest first, each showing its type and opponent plus a
-count of events, entries and recorded times. A new meet can start from the
-standard 8-event order rather than an empty lineup. Opening one gives four
-modes:
+- `time_ms` absent means "whatever the watches say". Set, it is the official's
+  own reading and outranks them.
+- **A signed-off lane reads what the watches said at the moment it was signed
+  off**, not what they say now. This is what makes a late watch harmless: a
+  phone that was offline all afternoon can push whenever it reconnects and
+  nothing moves. The watch is still recorded and timestamped, so the call can be
+  reopened deliberately — and taking the sign-off back drops straight through to
+  the live watches, which is exactly when you'd want the late one to count.
 
-**Setup** — two tabs.
+**Nothing about a clock is stored in the meet.** A stopwatch is a fact about the
+device holding it; three timers behind one lane each start their own on the
+strobe. Where a device has got to in the running order is device state too. Both
+live in `storage.ts` / component state and never reach the server.
 
-- _Events_: reorder with the arrows, set each event to Open / Girls / Boys, or
-  load the standard dual-meet order — 22 events split girls/boys by default, or
-  11 "open" ones for an inter-squad meet. **First in each pair** flips the whole
-  lineup between girls-first and boys-first in one tap; it reorders the existing
-  events rather than rebuilding them, so entries and recorded times survive.
-  Relays are just events — see below.
-- _Options_: 4, 6, or 8 lanes, and how the stopwatch arranges its buttons —
-  a two-column grid, or a single column running low-to-high or high-to-low. The
-  list layouts let someone watching from the side map a finish straight onto a
-  button without first working out which column it's in; a live preview shows
-  the arrangement as you pick. Eight lanes as a list is tall — it fits an iPad
-  or an installed phone app, but may scroll slightly in mobile Safari.
+Everything else is derived and never stored: the proposed time, which lanes
+swam, and whether a heat or an event is closed. A heat is closed once every lane
+that swam has been signed off; an event once all its heats are. Derived means
+"closed" can never disagree with the calls underneath it.
 
-**Registration** — the team roster down the side, races across the top, tap a
-cell to enter or scratch.
+---
 
-**One column per race, not per event.** A split lineup swims each race twice,
-but there's no reason to make you tap through twice as many columns when the
-swimmer's gender already says which of the two they belong in — tapping a girl's
-cell in "200 Free" enters her in the girls' 200 Free, and a boy's in the boys'.
-The header shows the distance, the stroke and both counts (`2/1`); the
-underlying event numbers are in its tooltip rather than taking a line. A race
-with no version for a swimmer greys out.
+## Architecture
 
-**Girls / Boys** toggles in the header filter the roster. They sit inline with
-the sync chip so they cost no vertical space, and ride on a search param, so the
-grid never has to share state with the chrome. Showing everyone is the default
-and there's no "All" button — tapping the active toggle clears it, tapping the
-other swaps. With a filter on, the header counts switch to just that gender's.
+**The server is the source of truth.** D1 holds real tables; screens read
+through React Router loaders and write through small JSON endpoints. There is no
+client store, no IndexedDB, and no sync engine.
 
-Rows are sorted and written per **Settings → Name order**: `Last, First` sorts
-by surname and writes it that way, `First Last` does the reverse — so the part
-you're scanning always comes first. Whichever name isn't sorted on breaks ties,
-so siblings never shuffle between renders. Names are always written in full, and
-rows carry subtle zebra striping to make a wide row easier to follow across.
-
-Sorting is display-only: the stored roster keeps its import order, so it never
-churns the document or the sync.
-
-The whole screen is grid: the name column and the header row stay pinned however
-you scroll, and columns divide the window evenly, falling back to sideways
-scrolling once there are more races than fit at a tappable width. Counts update
-live, including events-per-swimmer in each row. Swimmers who turn up on the day get added under Team — the in-grid
-search box and `+ Swimmer` button are hidden behind `SHOW_ROSTER_CONTROLS` in
-`app/routes/registration.tsx`, so flip that to `true` to bring them back.
-
-**Run Meet** — one heat on screen at a time.
-
-- A single panel below the lanes — within thumb reach, and a fixed height so the
-  lane buttons never shift — holds whichever of three things is current:
-  `START` before the heat, the running clock during it, and `Reset` /
-  `Next heat` once every lane is in.
-- `START` starts every occupied lane at once.
-- Each lane becomes its own big `STOP` button showing the swimmer's name; tap it
-  as they touch. The lane freezes at its time while the clock keeps running.
-  Grid buttons stack their contents; list rows run left to right with the lane
-  number in a fixed column down the edge.
-- `Reset` re-runs the current heat (clears its times). `Next heat` advances,
-  rolling on to the next event after the last heat. Neither is on screen while
-  swimmers are still in the water, so a stray tap can't end a live race.
-- `Reset` asks first, naming how many times it would erase. `Cancel` takes the
-  spot `Reset` was just in, so a double tap lands on the harmless half.
-- Tap an **empty lane** to pick who's swimming it. That seats them and enters
-  them in the event in one step, for the swimmer who decides while walking up
-  behind the blocks. Anyone already seeded elsewhere in the event can be moved
-  up from there; anyone who has already swum it can't. `Remove from lane` in the
-  lane sheet undoes it, dropping the entry again if they have no time in that
-  event. Empty lanes aren't tappable mid-race, so the picker can never cover the
-  `STOP` buttons.
-- Tap a lane that's already stopped to type a time in, mark a DQ or no-show, or
-  clear it — one missed stop button shouldn't cost the whole heat. Times are
-  typed as bare digits, no separator needed: the last two are always hundredths,
-  so `3045` is 30.45 and `11127` is 1:11.27. A decimal or a colon still works
-  and gives the same answer. The sheet shows what it will save as you type.
-- The event arrows are locked while a heat is still in the water, so a stray tap
-  can't throw away a running race. They unlock once every lane is in.
-
-**Results** shows each event ranked across all its heats, and exports a results
-CSV or a full JSON backup.
-
-## Relays
-
-A relay is timed like any other event: one lane, one clock, one time. The app
-deliberately doesn't model the four legs. A relay lane is held by a **single
-swimmer standing in for the squad** — usually whoever leads off — so register
-one swimmer per relay team, or leave the event empty and assign lanes at the
-blocks with `+ Add swimmer`.
-
-That keeps seeding, the stopwatch, results, export and swimmer history working
-unchanged, at the cost of one simplification worth knowing: the relay time is
-credited to that one swimmer, so it shows up under their name in results and on
-their swimmer page. Splits and per-leg credit would need a real relay model.
-
-`Free Relay` and `Medley Relay` are strokes like any other, and the standard
-dual-meet order now includes them where they actually fall — 200 Medley Relay
-opens, 400 Free Relay closes.
-
-## Adding it to a home screen
-
-On the iPhone or iPad, open the site in Safari and pick **Share → Add to Home
-Screen**. It launches without the address bar or tabs, which is worth roughly
-another heat's worth of rows on the registration grid. Android and desktop
-Chrome offer the same thing via the install prompt.
-
-`public/manifest.webmanifest` declares `display: standalone`, and `app/root.tsx`
-carries the `apple-*` meta tags plus the touch icon iOS needs — without one it
-uses a screenshot of the page as the icon. Icons are generated, not hand-drawn;
-see "Regenerating the icons" below.
-
-Two things to know:
-
-- **The installed app has its own storage.** iOS keeps home-screen web apps in a
-  separate container from Safari, so a meet you set up in the browser won't be
-  in the installed app. Push it to the server first, then pull it down from the
-  server list on the first launch.
-- **It isn't offline-capable yet.** Once loaded, everything runs locally, but
-  the first load of a session still fetches the page from the server. There's no
-  service worker, so launching from the home screen with no signal at all will
-  fail. Load the app once on the way to the pool and it'll be fine.
-
-### Regenerating the icons
-
-```sh
-npm run icons
+```
+app/lib/schema.server.ts   the tables
+app/lib/meets.server.ts    meets, events, entries, heats, seats, watches, calls
+app/lib/teams.server.ts    teams, seasons, enrollments, roster
+app/lib/athletes.server.ts people, and the account link
+app/lib/access.ts          what somebody may do — pure predicates
+app/lib/access.server.ts   who they are, from the database
+app/lib/timing.ts          watches → proposed time; calls; closing (pure)
+app/lib/heats.ts           seeding and reseeding (pure)
+app/lib/events.ts          lineups and entry limits (pure)
+app/lib/public.ts          what anyone may see, and the redaction (pure)
+app/lib/public.server.ts   the browse queries
+app/lib/outbox.ts          the write queue
+app/lib/pending.ts         the optimistic overlay (pure)
 ```
 
-`scripts/make-icons.mjs` writes `public/icon-*.png` directly — Node's `zlib` is
-all a PNG encoder actually needs, so there's no image library in the dependency
-tree. To change the artwork, edit `waveCoverage` and re-run. Or ignore the
-script and drop in real exports at 180, 192, and 512 px, plus a 512 px maskable
-version that keeps its content inside the middle 80%.
+### Patterns
 
-## How it's put together
+**Rows several people write at once are keyed so they can't collide.** Six
+timers seating their own lane write six different rows; three timers on one lane
+write three different rows; two coaches entering their own swimmers write
+different rows. Concurrency is a property of the keys, not something the app
+reconciles afterwards.
 
-React Router 7 (framework mode) on a Cloudflare Worker, Tailwind 4, served under
-`/projects/meet-runner/`.
+**Permissions are computed in the loader, beside the rows they guard.** A screen
+gets its data and its `MeetAccess` from the same request, so the button and the
+endpoint cannot disagree about who may press it. The predicates in `access.ts`
+are shared by both sides. Every write endpoint re-checks; the UI check only
+decides what to draw.
 
-- `app/types/meet.ts` — `Athlete`, `TeamDoc` and `MeetDoc`, all plain JSON (no
-  `Map`/`Set`/`Date`) so the same value round-trips through IndexedDB and the
-  server unchanged. Both documents hold athlete _ids_ only.
-- `app/lib/documents.ts` — defaults and checking, deliberately pure so the
-  worker can share them without pulling in browser storage code.
-- `app/lib/objects.ts` — decomposing a season into scoped objects and putting
-  it back. Pure, and the property the tests pin down is that a round trip gives
-  the same season back.
-- `app/lib/public.ts` / `public.server.ts` — the browsing half. `public.ts` is
-  pure so the redaction can be tested without a database.
-- `app/lib/db.ts` — IndexedDB. A season outgrows localStorage (~150KB a meet
-  against a ~5MB ceiling, and Safari's failure mode is a thrown quota error
-  mid-write, which on a deck means losing times). Athletes live under their own
-  key rather than in the team record, and are recovered from an older team
-  document on first launch after the upgrade.
-- `app/state/app-store.tsx` — context store holding the team, the people and
-  every meet in memory. Mutations go through `editTeam`/`editMeet`, which stamp
-  `updatedAt`; an effect writes back only the documents whose identity changed,
-  so editing one meet doesn't rewrite the season.
-- `app/lib/heats.ts` — seeding. Heats are filled so the short heat comes first
-  and the last heat is full, and lanes fill from the middle of the pool outward
-  (6 lanes: 3, 4, 2, 5, 1, 6).
-- `app/hooks/use-stopwatch.ts` — the clock is always `Date.now() - startedAt`,
-  never an accumulated counter, so it stays accurate through dropped frames, a
-  backgrounded tab, a screen lock, or a reload mid-heat. Also holds a screen
-  wake lock while a heat is running.
-- `app/lib/sync.server.ts` + `app/routes/api.*.ts` — one `objects` table and
-  the endpoints over it.
+**`meet_id` is denormalised** onto events, entries, heats, seats, watches and
+calls. It's derivable by joining, and it's there because every screen under a
+meet asks "everything for this meet", which D1 answers fastest as a handful of
+indexed single-table reads. `meetDetail()` is that read.
 
-Times are stored as integer milliseconds and only formatted for display.
+**Writes go through the outbox.** A typed union of small writes, persisted to
+localStorage and drained in order, one at a time — a seat and the watch that
+follows it describe the same lane, so letting the second overtake the first would
+put a time against whoever used to be there. `applyPending()` folds the queue
+over loader data as a pure function, so a tap shows instantly and keeps working
+with no signal without there being a second copy of the meet to drift.
 
-### Sync
+> **A failure that can't be fixed by waiting is not retried.** Only network
+> errors, 408, 429 and 5xx back off; a 400 or 403 is dropped and reported. An
+> earlier engine retried everything, so one write the server would never accept
+> sat in front of the whole queue forever behind a chip reading "Retrying…".
 
-Documents are what the app thinks in; **objects** are what goes over the wire.
-A season decomposes into small records — a team, its seasons, its enrollments,
-a meet, its lineup, each entry, each heat, each watch, each ruling — and
-recomposes on the other side. That's the whole reason concurrent work is safe:
-an athlete added on the laptop and a time recorded on the iPad are different
-objects, so they merge instead of one clobbering the other. Only a genuine edit
-to the *same* object is a contest, and the loser is told.
+**The session travels in two carriers.** A `fetch` from our own code sends an
+`Authorization: Bearer` header — that's the outbox, the timer's phone, and any
+script. A *navigation* sends nothing of the sort, and loaders run on
+navigations, so there is also an `HttpOnly; SameSite=Lax` cookie. `SameSite=Lax`
+rides top-level navigations and not cross-site posts, which is the CSRF defence.
 
-Every object carries a **scope**, which is the one thing the server needs to
-answer "what changed?":
+**Two things are private, and only two:** birth dates and contact details.
+`public.ts` builds a public athlete by *naming the fields that may travel*
+rather than deleting the ones that mustn't — so a field added to `Athlete` later
+is private until somebody decides otherwise. Keep it that way.
 
-| Scope | Holds | Pulled by |
-| --- | --- | --- |
-| `team:{id}` | seasons, enrollments | members of that team |
-| `meet:{id}` | lineup, entries, heats, watches, rulings | anyone working that meet |
-| `global` | athletes | everyone — people belong to nobody |
+**Server-only code stays out of components.** A `.server.ts` module imported by
+anything other than a `loader`/`action` fails the build. When both sides need a
+rule, it goes in the pure half — `access.ts` beside `access.server.ts`,
+`public.ts` beside `public.server.ts`.
 
-Scoping a meet by its own id rather than by an owning team is what lets two
-schools work one dual meet: both pull `meet:{id}`, neither owns it, and neither
-sees a byte of the other's roster.
+---
 
-`updatedAt` is the editing device's clock and decides who wins a contest for an
-object. `server_at` is ours, and is what a cursor pages through — a device with
-a wrong clock shouldn't be able to hide a change from everyone else.
+## Screens
 
-**Reading and writing are not the same permission**, and inside a meet the
-question isn't which team you're from — it's whether you're running it.
+The bottom bar changes with where you are: **Team / Meets / Browse / Settings**
+at the top level; open a meet and it becomes that meet's modes with a way back
+out, so Run stays one thumb tap away while a heat is in the water. The header is
+title · view options · status · profile.
 
-| | Meet admin | Coach of a racing team | Linked athlete |
-| --- | :-: | :-: | :-: |
-| Meet details, lineup, heats | ✓ | | |
-| Rulings — DQ, no-show, override | ✓ | | |
-| Watches | ✓ | ✓ | |
-| Entries | ✓ | their own team's | themselves |
+| | |
+| --- | --- |
+| `/team` | The roster for the current season: CSV import, add by hand, tap through to a swimmer |
+| `/meets` | The schedule, and creating one |
+| `/meets/:id` | Details, the running order, the timing QR code, export, delete |
+| `/meets/:id/entries` | The registration grid — roster down the side, races across the top |
+| `/meets/:id/run` | **Control** (the desk) and **Stopwatch** (the deck), switchable for an admin |
+| `/meets/:id/results` | Ranked by event across all heats |
+| `/teams`, `/athletes`, `/users/:id` | Browsing — open to anyone, no account |
+| `/timer` | The volunteer's stopwatch, reached by QR code, no account |
 
-Watches and rulings sit on opposite sides of that line deliberately. A watch is
-*evidence*: several per lane, resolved by median, and one more never overwrites
-anybody — so every coach keeps their stopwatch. A ruling is a *decision*, and
-with two schools in the water the decision isn't one of the schools' to make.
+**The control desk** shows every watch on a lane as its own chip, because a
+single slow thumb is obvious side by side and invisible once averaged — and
+because the median only means anything if you can see what it chose between.
+DQ, no-show and sign-off live here rather than on the deck: a call is a decision,
+made where you can see the evidence.
 
-A swimmer may enter and scratch themselves and nothing else — not heats,
-because seeding isn't theirs; not watches, because you don't time your own
-race; not the athlete record, because editing the name on it is how you'd
-quietly become someone else.
+**The deck stopwatch** holds its own clock. START clears *this device's* watches
+for the heat and nobody else's; so does Reset, and neither touches a call. A
+device may discard its own evidence; discarding somebody else's is a decision.
 
-`app/state/auto-sync.tsx` pushes on its own, and is built to stay off the
-render path:
+**Timers** get a QR code taped to the timing table. Holding it is the whole
+credential — that is deliberate, and the blast radius is kept small three ways: a
+grant is scoped to one meet, it can only write times, seats and new swimmers,
+and it stops working the day after the meet. Issuing a new code retires the old
+one, which is also how you revoke.
 
-- **Debounced ~2.5s.** Editing restarts the clock, so a burst of taps becomes
-  one request. A full heat — start plus six lane stops — is one PUT.
-- **One request at a time.** Anything edited mid-flight stays pending and goes
-  out on the next pass, so there's no queue to grow.
-- **Backs off on failure** (4s → 10s → 30s → 60s) rather than hammering dead
-  pool wifi, and retries on `online` or when the tab comes back.
-- **Gives up on 503/401.** A missing database or a bad token won't fix itself.
-- **Push only.** Auto-pulling would let the server overwrite deck work behind
-  your back, so pulling stays a deliberate button.
-- **Switchable per device**, in localStorage rather than in the meet, so
-  switching it off on the phone doesn't switch it off on the iPad.
+**Diving** is display-only. It holds its place in the running order so divers see
+it on the grid, and carries no times.
 
-The header chip shows the live state: Synced / Saving… / Retrying… / Local only.
+---
 
-### Reading, for everyone else
+## API
 
-Browsing doesn't go through sync at all. A meet is a public event — the heat
-sheet is handed out at the door and the results are read over a PA — so meets,
-teams, rosters and results are readable with no account, straight from the
-server. That split is what stopped the sync engine having to grow an opinion
-about who may read what.
+UI and API mirror each other, with one query and one projection behind both.
 
-Two things never travel: **birth dates**, and **contact details**. `public.ts`
-builds a public athlete by *naming the fields that may go out* rather than by
-deleting the ones that mustn't, so a field added to `Athlete` later is private
-until somebody decides otherwise.
-
-| Route | Purpose |
+| | |
 | --- | --- |
 | `GET /api/meets`, `/api/meets/:id` | Every meet; one meet with its results |
 | `GET /api/teams`, `/api/teams/:id` | Every team; one team's seasons and roster |
-| `POST /api/teams` | Mint an unclaimed opponent (signed in; refuses a duplicate name) |
+| `POST /api/teams` | Mint an unclaimed opponent (signed in) |
 | `GET /api/athletes`, `/api/athletes/:id` | People, and one person's history |
 | `GET /api/users/:id` | Somebody's own dashboard — only ever their own |
-| `GET /api/members` | The accounts on a team. Coaches only: it's contact details |
-| `POST /api/athletes/:id/link` | Say which account a swimmer is. Coaches only |
-| `POST /api/sync` | Send changed objects, take back what changed elsewhere |
-| `GET /api/sync-status` | Whether a D1 binding exists |
-| `POST /api/auth/start`, `/verify` | Send a login code; trade it for a session |
-| `GET`/`PATCH`/`DELETE /api/auth/session` | Who's signed in; sign out |
-| `GET`/`POST`/`PATCH`/`DELETE /api/memberships` | Who's on a team, and who wants to be |
+| `POST`/`DELETE /api/meets/:id/entries` | Enter or scratch one swimmer |
+| `POST`/`DELETE /api/meets/:id/seats` | Who is in a lane |
+| `POST`/`DELETE /api/meets/:id/watches` | Times, and dropping your own |
+| `POST`/`DELETE /api/meets/:id/calls` | Deciding a lane |
 | `GET`/`POST`/`DELETE /api/meets/:id/admins` | Who runs a meet |
-| `GET`/`PATCH`/`POST`/`DELETE /api/profile` | Your name, and the contacts you sign in with |
-| `GET`/`POST /api/invites` | Inspect or mint a one-time invitation |
-| `GET`/`POST`/`DELETE /api/timer/grant` | The coach's end of the timing QR code |
-| `GET /api/timer/meet` | One meet, as much as a timer may see |
-| `POST /api/timer/watch` | Times coming off a deck |
+| `POST /api/athletes/:id/link` | Say which account a swimmer is. Coaches only |
+| `/api/auth/*`, `/api/memberships`, `/api/invites` | Accounts and membership |
+| `/api/timer/grant`, `/timer/meet`, `/timer/watch` | The QR-code timing path |
 
-## Timers
+### Who may do what
 
-A lane is timed by whoever is standing at it, and they give no name — exactly
-as they give nothing today when handed a stopwatch and a clipboard. **Meet →
-Timers** prints a QR code for the timing table. Scanning it is the whole
-credential.
+Roles are team-scoped except one. **Running a meet is scoped to the meet**,
+because a meet belongs to no team — often it's the host's coach, sometimes a
+referee who coaches nobody. Whoever creates a meet administrates it.
 
-That is a bearer token on a piece of paper on a pool deck, and it's meant to
-be. The blast radius is kept small three ways: a grant is scoped to one meet,
-it can only write times and introduce people, and it stops working the day
-after the meet. Printing a new code retires the old one, which is also how you
-revoke a sheet that's gone walkabout.
+| | Meet admin | Coach of a racing team | Linked athlete |
+| --- | :-: | :-: | :-: |
+| Meet details, lineup, seeding | ✓ | | |
+| Calls: DQ, typed times, sign-off | ✓ | | |
+| Watches and seats | ✓ | ✓ | |
+| Entries | ✓ | their own team's | themselves, if the meet allows |
 
-A timer picks a lane, and gets one big button at a time: START, then STOP, then
-Submit. Times queue in localStorage and go up when there's signal, so the wifi
-can be gone the whole meet and nothing is lost. A watch is keyed by heat, lane
-and timer, so sending it twice is not two times.
+Watches and calls sit on opposite sides deliberately: a watch is evidence and an
+extra one never overwrites anybody, so every coach keeps their stopwatch. A call
+is a decision, and with two schools in the water it isn't one school's to make.
 
-**Several watches per lane make the official time.** One stands alone, two are
-averaged, three or more take the median — which is the point of a third watch:
-it outvotes a slow thumb rather than dragging an average toward it. Times
-truncate to hundredths, never round up. The result is *derived*, never stored,
-which is exactly what makes concurrent timing conflict-free: every device
-computes the same answer from the same watches, so there's nothing to conflict
-over. A coach's ruling — a DQ, a no-show, a typed-in time — outranks the lot.
-
-A timer can also say who was actually in a lane. That rides on the *watch*, not
-on the lineup: a timer correcting what they saw must never rewrite the coach's
-running order. Where the lineup has an opinion it wins. An empty lane is the
-lineup having no opinion, and there the timers are the only witnesses — an
-exhibition swim, a late entry, a visiting swimmer nobody seeded — so the swim
-is credited on their word and flagged as such rather than silently dropped.
-
-Adding a swimmer nobody entered offers the teams actually racing. The server
-mints the roster entry from the meet's own date and teams; the phone only says
-which team was tapped. A grant can introduce a person it has never seen and
-cannot edit one that already exists, so a code taped to a table can't rename
-the roster.
-
-## Accounts
-
-Identity is a contact — an email address or a mobile number — and nothing else.
-There's no password and no separate sign-up: a code goes to whatever was typed,
-and a contact nobody has used before becomes an account when someone reads it.
-The email carries a link with the code already in it as well as the code
-itself, since a link only works when mail is read in the same browser and a
-code always works.
-
-The session token is stored on the device and sent as a bearer header, so it
-survives a reload and a closed lid — a coach signs in once on the iPad that
-lives in the swim bag. Tokens and codes are both stored hashed.
-
-**Local data wins over the session.** A device that already holds the season
-keeps working with no network and no session, which is the state a phone is in
-when pool wifi drops mid-meet. Signing in is how a season gets _onto_ a device
-and how the server knows whose it is — not a gate in front of a stopwatch.
-
-Identity is a set, not a value: an account can hold several contacts, and any
-of them opens it. A coach with a school address and a mobile signs in with
-whichever is to hand rather than ending up with two accounts owning half a
-season each. Adding one sends a code to it first — an address you can't read
-isn't yours, and without that check anybody could attach somebody else's.
-**Profile** is where they're managed, from the account circle top right.
-
-Roles are `head_coach`, `coach`, `athlete`, `parent`, `viewer`; only coaches can
-admit people or hand out invitations, and only an active membership carries any
-power at all. Being a member is not permission to change things — see the write
-rules under Sync. Timers are deliberately not a role: they hold a meet-scoped
-grant instead, so they can work without giving a name.
-
-**Running a meet is not a team role.** Every other role here belongs to a team —
-you coach Chaparral, you swim for Horizon — but a meet belongs to no team, so
-the person deciding between three watches on lane 4, or ruling a DQ, can't be
-defined by which school they're from. Often it's the host's head coach; at a
-bigger meet it's a referee who coaches nobody. So a meet has *administrators*,
-managed under **Setup → Running this meet**, and whoever first puts a meet on
-the server takes the job. That keeps your own inter-squad meet behaving exactly
-as it always has; the limits only bite once somebody else's coach is in the
-same water.
-
-**An account can be a swimmer.** A coach links one from the athlete's page,
-choosing among people already admitted to the team — self-claiming would let
-anyone assert they were anyone. Once linked, `/users/{id}` is that person's own
-page: their teams, their meets, their times with bests marked. It answers only
-for the person asking, so a coach requesting somebody else's gets a refusal
-rather than a redacted copy.
-
-**Claiming a team.** A team with no members is unclaimed, and the first person
-to ask becomes its head coach; after that everyone else waits for approval.
-That covers both the one-time bootstrap for seasons that predate accounts and
-the opponent someone else created for you, so claim yours promptly.
+---
 
 ## Running it
 
@@ -420,13 +243,15 @@ the opponent someone else created for you, so claim yours promptly.
 npm install
 npm run dev          # http://localhost:5173/projects/meet-runner/
 npm run typecheck
+npm test
 npm run build
 ```
 
-`wrangler dev` creates a local D1 automatically, so sync works in development
-with no setup. `.dev.vars` sets `AUTH_DEV_CODES=1`, which hands the login code
-straight back to the browser so you can sign in with no email or SMS provider
-configured. It is gitignored, and must never be set on a deployed worker.
+`wrangler dev` creates a local D1 automatically, and `ensureSchema()` creates any
+missing tables on first use — a fresh database needs no migration step.
+`.dev.vars` sets `AUTH_DEV_CODES=1`, which hands the login code straight back to
+the browser so you can sign in with no email or SMS provider. It is gitignored,
+and must never be set on a deployed worker.
 
 ### Deploying
 
@@ -437,17 +262,9 @@ configured. It is gitignored, and must never be set on a deployed worker.
    npx wrangler d1 create meet-runner
    ```
 
-2. The sync endpoints are open by default. Since the worker is on a public
-   route, set a shared secret and enter the same value under **Sync → Sync
-   token** in the app on each device:
-
-   ```sh
-   npx wrangler secret put SYNC_TOKEN
-   ```
-
-3. Codes have to reach people somehow. Set whichever channels you want; a
-   channel with nothing configured logs the code on the worker instead of
-   sending it, and says so on screen rather than failing silently.
+2. Codes have to reach people somehow. A channel with nothing configured logs
+   the code on the worker instead of sending it, and says so on screen rather
+   than failing silently.
 
    ```sh
    npx wrangler secret put RESEND_API_KEY     # email
@@ -457,52 +274,53 @@ configured. It is gitignored, and must never be set on a deployed worker.
    npx wrangler secret put TWILIO_FROM        # the sending number, in E.164
    ```
 
-4. `npm run deploy`
+3. `npm run deploy`
 
-5. Sign in, and claim the team — the first person to ask for an unclaimed team
+4. Sign in and claim the team — the first person to ask for an unclaimed team
    becomes its head coach.
 
-Without step 1 the app still deploys and runs; only the sync buttons report
-themselves unavailable.
+### Home screen
 
-#### Upgrading a database that predates scopes
+Installed to an iOS home screen it runs full-screen with no browser chrome.
+`npm run icons` regenerates `public/` from the source art.
 
-`objects` used to be keyed by `team_id` and `meet_id`; it's keyed by `scope`
-now. `CREATE TABLE IF NOT EXISTS` won't alter a table that already exists, so
-deploying over an older database leaves the first write failing on a missing
-column, with nothing on screen to explain it.
+---
 
-Back up first, then drop and recreate — deliberately, not as a side effect of
-shipping:
+## Tests
 
-```sh
-npx wrangler d1 export meet-runner --remote --output backups/prod-$(date +%F).sql
-npx wrangler d1 execute meet-runner --remote --command "DROP TABLE objects"
-```
+`npm test` — eight suites under `node --experimental-strip-types`, no framework.
+They pin the properties that matter rather than the implementation: the
+hand-timing rules, that a seat is the only answer to who's in a lane, that a
+late watch can't move a signed-off result and that undoing the sign-off lets it
+count, that a call's three fields don't erase each other, that reseeding refuses
+once an event has times and reuses heat ids in place, and that a birth date
+cannot reach a public response.
 
-The table is rebuilt on the next request, and each device pushes its season
-back up. Devices re-migrate on their own: a baseline in the old shape is
-discarded rather than half-read, and athletes are recovered out of an older
-team document the first time the new build launches.
+**Tests and types have never been sufficient here.** Across every rewrite, the
+bugs that mattered were found by loading the thing in a browser or curling the
+endpoint: raw SQL naming a column that no longer existed, public pages behind a
+sign-in gate, a session that loaders couldn't see because it only travelled as a
+`fetch` header, an athlete able to rename the whole team. Run it.
 
-## Not built
+---
 
-- Meet scoring. Swimmers carry an optional `squad`, which is imported, shown,
-  and exported, but nothing totals points per squad yet — that's the natural
-  next step if you want a running score during an inter-squad meet.
-- Seed times, so heats are seeded in roster order rather than by speed.
-  "Reseed lanes" in Run mode reshuffles at random.
-- A screen for a swimmer to change their own entries. The permission exists —
-  a linked account may enter and scratch itself — but the only way to use it
-  today is the coach's registration grid. See `TODOS.md`.
+## Things worth knowing before changing them
 
-## Operating notes
+- **The lineup order is a column** (`events.position`), so reordering is an
+  update rather than a rewrite of a list.
+- **Reseeding refuses once anything is recorded against an event**, and reuses
+  the existing heats' ids in place. A fresh id orphans every seat, watch and
+  call pointing at the old heat — rows that stay in the meet, count towards
+  things, and render nowhere.
+- **Deletes are real deletes.** No tombstones: nothing else holds a copy that
+  could put the row back.
+- **Enrollment ids are derived** from season and athlete, so re-importing a
+  roster updates rows instead of minting new people. This is what stops the
+  "9 entered, three ticks" failure the old model had.
+- **`nextYear` and `isGraduating` only understand numeric grades.** A CSV
+  contains whatever a school types, and a ladder that half-works silently
+  mislabels every row it doesn't recognise.
+- **A write's effect in `pending.ts` must match what the server does with it.**
+  That pairing is the only thing to be careful about in that file.
 
-Back up the live database (see also the upgrade note above):
-
-```sh
-npx wrangler d1 export meet-runner --remote --output backups/prod-$(date +%F).sql
-```
-
-`backups/` is gitignored. It holds real rosters — minors' names, and birth
-dates where they've been entered — so it stays on the machine that made it.
+See `TODOS.md` for what's next.

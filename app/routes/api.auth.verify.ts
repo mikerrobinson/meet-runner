@@ -9,6 +9,7 @@ import {
 } from "~/lib/api.server";
 import {
   createSession,
+  sessionCookie,
   redeemInvite,
   sessionPayload,
   verifyChallenge,
@@ -57,7 +58,13 @@ export async function action({ request, context }: Route.ActionArgs) {
     const token = await createSession(db, result.user.id);
     const payload = await sessionPayload(db, result.user, invitedTeamId);
 
-    return json({ token, isNew: result.isNew, ...payload, ...(inviteError ? { inviteError } : {}) });
+    // The token goes back in the body for the header path, and into a cookie
+    // so that loaders on ordinary navigations know who this is.
+    return json(
+      { token, isNew: result.isNew, ...payload, ...(inviteError ? { inviteError } : {}) },
+      200,
+      { "set-cookie": sessionCookie(token, request) },
+    );
   } catch (error) {
     return errorResponse(error);
   }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import type { Route } from "./+types/run";
+import type { Progress } from "~/types/meet";
 import { LaneAssignSheet } from "~/components/LaneAssignSheet";
 import { LaneTile } from "~/components/LaneTile";
 import {
@@ -13,14 +14,21 @@ import {
   TextInput,
 } from "~/components/ui";
 import { useElapsed, useWakeLock } from "~/hooks/use-stopwatch";
-import { heatsForEvent } from "~/lib/heats";
+import { heatsForEvent, reseedHeats, shuffle } from "~/lib/heats";
+import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
+import { mayEditMeet } from "~/lib/access";
+import { meetAccess } from "~/lib/access.server";
+import { meetDetail, replaceHeats } from "~/lib/meets.server";
 import { heatTouched, resultsForHeat, watchesForLane } from "~/lib/timing";
 import { loadProgress, saveProgress } from "~/lib/storage";
+
 import { formatClock, formatTime, parseTime } from "~/lib/time";
-import { enrollmentIndex, rosterForMeet, seasonForMeet } from "~/lib/roster";
-import { useAppStore } from "~/state/app-store";
-import { useMeetRole } from "~/state/meet-role";
-import { useRunClock } from "~/state/run-clock";
+import { enrollmentIndex } from "~/lib/roster";
+import { mayDecide } from "~/lib/access";
+import { applyPending } from "~/lib/pending";
+import { useFetcher } from "react-router";
+import { usePending, useSend } from "~/state/outbox";
+import { useMeet } from "./meet-layout";
 import { RunControl } from "./run-control";
 import { useViewPrefs } from "~/state/view-prefs";
 import {
@@ -31,13 +39,12 @@ import {
   isDiving,
   orderedLanes,
   type Heat,
-  type MeetDoc,
+  type MeetDetail,
   type MeetEvent,
   type NameOrder,
-  type Progress,
   type Result,
   type Athlete,
-  type WatchTime,
+  type Watch,
 } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
@@ -64,16 +71,71 @@ const METHOD_LABEL: Record<string, string> = {
  * screen your job needs. An administrator can still switch — they often hold a
  * watch too — but a coach is never shown a sign-off desk they can't use.
  */
+/**
+ * Reseeding an event's lanes.
+ *
+ * Not a queued write: unlike a tick or a time it is one deliberate decision
+ * about a whole event, made at a desk with signal, and it needs the server's
+ * answer — it refuses once anything has been recorded against the event.
+ */
+export async function action({ params, request, context }: Route.ActionArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  const db = requireDb(env);
+  const user = await currentUser(request, env);
+  const access = await meetAccess(db, params.meetId, user);
+  if (!mayEditMeet(access)) {
+    throw new Response("Whoever is running this meet seeds it.", { status: 403 });
+  }
+
+  const { eventId } = (await request.json()) as { eventId: string };
+  const detail = await meetDetail(db, params.meetId);
+  if (!detail) throw new Response("No such meet", { status: 404 });
+
+  const entrants = shuffle(detail.entries[eventId] ?? []);
+  const rebuilt = reseedHeats(
+    detail,
+    params.meetId,
+    eventId,
+    entrants,
+    detail.meet.laneCount,
+  );
+  // Refused: the event has times against it. The screen disables the control
+  // for the same reason, so this is the backstop.
+  if (!rebuilt) return { ok: false };
+
+  await replaceHeats(db, params.meetId, eventId, rebuilt);
+  return { ok: true };
+}
+
 export default function RunMeet() {
-  const store = useAppStore();
+  const { detail: loaded, access } = useMeet();
+  const pending = usePending();
+  const send = useSend();
+  const detail = useMemo(() => applyPending(loaded, pending), [loaded, pending]);
   const { meetId } = useParams();
-  const role = useMeetRole();
-  const clock = useRunClock();
   const { laneLayout: layout, timerId, nameOrder } = useViewPrefs();
-  const meet = store.meets.find((m) => m.id === meetId);
-  const roster = store.athletes;
+  const meet = detail.meet;
+  const roster = detail.athletes;
+
+  /**
+   * The clock, and the one place it lives.
+   *
+   * Component state. A stopwatch is a fact about the device holding it —
+   * three timers behind one lane each start their own on the strobe, and
+   * nobody's clock is anybody else's. It used to be a field on the meet, which
+   * meant one person tapping START reached into every other device's copy and,
+   * because starting a heat also cleared it, deleted times the phones had
+   * already sent.
+   */
+  const reseed = useFetcher();
+  const [clock, setClock] = useState<{
+    heatId: string;
+    startedAt: number;
+    /** Lanes that already had a time when this run started. */
+    alreadyTimed: number[];
+  } | null>(null);
   const [view, setView] = useState<"control" | "stopwatch" | null>(null);
-  const showing = view ?? (role.admin ? "control" : "stopwatch");
+  const showing = view ?? (access.admin ? "control" : "stopwatch");
 
   const [editingLane, setEditingLane] = useState<number | null>(null);
   const [assigningLane, setAssigningLane] = useState<number | null>(null);
@@ -92,32 +154,26 @@ export default function RunMeet() {
 
   const eventIndex = Math.min(
     progress.eventIndex,
-    Math.max(0, (meet?.events.length ?? 1) - 1),
+    Math.max(0, detail.events.length - 1),
   );
-  const event = meet?.events[eventIndex];
+  const event = detail.events[eventIndex];
   const heats = useMemo(
-    () => (meet && event ? heatsForEvent(meet, event.id) : []),
-    [meet, event],
+    () => (event ? heatsForEvent(detail.heats, event.id) : []),
+    [detail.heats, event],
   );
   const heatIndex = Math.min(progress.heatIndex, Math.max(0, heats.length - 1));
   const heat: Heat | undefined = heats[heatIndex];
 
-  // Seed heats the first time we land on an event. Diving never gets heats —
-  // it's in the lineup so divers can see it, not to be run from here.
-  useEffect(() => {
-    if (meet && event && !isDiving(event)) store.ensureHeats(meet.id, event.id);
-  }, [meet, event, store]);
-
-  const running = heat != null && clock.clock?.heatId === heat.id;
+  const running = heat != null && clock?.heatId === heat.id;
 
   // Derived, not stored: each lane's official time comes from the watches on
   // it, so several timers can be recording at once without colliding.
   const resultsByLane = useMemo(() => {
     const map = new Map<number, Result>();
-    if (!meet || !heat) return map;
-    for (const result of resultsForHeat(meet, heat)) map.set(result.lane, result);
+    if (!heat) return map;
+    for (const result of resultsForHeat(detail, heat)) map.set(result.lane, result);
     return map;
-  }, [meet, heat]);
+  }, [detail, heat]);
 
   /**
    * The lanes *this device* has stopped.
@@ -130,14 +186,14 @@ export default function RunMeet() {
    */
   const stoppedByMe = useMemo(() => {
     const lanes = new Set<number>();
-    if (!meet || !heat) return lanes;
-    for (const watch of meet.watches) {
+    if (!heat) return lanes;
+    for (const watch of detail.watches) {
       if (watch.heatId === heat.id && watch.timerId === timerId) {
         lanes.add(watch.lane);
       }
     }
     return lanes;
-  }, [meet, heat, timerId]);
+  }, [detail, heat, timerId]);
 
   const occupiedLanes = heat
     ? heat.lanes.map((id, i) => (id ? i + 1 : null)).filter((n): n is number => n !== null)
@@ -159,13 +215,13 @@ export default function RunMeet() {
       (lane) =>
         stoppedByMe.has(lane) ||
         (resultsByLane.has(lane) &&
-          !(clock.clock?.alreadyTimed ?? []).includes(lane)),
+          !(clock?.alreadyTimed ?? []).includes(lane)),
     );
 
   // Lanes already swum can't be reseeded out from under their times.
   const eventTouched = useMemo(
-    () => (meet ? heats.some((h) => heatTouched(meet, h)) : false),
-    [meet, heats],
+    () => heats.some((h) => heatTouched(detail, h)),
+    [detail, heats],
   );
 
   /**
@@ -178,7 +234,7 @@ export default function RunMeet() {
 
   // Anchored to the wall clock, and the frame loop stops as soon as the last
   // lane is in — there's nothing left to animate.
-  const elapsed = useElapsed(clockRunning ? clock.clock!.startedAt : null);
+  const elapsed = useElapsed(clockRunning ? clock!.startedAt : null);
   useWakeLock(running);
 
   useEffect(() => {
@@ -191,7 +247,7 @@ export default function RunMeet() {
     setProgressState(next);
     saveProgress(meetId, next);
     // Never carry a running clock across a heat change.
-    clock.stop();
+    setClock(null);
     setEditingLane(null);
     setAssigningLane(null);
   };
@@ -199,7 +255,7 @@ export default function RunMeet() {
   const nextHeat = () => {
     if (heatIndex + 1 < heats.length) {
       goToHeat(eventIndex, heatIndex + 1);
-    } else if (meet && eventIndex + 1 < meet.events.length) {
+    } else if (meet && eventIndex + 1 < detail.events.length) {
       goToHeat(eventIndex + 1, 0);
     }
   };
@@ -209,12 +265,10 @@ export default function RunMeet() {
     else if (eventIndex > 0) goToHeat(eventIndex - 1, 0);
   };
 
-  if (!meet) return null;
-
   // The switcher only exists for people who have a real choice: an
   // administrator who also holds a watch. Showing it to a coach would offer a
   // screen whose every button the server refuses.
-  const switcher = role.admin ? (
+  const switcher = mayDecide(access) ? (
     <div className="mb-3">
       <Segmented
         value={showing}
@@ -231,7 +285,7 @@ export default function RunMeet() {
     return (
       <div>
         {switcher}
-        <RunControl meet={meet} />
+        <RunControl />
       </div>
     );
   }
@@ -254,7 +308,7 @@ export default function RunMeet() {
   }
 
   const isLastHeat =
-    heatIndex + 1 >= heats.length && eventIndex + 1 >= meet.events.length;
+    heatIndex + 1 >= heats.length && eventIndex + 1 >= detail.events.length;
 
   return (
     <div className="space-y-3">
@@ -274,14 +328,14 @@ export default function RunMeet() {
             {eventName(event)}
           </p>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Event {eventIndex + 1} of {meet.events.length}
+            Event {eventIndex + 1} of {detail.events.length}
             {heats.length > 0 && ` · Heat ${heatIndex + 1} of ${heats.length}`}
           </p>
         </div>
         <Button
           size="md"
           aria-label="Next event"
-          disabled={clockRunning || eventIndex + 1 >= meet.events.length}
+          disabled={clockRunning || eventIndex + 1 >= detail.events.length}
           onClick={() => goToHeat(eventIndex + 1, 0)}
         >
           ›
@@ -290,7 +344,7 @@ export default function RunMeet() {
 
       {isDiving(event) ? (
         <DivingPanel
-          meet={meet}
+          detail={detail}
           event={event}
           roster={roster}
           nameOrder={nameOrder}
@@ -298,7 +352,7 @@ export default function RunMeet() {
       ) : heats.length === 0 || !heat ? (
         <EmptyState title="Nobody is entered in this event">
           <Link
-            to={`/meets/${meet.id}/registration`}
+            to={`/meets/${detail.meet.id}/entries`}
             className="font-semibold text-blue-600 underline"
           >
             Enter swimmers
@@ -325,15 +379,21 @@ export default function RunMeet() {
                 layout={layout}
                 laneCount={heat.lanes.length}
                 nameOrder={nameOrder}
-                onStop={() =>
-                  store.stopLane(
-                    meet.id,
-                    heat,
+                onStop={() => {
+                  const at = Date.now();
+                  send({
+                    kind: "watch",
+                    meetId: meet.id,
+                    heatId: heat.id,
                     lane,
-                    Date.now() - clock.clock!.startedAt,
                     timerId,
-                  )
-                }
+                    timeMs: at - clock!.startedAt,
+                    source: "stopwatch",
+                    recordedAt: at,
+                    startedAt: clock!.startedAt,
+                    stoppedAt: at,
+                  });
+                }}
                 onEdit={() => setEditingLane(lane)}
                 onAssign={() => setAssigningLane(lane)}
               />
@@ -368,8 +428,13 @@ export default function RunMeet() {
                   // This device's own watches, and nobody else's. A timer at
                   // the far end of the pool doesn't lose their afternoon
                   // because somebody reset a heat here.
-                  store.clearOwnWatches(meet.id, heat.id, timerId);
-                  clock.stop();
+                  send({
+                    kind: "clear-watches",
+                    meetId: meet.id,
+                    heatId: heat.id,
+                    timerId,
+                  });
+                  setClock(null);
                   setConfirmReset(false);
                 }}
               >
@@ -405,10 +470,19 @@ export default function RunMeet() {
               onClick={() => {
                 // A false start's watches aren't times of the race about to
                 // be swum, so this device drops its own before starting.
-                store.clearOwnWatches(meet.id, heat.id, timerId);
+                send({
+                  kind: "clear-watches",
+                  meetId: meet.id,
+                  heatId: heat.id,
+                  timerId,
+                });
                 // Whatever else is already on these lanes belongs to the
                 // previous swim, not this one.
-                clock.start(heat.id, [...resultsByLane.keys()]);
+                setClock({
+                  heatId: heat.id,
+                  startedAt: Date.now(),
+                  alreadyTimed: [...resultsByLane.keys()],
+                });
               }}
             >
               START
@@ -429,7 +503,7 @@ export default function RunMeet() {
                     ? "This event has times against it — reseeding would move swimmers out from under them."
                     : undefined
                 }
-                onClick={() => store.rebuildHeats(meet.id, event.id, { shuffle: true })}
+                onClick={() => reseed.submit({ eventId: event.id }, { method: "post", action: `/meets/${meet.id}/run`, encType: "application/json" })}
               >
                 Reseed lanes
               </Button>
@@ -453,17 +527,20 @@ export default function RunMeet() {
 
       {heat && assigningLane !== null && (
         <LaneAssignSheet
-          meet={meet}
-          roster={rosterForMeet(store.athletes, store.team, meet)}
-          enrollments={enrollmentIndex(
-            store.team,
-            seasonForMeet(store.team, meet)?.id,
-          )}
+          detail={detail}
+          roster={roster}
+          enrollments={enrollmentIndex(detail.enrollments)}
           nameOrder={nameOrder}
           heat={heat}
           lane={assigningLane}
           onAssign={(athleteId) =>
-            store.assignToLane(meet.id, heat.id, assigningLane, athleteId)
+            send({
+              kind: "seat",
+              meetId: meet.id,
+              heatId: heat.id,
+              lane: assigningLane,
+              athleteId,
+            })
           }
           onClose={() => setAssigningLane(null)}
         />
@@ -479,23 +556,37 @@ export default function RunMeet() {
             const s = findAthlete(roster, heat.lanes[editingLane - 1]);
             return s ? displayName(s, nameOrder) : `Lane ${editingLane}`;
           })()}
-          watches={watchesForLane(meet, heat.id, editingLane)}
+          watches={watchesForLane(detail, heat.id, editingLane)}
           timerId={timerId}
           onSaveTime={(timeMs) => {
-            store.recordManualTime(meet.id, heat, editingLane, timeMs, timerId);
+            send({
+              kind: "watch",
+              meetId: meet.id,
+              heatId: heat.id,
+              lane: editingLane,
+              timerId,
+              timeMs,
+              source: "typed",
+              recordedAt: Date.now(),
+            });
             setEditingLane(null);
           }}
-          onStatus={(status) => {
-            store.setLaneStatus(meet.id, heat, editingLane, status);
-            setEditingLane(null);
-          }}
-          onClear={() => {
-            store.clearLaneTimes(meet.id, heat, editingLane);
-            setEditingLane(null);
-          }}
-          onRemoveWatch={(id) => store.removeWatch(meet.id, id)}
+          onRemoveWatch={(who) =>
+            send({
+              kind: "drop-watch",
+              meetId: meet.id,
+              heatId: heat.id,
+              lane: editingLane,
+              timerId: who,
+            })
+          }
           onRemoveFromLane={() => {
-            store.clearLane(meet.id, heat.id, editingLane);
+            send({
+              kind: "unseat",
+              meetId: meet.id,
+              heatId: heat.id,
+              lane: editingLane,
+            });
             setEditingLane(null);
           }}
         />
@@ -510,17 +601,17 @@ export default function RunMeet() {
  * own sheet. All this does is show who's on it and let you move past.
  */
 function DivingPanel({
-  meet,
+  detail,
   event,
   roster,
   nameOrder,
 }: {
-  meet: MeetDoc;
+  detail: MeetDetail;
   event: MeetEvent;
   roster: Athlete[];
   nameOrder: NameOrder;
 }) {
-  const divers = (meet.entries[event.id] ?? [])
+  const divers = (detail.entries[event.id] ?? [])
     .map((id) => findAthlete(roster, id))
     .filter((s): s is Athlete => s !== undefined)
     .sort(byAthlete(nameOrder));
@@ -534,7 +625,7 @@ function DivingPanel({
         <p className="mt-2 text-sm text-sky-800 dark:text-sky-200">
           Nobody is on the board.{" "}
           <Link
-            to={`/meets/${meet.id}/registration`}
+            to={`/meets/${detail.meet.id}/entries`}
             className="font-semibold underline"
           >
             Add divers
@@ -573,8 +664,6 @@ function LaneSheet({
   timerId,
   onClose,
   onSaveTime,
-  onStatus,
-  onClear,
   onRemoveWatch,
   onRemoveFromLane,
 }: {
@@ -583,12 +672,10 @@ function LaneSheet({
   swimmerLabel: string;
   result?: Result;
   /** Every watch on this lane, so a coach can see what the time is made of. */
-  watches: WatchTime[];
+  watches: Watch[];
   timerId: string;
   onClose: () => void;
   onSaveTime: (timeMs: number) => void;
-  onStatus: (status: "OK" | "DQ" | "NS") => void;
-  onClear: () => void;
   onRemoveWatch: (watchId: string) => void;
   onRemoveFromLane: () => void;
 }) {
@@ -663,7 +750,7 @@ function LaneSheet({
               <ul className="divide-y divide-slate-200 dark:divide-slate-700">
                 {watches.map((watch) => (
                   <li
-                    key={watch.id}
+                    key={watch.timerId}
                     className="flex items-center justify-between gap-2 py-1"
                   >
                     <span className="text-sm tabular-nums">
@@ -676,7 +763,7 @@ function LaneSheet({
                     <button
                       type="button"
                       aria-label={`Discard the ${formatTime(watch.timeMs)} watch`}
-                      onClick={() => onRemoveWatch(watch.id)}
+                      onClick={() => onRemoveWatch(watch.timerId)}
                       className="h-8 w-8 shrink-0 touch-manipulation rounded-lg text-sm text-red-600"
                     >
                       ✕
@@ -686,19 +773,11 @@ function LaneSheet({
               </ul>
             </div>
           )}
-          <div className="grid grid-cols-2 gap-2">
-            <Button onClick={() => onStatus("DQ")} disabled={!result}>
-              Mark DQ
-            </Button>
-            <Button onClick={() => onStatus("NS")} disabled={!result}>
-              Mark no-show
-            </Button>
-          </div>
-          {result ? (
-            <Button variant="ghost" full onClick={onClear}>
-              Clear this lane&rsquo;s times
-            </Button>
-          ) : (
+          {/* A DQ, a no-show and signing a lane off are calls, and a call is
+              a decision — it belongs at the control desk, where the person
+              making it can see every watch on the lane. The deck's job is
+              evidence: take a time, fix your own, say who's in the lane. */}
+          {!result && (
             /* Undo for a wrong pick. Only offered while the lane has no time
                on it — otherwise clear the time first. */
             <Button variant="ghost" full onClick={onRemoveFromLane}>

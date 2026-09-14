@@ -14,7 +14,6 @@ import {
   describeContact,
   type Role,
 } from "~/lib/identity";
-import { useAppStore } from "~/state/app-store";
 import { useSession } from "~/state/session";
 
 /**
@@ -27,7 +26,6 @@ import { useSession } from "~/state/session";
  */
 export function AccountPanel() {
   const session = useSession();
-  const { team } = useAppStore();
 
   const [pending, setPending] = useState<PendingRequest[]>([]);
   const [busy, setBusy] = useState(false);
@@ -36,15 +34,24 @@ export function AccountPanel() {
   const [inviteRole, setInviteRole] = useState<Role>("coach");
   const [copied, setCopied] = useState(false);
 
-  const membership = session.memberships.find((m) => m.teamId === team.id);
+  /**
+   * The team this panel is about.
+   *
+   * Whichever active membership the account has — the panel exists to admit
+   * people to a team you coach, and a coach of two is rare enough that the
+   * first one is the right default rather than a picker nobody needs.
+   */
+  const membership = session.memberships.find((m) => m.status === "active");
+  const teamId = membership?.teamId ?? "";
+  const teamName = membership?.name ?? "your team";
   const coach = canAdmit(membership);
 
   const refreshPending = useCallback(() => {
-    if (!coach) return;
-    listPending(team.id)
+    if (!coach || !teamId) return;
+    listPending(teamId)
       .then(setPending)
       .catch(() => setPending([]));
-  }, [coach, team.id]);
+  }, [coach, teamId]);
 
   useEffect(refreshPending, [refreshPending]);
 
@@ -69,7 +76,7 @@ export function AccountPanel() {
     setBusy(true);
     setError(null);
     try {
-      session.adopt(await decideRequest(team.id, userId, admit, role));
+      session.adopt(await decideRequest(teamId, userId, admit, role));
       setPending((current) => current.filter((p) => p.userId !== userId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "That didn't work.");
@@ -83,7 +90,7 @@ export function AccountPanel() {
     setError(null);
     setCopied(false);
     try {
-      const made = await createInvite(team.id, inviteRole);
+      const made = await createInvite(teamId, inviteRole);
       setInvite({ url: made.url, role: made.role });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't make an invitation.");
@@ -98,7 +105,7 @@ export function AccountPanel() {
 
       <p className="text-sm text-slate-600 dark:text-slate-300">
         Signed in as <strong>{session.user && describeContact(session.user)}</strong>
-        {membership && ` — ${ROLE_LABELS[membership.role].toLowerCase()} of ${team.name}`}.
+        {membership && ` — ${ROLE_LABELS[membership.role].toLowerCase()} of ${teamName}`}.
         {session.stale && " (last known; the server is unreachable right now)"}
       </p>
 

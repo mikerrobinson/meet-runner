@@ -45,10 +45,6 @@ export default [
     route("settings", "routes/settings.tsx"),
   ]),
 
-  // Resource routes for syncing to D1.
-  route("api/sync-status", "routes/api.sync-status.ts"),
-  route("api/sync", "routes/api.sync.ts"),
-
   // Reading. Open, because a meet is a public event — the heat sheet is handed
   // out at the door. Sync is for working a deck; this is for everyone else.
   route("api/teams", "routes/api.teams.ts"),
@@ -56,7 +52,14 @@ export default [
   route("api/meets", "routes/api.public.meets.ts"),
   route("api/meets/:meetId", "routes/api.public.meet.ts"),
   route("api/meets/:meetId/admins", "routes/api.meet.admins.ts"),
-  route("api/meets/:meetId/me", "routes/api.meet.me.ts"),
+
+  // What the deck writes. Small, single-row endpoints: the outbox posts one of
+  // these per thing somebody did, so two people working at once never touch
+  // the same row.
+  route("api/meets/:meetId/entries", "routes/api.meet.entries.ts"),
+  route("api/meets/:meetId/seats", "routes/api.meet.seats.ts"),
+  route("api/meets/:meetId/watches", "routes/api.meet.watches.ts"),
+  route("api/meets/:meetId/calls", "routes/api.meet.calls.ts"),
   route("api/athletes", "routes/api.public.athletes.ts"),
   route("api/athletes/:athleteId", "routes/api.public.athlete.ts"),
   route("api/users/:userId", "routes/api.public.user.ts"),

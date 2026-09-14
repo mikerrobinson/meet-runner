@@ -12,7 +12,7 @@
 
 import { apiUrl, ApiError } from "./http";
 import { generateId } from "./id";
-import type { Athlete, Entries, Heat, MeetEvent, WatchTime } from "~/types/meet";
+import type { Athlete, Heat, MeetEvent, Watch } from "~/types/meet";
 
 const GRANT_KEY = "meet-runner:timer-grant";
 const LANE_KEY = "meet-runner:timer-lane";
@@ -163,7 +163,7 @@ export interface Seat {
 }
 
 export interface QueuedWrite {
-  watches: WatchTime[];
+  watches: Watch[];
   athletes: QueuedAthlete[];
   seats: Seat[];
 }
@@ -197,13 +197,18 @@ export function queueSize(): number {
 /**
  * Add to the outbox, replacing anything for the same watch.
  *
- * Keyed by watch id, so a timer who corrects a time before it manages to send
+ * Keyed by heat, lane and timer, so a timer who corrects a time before it sends
  * queues one time rather than two contradictory ones.
  */
 export function enqueue(write: Partial<QueuedWrite>): void {
   const queue = readQueue();
   for (const watch of write.watches ?? []) {
-    const at = queue.watches.findIndex((existing) => existing.id === watch.id);
+    const at = queue.watches.findIndex(
+      (existing) =>
+        existing.heatId === watch.heatId &&
+        existing.lane === watch.lane &&
+        existing.timerId === watch.timerId,
+    );
     if (at >= 0) queue.watches[at] = watch;
     else queue.watches.push(watch);
   }
@@ -309,9 +314,10 @@ export interface Snapshot {
   ownTeam: string;
   events: MeetEvent[];
   heats: Heat[];
-  entries: Entries;
+  /** eventId -> athleteIds registered in it. */
+  entries: Record<string, string[]>;
   athletes: TimerAthlete[];
-  mine: WatchTime[];
+  mine: Watch[];
 }
 
 export function fetchSnapshot(timerId: string): Promise<Snapshot> {

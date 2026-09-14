@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import type { Route } from "./+types/entries";
 import { AthleteSheet } from "~/components/AthleteSheet";
 import { Button, EmptyState, TextInput } from "~/components/ui";
-import { enrollmentIndex, rosterForMeet, seasonForMeet } from "~/lib/roster";
-import { useAppStore } from "~/state/app-store";
-import { canEditEntriesFor, canSeeEntries, useMeetRole } from "~/state/meet-role";
-import { entrySplit, whyNotEnter } from "~/lib/events";
+import { enrollmentIndex } from "~/lib/roster";
+import { whyNotEnter } from "~/lib/events";
+import { useMeet } from "./meet-layout";
+import { usePending, useSend } from "~/state/outbox";
+import { applyPending } from "~/lib/pending";
 import { useViewPrefs } from "~/state/view-prefs";
 import {
   byAthlete,
@@ -81,25 +82,25 @@ function eventFor(race: Race, athlete: Athlete): MeetEvent | undefined {
 }
 
 export default function Registration() {
-  const { team, athletes, meets, toggleEntry, enrol } = useAppStore();
-  const role = useMeetRole();
+  const { detail: loaded, access } = useMeet();
+  const pending = usePending();
+  const send = useSend();
+  // What the server has acknowledged, plus what this device has said since.
+  const detail = useMemo(() => applyPending(loaded, pending), [loaded, pending]);
+  const { meet, events: meetEvents, entries, athletes } = detail;
   const { nameOrder } = useViewPrefs();
-  const { meetId } = useParams();
   const [params] = useSearchParams();
   const [search, setSearch] = useState("");
   const [adding, setAdding] = useState(false);
   const scrollerRef = useRef<HTMLDivElement>(null);
 
-  const meet = meets.find((m) => m.id === meetId);
-
   const param = params.get("g");
   const genderFilter: Gender | "all" =
     param === "f" ? "F" : param === "m" ? "M" : "all";
 
-  const seasonId = meet ? seasonForMeet(team, meet)?.id : undefined;
   const enrollments = useMemo(
-    () => enrollmentIndex(team, seasonId),
-    [team, seasonId],
+    () => enrollmentIndex(detail.enrollments),
+    [detail.enrollments],
   );
 
   /**
@@ -110,10 +111,10 @@ export default function Registration() {
    * rows would make a header change when you filtered, which is a header
    * measuring the wrong thing.
    */
-  const roster = useMemo(
-    () => (meet ? rosterForMeet(athletes, team, meet) : []),
-    [athletes, team, meet],
-  );
+  const roster = useMemo(() => {
+    const onRoster = new Set(detail.enrollments.map((e) => e.athleteId));
+    return athletes.filter((a) => onRoster.has(a.id));
+  }, [athletes, detail.enrollments]);
 
   const swimmers = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -139,7 +140,7 @@ export default function Registration() {
   /** Collapse the lineup into races, keeping the order they're first swum in. */
   const races = useMemo(() => {
     const byKey = new Map<string, Race>();
-    (meet?.events ?? []).forEach((event, index) => {
+    meetEvents.forEach((event, index) => {
       const key = raceKey(event);
       let race = byKey.get(key);
       if (!race) {
@@ -158,31 +159,33 @@ export default function Registration() {
       else race.open ??= event;
     });
     return [...byKey.values()];
-  }, [meet?.events]);
+  }, [meetEvents]);
 
   /** Registration lookup as a set of "eventId|athleteId" keys. */
   const registered = useMemo(() => {
     const keys = new Set<string>();
-    for (const [eventId, ids] of Object.entries(meet?.entries ?? {})) {
+    for (const [eventId, ids] of Object.entries(entries)) {
       for (const id of ids) keys.add(`${eventId}|${id}`);
     }
     return keys;
-  }, [meet?.entries]);
+  }, [entries]);
 
   const perAthlete = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const ids of Object.values(meet?.entries ?? {})) {
+    for (const ids of Object.values(entries)) {
       for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
     }
     return counts;
-  }, [meet?.entries]);
-
-  if (!meet) return null;
+  }, [entries]);
 
   // A meet can keep lineups to the teams they belong to. Before the racing, a
   // lineup is competitive information; a reader with no stake in the meet has
   // no claim on it, and the results are public either way.
-  if (!canSeeEntries(role, meet)) {
+  const mayLook =
+    meet.entryVisibility === "everyone" ||
+    access.admin ||
+    access.coachOf.length > 0;
+  if (!mayLook) {
     return (
       <EmptyState title="Entries aren't public for this meet">
         The coaches involved can see their own. Results appear here as they
@@ -191,17 +194,37 @@ export default function Registration() {
     );
   }
 
-  // Counts what the grid can actually show. An entry naming somebody who
-  // isn't on the roster — a leftover from a re-import, which mints new ids —
-  // draws no row, so counting it here made the header disagree with the ticks
-  // underneath it.
-  const known = new Set(roster.map((a) => a.id));
   const entryCount = (event?: MeetEvent) =>
-    event ? entrySplit(meet, event.id, known).entered : 0;
-  const orphanCount = meet.events.reduce(
-    (total, event) => total + entrySplit(meet, event.id, known).orphaned,
-    0,
-  );
+    event ? (entries[event.id] ?? []).length : 0;
+
+  /** What the limit checks read. Assembled once rather than per cell. */
+  const entryContext = {
+    events: meetEvents,
+    entries,
+    limits: meet.limits,
+  };
+
+  /** Whose entries this person may change — see `mayEnter` on the server. */
+  const mayEditFor = (athleteId: string): boolean => {
+    if (access.admin) return true;
+    const teams = detail.enrollments
+      .filter((e) => e.athleteId === athleteId)
+      .map((e) => e.teamId);
+    if (teams.some((t) => access.coachOf.includes(t))) return true;
+    return meet.athletesMayEnter && access.athleteId === athleteId;
+  };
+
+  /**
+   * One tap, one row, queued.
+   *
+   * The tick moves immediately because the queue is folded over loader data
+   * above; the write goes out behind it and the grid settles onto the
+   * server's answer when it lands. On a deck with no signal the ticks keep
+   * working and the header says how many are waiting.
+   */
+  const toggle = (eventId: string, athleteId: string, entering: boolean) => {
+    send({ kind: "entry", meetId: meet.id, eventId, athleteId, entering });
+  };
 
   /** The count line under a column header, phrased for the current filter. */
   const headerCount = (race: Race): string => {
@@ -219,7 +242,7 @@ export default function Registration() {
   if (races.length === 0 || swimmers.length === 0) {
     return (
       <EmptyState title="Nothing to register yet">
-        {rosterForMeet(athletes, team, meet).length === 0 ? (
+        {roster.length === 0 ? (
           <>
             The team roster is empty.{" "}
             <Link to="/team" className="font-semibold text-blue-600 underline">
@@ -258,17 +281,6 @@ export default function Registration() {
           "calc(100dvh - var(--app-chrome-top) - var(--app-chrome-bottom) - 1rem)",
       }}
     >
-      {/* A count that doesn't match the ticks below it is the kind of thing
-          somebody notices mid-meet and can't explain. Say it plainly instead. */}
-      {orphanCount > 0 && (
-        <div className="mt-3 shrink-0 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
-          {orphanCount} {orphanCount === 1 ? "entry points" : "entries point"} at
-          swimmers who aren&rsquo;t on this season&rsquo;s roster, so
-          {orphanCount === 1 ? " it isn't" : " they aren't"} shown below. That
-          usually means the roster was re-imported — which gives everyone new
-          ids and leaves the old entries pointing at the old ones.
-        </div>
-      )}
 
       {SHOW_ROSTER_CONTROLS && (
         <div className="shrink-0 space-y-3 py-3">
@@ -366,17 +378,12 @@ export default function Registration() {
                     // administrator may change any, a coach only their own
                     // team's, a swimmer only their own and only when the meet
                     // allows it.
-                    const mayEdit =
-                      event !== undefined &&
-                      // Every row here is from this device's team — the grid
-                      // draws that roster. An administrator's multi-team grid
-                      // is still to come.
-                      canEditEntriesFor(role, meet, athlete.id, team.id);
+                    const mayEdit = event !== undefined && mayEditFor(athlete.id);
                     // Entry limits are the meet's rules, so they're checked
                     // here rather than discovered after the tap.
                     const blocked =
                       event !== undefined && !isIn
-                        ? whyNotEnter(meet, athlete.id, event.id)
+                        ? whyNotEnter(entryContext, athlete.id, event.id)
                         : null;
                     const locked = event !== undefined && (!mayEdit || blocked !== null);
                     return (
@@ -393,9 +400,7 @@ export default function Registration() {
                           // that won't take a tap can say why instead of just
                           // refusing.
                           title={blocked ?? undefined}
-                          onClick={() =>
-                            event && toggleEntry(meet.id, event.id, athlete.id)
-                          }
+                          onClick={() => event && toggle(event.id, athlete.id, !isIn)}
                           className={`flex h-12 w-full touch-manipulation items-center justify-center text-xl font-bold transition-colors ${
                             event === undefined
                               ? "cursor-not-allowed bg-slate-100 text-slate-300 dark:bg-slate-800/60 dark:text-slate-700"
@@ -418,17 +423,6 @@ export default function Registration() {
         </table>
       </div>
 
-      {adding && (
-        <AthleteSheet
-          title="Add swimmer"
-          onClose={() => setAdding(false)}
-          onSave={(athlete, facts) => {
-            enrol([{ athlete: athlete, ...facts }], "append", seasonId);
-            setAdding(false);
-            setSearch("");
-          }}
-        />
-      )}
     </div>
   );
 }

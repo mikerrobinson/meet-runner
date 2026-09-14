@@ -22,7 +22,7 @@ import {
   type Snapshot,
   type TimerAthlete,
 } from "~/lib/timer";
-import { eventName, watchId } from "~/types/meet";
+import { eventName } from "~/types/meet";
 
 /**
  * How often this phone asks what changed. Short, because the thing it's
@@ -220,8 +220,6 @@ export default function Timer() {
   const submit = async () => {
     if (!stop || !lane || !stopped) return;
     const watch = {
-      id: watchId(stop.heat.id, lane, timerId),
-      eventId: stop.event.id,
       heatId: stop.heat.id,
       lane,
       timerId,

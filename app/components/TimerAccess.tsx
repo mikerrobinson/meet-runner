@@ -2,8 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Banner, Button, Card, SectionTitle } from "./ui";
 import { QrCode } from "./QrCode";
 import { request } from "~/lib/http";
-import { useAppStore } from "~/state/app-store";
-import type { MeetDoc } from "~/types/meet";
+import type { Meet } from "~/types/meet";
 
 /**
  * The coach's end of the timing QR code.
@@ -16,11 +15,7 @@ import type { MeetDoc } from "~/types/meet";
  * The link is shown once. Making another retires the old one, which is also
  * how you revoke a sheet that's gone walkabout.
  */
-export function TimerAccess({ meet }: { meet: MeetDoc }) {
-  // Whose authority the grant is issued under. A meet has several teams and
-  // belongs to none of them, so the one that matters is the team this coach
-  // is actually a member of — the server checks exactly that.
-  const { team } = useAppStore();
+export function TimerAccess({ meet }: { meet: Meet }) {
   const [live, setLive] = useState<{ expiresAt: number } | null>(null);
   const [url, setUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -57,7 +52,6 @@ export function TimerAccess({ meet }: { meet: MeetDoc }) {
           method: "POST",
           body: JSON.stringify({
             meetId: meet.id,
-            teamId: team.id,
             date: meet.date,
           }),
         },
@@ -71,7 +65,7 @@ export function TimerAccess({ meet }: { meet: MeetDoc }) {
     run(async () => {
       await request("/api/timer/grant", {
         method: "DELETE",
-        body: JSON.stringify({ meetId: meet.id, teamId: team.id }),
+        body: JSON.stringify({ meetId: meet.id }),
       });
       setUrl(null);
       setLive(null);

@@ -9,7 +9,6 @@ import type { NotifyEnv } from "./notify.server";
 
 export interface SyncEnv extends NotifyEnv {
   DB?: D1Database;
-  SYNC_TOKEN?: string;
 }
 
 export class SyncError extends Error {
@@ -21,10 +20,14 @@ export class SyncError extends Error {
   }
 }
 
-export function json(data: unknown, status = 200): Response {
+export function json(
+  data: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
   });
 }
 
@@ -36,17 +39,6 @@ export function errorResponse(error: unknown): Response {
   return json({ error: "Server error" }, 500);
 }
 
-/**
- * If SYNC_TOKEN is configured, callers must present it. Without it the
- * endpoints are open — fine for a private worker route, not for a public one.
- */
-export function requireAuth(request: Request, env: SyncEnv): void {
-  const expected = env.SYNC_TOKEN;
-  if (!expected) return;
-  if (request.headers.get("x-sync-token") !== expected) {
-    throw new SyncError("Sync token missing or incorrect", 401);
-  }
-}
 
 export function requireDb(env: SyncEnv): D1Database {
   if (!env.DB) {

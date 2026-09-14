@@ -1,30 +1,31 @@
 import { useMemo, useState } from "react";
+import { useFetcher } from "react-router";
 import { Button, Card, EmptyState, SectionTitle, TextInput } from "~/components/ui";
 import { LaneAssignSheet } from "~/components/LaneAssignSheet";
 import { formatTime, parseTime } from "~/lib/time";
-import { enrollmentIndex, rosterForMeet, seasonForMeet } from "~/lib/roster";
+import { enrollmentIndex } from "~/lib/roster";
 import {
-  acceptedForLane,
   activeLanes,
-  attributedAthlete,
+  athleteInLane,
+  callForLane,
   eventClosed,
   heatClosed,
   heatProgress,
-  watchesForLane,
-  officialTime,
+  proposedTime,
   resultForLane,
-  rulingForLane,
+  watchesForLane,
 } from "~/lib/timing";
-import { entrySplit } from "~/lib/events";
-import { useAppStore } from "~/state/app-store";
-import { useSession } from "~/state/session";
+import { applyPending } from "~/lib/pending";
+import { usePending, useSend } from "~/state/outbox";
+import type { Write } from "~/lib/outbox";
+import { useMeet } from "./meet-layout";
 import { useViewPrefs } from "~/state/view-prefs";
 import {
   displayName,
   eventName,
   findAthlete,
   type Heat,
-  type MeetDoc,
+  type MeetDetail,
   type MeetEvent,
   type ResultStatus,
 } from "~/types/meet";
@@ -44,43 +45,36 @@ import {
  * that swam has been signed off — so nothing on this screen can disagree with
  * anything else in the meet.
  */
-export function RunControl({ meet }: { meet: MeetDoc }) {
-  const store = useAppStore();
-  const session = useSession();
+export function RunControl() {
+  const { detail: loaded, access } = useMeet();
+  const pending = usePending();
+  const send = useSend();
+  const detail = useMemo(() => applyPending(loaded, pending), [loaded, pending]);
+  const meet = detail.meet;
   const { nameOrder } = useViewPrefs();
-  const by = session.user?.id;
+  const seed = useFetcher();
 
   const [openEvent, setOpenEvent] = useState<string | null>(
-    meet.events[0]?.id ?? null,
+    detail.events[0]?.id ?? null,
   );
   const [assigning, setAssigning] = useState<{ heat: Heat; lane: number } | null>(
     null,
   );
 
-  const roster = useMemo(
-    () => rosterForMeet(store.athletes, store.team, meet),
-    [store.athletes, store.team, meet],
-  );
+  const roster = detail.athletes;
 
-  // Who this device can actually resolve. An entry naming somebody outside
-  // this set is an orphan — see `entrySplit`.
-  const known = useMemo(
-    () => new Set(store.athletes.map((a) => a.id)),
-    [store.athletes],
-  );
-
-  const event = meet.events.find((e) => e.id === openEvent) ?? meet.events[0];
+  const event = detail.events.find((e) => e.id === openEvent) ?? detail.events[0];
   const heats = useMemo(
     () =>
       event
-        ? meet.heats
+        ? detail.heats
             .filter((h) => h.eventId === event.id)
             .sort((a, b) => a.index - b.index)
         : [],
-    [meet.heats, event],
+    [detail.heats, event],
   );
 
-  if (meet.events.length === 0) {
+  if (detail.events.length === 0) {
     return (
       <EmptyState title="No events yet">
         Set the running order under Info before running the meet.
@@ -94,12 +88,7 @@ export function RunControl({ meet }: { meet: MeetDoc }) {
           put on the left while the heat you're working fills the rest. On a
           phone they stack, because a rail and a table can't share 390px. */}
       <div className="lg:grid lg:grid-cols-[minmax(15rem,28%)_minmax(0,1fr)] lg:gap-4">
-        <EventRail
-          meet={meet}
-          known={known}
-          openEvent={event?.id}
-          onOpen={setOpenEvent}
-        />
+        <EventRail detail={detail} openEvent={event?.id} onOpen={setOpenEvent} />
 
         <div className="mt-4 min-w-0 space-y-4 lg:mt-0">
           {!event ? null : heats.length === 0 ? (
@@ -108,7 +97,16 @@ export function RunControl({ meet }: { meet: MeetDoc }) {
                 action={
                   <Button
                     size="sm"
-                    onClick={() => store.ensureHeats(meet.id, event.id)}
+                    onClick={() =>
+                      seed.submit(
+                        { eventId: event.id },
+                        {
+                          method: "post",
+                          action: `/meets/${meet.id}/run`,
+                          encType: "application/json",
+                        },
+                      )
+                    }
                   >
                     Seed heats
                   </Button>
@@ -117,19 +115,19 @@ export function RunControl({ meet }: { meet: MeetDoc }) {
                 {eventName(event)}
               </SectionTitle>
               <p className="text-sm text-slate-500">
-                {entrySplit(meet, event.id, known).entered} entered, and no
-                heats yet.
+                {(detail.entries[event.id] ?? []).length} entered, and no heats
+                yet.
               </p>
             </Card>
           ) : (
             heats.map((heat) => (
               <HeatCard
                 key={heat.id}
-                meet={meet}
+                detail={detail}
                 event={event}
                 heat={heat}
                 nameOrder={nameOrder}
-                by={by}
+                send={send}
                 onAssign={(lane) => setAssigning({ heat, lane })}
               />
             ))
@@ -139,22 +137,20 @@ export function RunControl({ meet }: { meet: MeetDoc }) {
 
       {assigning && (
         <LaneAssignSheet
-          meet={meet}
+          detail={detail}
           heat={assigning.heat}
           lane={assigning.lane}
           roster={roster}
-          enrollments={enrollmentIndex(
-            store.team,
-            seasonForMeet(store.team, meet)?.id,
-          )}
+          enrollments={enrollmentIndex(detail.enrollments)}
           nameOrder={nameOrder}
           onAssign={(athleteId) => {
-            store.assignToLane(
-              meet.id,
-              assigning.heat.id,
-              assigning.lane,
+            send({
+              kind: "seat",
+              meetId: meet.id,
+              heatId: assigning.heat.id,
+              lane: assigning.lane,
               athleteId,
-            );
+            });
             setAssigning(null);
           }}
           onClose={() => setAssigning(null)}
@@ -173,29 +169,27 @@ export function RunControl({ meet }: { meet: MeetDoc }) {
  * administrator asks over and over is "what's left?".
  */
 function EventRail({
-  meet,
-  known,
+  detail,
   openEvent,
   onOpen,
 }: {
-  meet: MeetDoc;
-  known: Set<string>;
+  detail: MeetDetail;
   openEvent: string | undefined;
   onOpen: (id: string) => void;
 }) {
-  const done = meet.events.filter((e) => eventClosed(meet, e.id)).length;
+  const done = detail.events.filter((e) => eventClosed(detail, e.id)).length;
 
   return (
     <Card className="lg:sticky lg:top-4 lg:max-h-[calc(100vh-var(--app-chrome-top)-var(--app-chrome-bottom)-2rem)] lg:overflow-y-auto">
       <SectionTitle>
-        {done} of {meet.events.length} official
+        {done} of {detail.events.length} official
       </SectionTitle>
 
       <ol className="-mx-2">
-        {meet.events.map((event, index) => {
-          const official = eventClosed(meet, event.id);
+        {detail.events.map((event, index) => {
+          const official = eventClosed(detail, event.id);
           const open = event.id === openEvent;
-          const { entered, orphaned } = entrySplit(meet, event.id, known);
+          const entered = (detail.entries[event.id] ?? []).length;
           return (
             <li key={event.id}>
               <button
@@ -218,14 +212,6 @@ function EventRail({
                 <span className="min-w-0 flex-1 truncate font-medium">
                   {eventName(event)}
                 </span>
-                {orphaned > 0 && (
-                  <span
-                    className={`shrink-0 text-xs ${open ? "text-amber-200" : "text-amber-600 dark:text-amber-400"}`}
-                    title={`${orphaned} ${orphaned === 1 ? "entry" : "entries"} point at swimmers who aren't on the roster — most likely from a re-import. They don't appear on the entries grid.`}
-                  >
-                    !{orphaned}
-                  </span>
-                )}
                 <span
                   className={`shrink-0 text-xs tabular-nums ${
                     open
@@ -247,36 +233,50 @@ function EventRail({
 }
 
 function HeatCard({
-  meet,
+  detail,
   event,
   heat,
   nameOrder,
-  by,
+  send,
   onAssign,
 }: {
-  meet: MeetDoc;
+  detail: MeetDetail;
   event: MeetEvent;
   heat: Heat;
   nameOrder: "first" | "last";
-  by: string | undefined;
+  send: (write: Write) => void;
   onAssign: (lane: number) => void;
 }) {
-  const store = useAppStore();
-  const progress = heatProgress(meet, heat);
-  const closed = heatClosed(meet, heat);
-  const active = activeLanes(meet, heat);
+  const progress = heatProgress(detail, heat);
+  const closed = heatClosed(detail, heat);
+  const active = activeLanes(detail, heat);
+  const outstanding = active.filter(
+    (lane) => callForLane(detail, heat.id, lane)?.final !== true,
+  );
 
   return (
     <Card>
       <SectionTitle
         action={
-          progress.accepted < progress.active ? (
+          progress.signedOff < progress.active ? (
             <Button
               size="sm"
               variant="primary"
-              onClick={() => store.acceptHeat(meet.id, heat, by)}
+              onClick={() => {
+                // Only the lanes still outstanding, so "sign off all" never
+                // quietly overwrites a correction somebody already made.
+                for (const lane of outstanding) {
+                  send({
+                    kind: "call",
+                    meetId: detail.meet.id,
+                    heatId: heat.id,
+                    lane,
+                    final: true,
+                  });
+                }
+              }}
             >
-              Accept all ({progress.active - progress.accepted})
+              Sign off ({outstanding.length})
             </Button>
           ) : undefined
         }
@@ -311,11 +311,11 @@ function HeatCard({
             {heat.lanes.map((_, index) => (
               <LaneRow
                 key={index}
-                meet={meet}
+                detail={detail}
                 heat={heat}
                 lane={index + 1}
                 nameOrder={nameOrder}
-                by={by}
+                send={send}
                 onAssign={onAssign}
               />
             ))}
@@ -329,55 +329,60 @@ function HeatCard({
 const STATUSES: ResultStatus[] = ["OK", "DQ", "NS"];
 
 function LaneRow({
-  meet,
+  detail,
   heat,
   lane,
   nameOrder,
-  by,
+  send,
   onAssign,
 }: {
-  meet: MeetDoc;
+  detail: MeetDetail;
   heat: Heat;
   lane: number;
   nameOrder: "first" | "last";
-  by: string | undefined;
+  send: (write: Write) => void;
   onAssign: (lane: number) => void;
 }) {
-  const store = useAppStore();
   const [editing, setEditing] = useState(false);
   const [typed, setTyped] = useState("");
 
-  const watches = watchesForLane(meet, heat.id, lane);
-  const accepted = acceptedForLane(meet, heat.id, lane);
-  const proposed = resultForLane(meet, heat, lane);
-  const derived = officialTime(watches);
-  const ruling = rulingForLane(meet, heat.id, lane);
+  const watches = watchesForLane(detail, heat.id, lane);
+  const call = callForLane(detail, heat.id, lane);
+  const proposed = resultForLane(detail, heat, lane);
+  const derived = proposedTime(watches);
 
   const seated = heat.lanes[lane - 1];
-  const claimed = attributedAthlete(watches);
-  const athleteId = accepted?.athleteId ?? seated ?? claimed ?? null;
-  const athlete = findAthlete(store.athletes, athleteId);
+  const athleteId = athleteInLane(detail, heat, lane);
+  const athlete = findAthlete(detail.athletes, athleteId);
+  const signedOff = call?.final === true;
 
-  // An empty lane nobody has touched is just an empty lane.
-  const idle = !seated && !claimed && watches.length === 0 && !ruling && !accepted;
+  // An empty lane nobody has touched is just an empty lane. A lane with a time
+  // and nobody in it is the opposite — it's the thing most needing a decision.
+  const idle = !seated && watches.length === 0 && !call;
+  const orphanTime = !athleteId && watches.length > 0;
 
   /**
-   * Record the call, then sign the lane off.
+   * Record the decision.
    *
-   * Two writes, one tap. The typed time and the status are judgements about
-   * what happened — claims alongside the watches — and the acceptance is the
-   * separate act of saying the lane is final. Keeping them apart is what makes
-   * "Undo" return to the official's own reading rather than back to the raw
-   * watches, and what lets the record say who entered a time and when.
+   * One write, whatever changed. The status, the official's own time and the
+   * sign-off are three fields of one call, folded onto whatever is already
+   * there — so marking a DQ keeps a typed time and typing a time keeps a DQ.
+   * Taking a sign-off back flips `final` and leaves the reading, which is what
+   * makes "Undo" land on the official's own number rather than the raw
+   * watches.
    */
-  const save = (call?: { timeMs?: number; status?: ResultStatus }) => {
-    if (call?.timeMs !== undefined) {
-      store.overrideLaneTime(meet.id, heat, lane, call.timeMs, by);
-    }
-    if (call?.status !== undefined) {
-      store.setLaneStatus(meet.id, heat, lane, call.status, by);
-    }
-    store.acceptLane(meet.id, heat, lane, by);
+  const save = (patch: {
+    timeMs?: number;
+    status?: ResultStatus;
+    final?: boolean;
+  }) => {
+    send({
+      kind: "call",
+      meetId: detail.meet.id,
+      heatId: heat.id,
+      lane,
+      ...patch,
+    });
     setEditing(false);
     setTyped("");
   };
@@ -385,7 +390,7 @@ function LaneRow({
   return (
     <tr
       className={`border-t border-slate-100 dark:border-slate-800 ${
-        accepted ? "bg-emerald-50/60 dark:bg-emerald-950/30" : ""
+        signedOff ? "bg-emerald-50/60 dark:bg-emerald-950/30" : ""
       }`}
     >
       <td className="py-2 pr-2 font-bold tabular-nums">{lane}</td>
@@ -399,22 +404,9 @@ function LaneRow({
           <span className="block font-medium">
             {athlete ? displayName(athlete, nameOrder) : "— assign —"}
           </span>
-          {!seated && claimed && (
+          {orphanTime && (
             <span className="block text-xs text-amber-700 dark:text-amber-400">
-              per timer
-            </span>
-          )}
-          {/* A timer naming somebody other than whoever is seated normally
-              moves them, so this only shows while the two disagree — an
-              offline phone that hasn't sent yet, or two timers on one lane
-              each naming a different swimmer. Worth seeing rather than
-              resolving silently. */}
-          {seated && claimed && claimed !== seated && (
-            <span className="block text-xs text-amber-700 dark:text-amber-400">
-              a timer says{" "}
-              {findAthlete(store.athletes, claimed)
-                ? displayName(findAthlete(store.athletes, claimed)!, nameOrder)
-                : "somebody else"}
+              a time with nobody in the lane
             </span>
           )}
         </button>
@@ -431,19 +423,19 @@ function LaneRow({
           )}
           {watches.map((w) => (
             <span
-              key={w.id}
+              key={w.timerId}
               title={`${w.timerId}${w.source === "typed" ? " (typed)" : ""}`}
               className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs tabular-nums text-slate-600 dark:bg-slate-800 dark:text-slate-300"
             >
               {formatTime(w.timeMs)}
             </span>
           ))}
-          {ruling?.timeMs !== undefined && (
+          {call?.timeMs !== undefined && (
             <span
-              title={`Entered by hand${ruling.decidedBy ? "" : ""} — stands over the watches`}
+              title="Entered by hand — stands over the watches"
               className="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums text-amber-900 dark:bg-amber-950 dark:text-amber-200"
             >
-              {formatTime(ruling.timeMs)} ✎
+              {formatTime(call.timeMs)} ✎
             </span>
           )}
         </span>
@@ -458,8 +450,8 @@ function LaneRow({
             placeholder={derived ? formatTime(derived.timeMs) : "0000"}
             autoFocus
           />
-        ) : accepted ? (
-          <span className="font-semibold">{formatTime(accepted.timeMs)}</span>
+        ) : signedOff && proposed ? (
+          <span className="font-semibold">{formatTime(proposed.timeMs)}</span>
         ) : proposed ? (
           <span className="text-slate-600 dark:text-slate-300">
             {formatTime(proposed.timeMs)}
@@ -477,13 +469,13 @@ function LaneRow({
       <td className="py-2 pr-2">
         <div className="flex gap-1">
           {STATUSES.map((status) => {
-            const current = accepted?.status ?? proposed?.status ?? "OK";
+            const current = call?.status ?? proposed?.status ?? "OK";
             return (
               <button
                 key={status}
                 type="button"
                 disabled={idle}
-                onClick={() => save({ status })}
+                onClick={() => save({ status, final: true })}
                 className={`rounded px-1.5 py-0.5 text-xs font-semibold ${
                   current === status
                     ? status === "OK"
@@ -507,7 +499,7 @@ function LaneRow({
               variant="primary"
               onClick={() => {
                 const ms = parseTime(typed);
-                save(ms !== null ? { timeMs: ms } : undefined);
+                save(ms !== null ? { timeMs: ms, final: true } : { final: true });
               }}
             >
               Save
@@ -516,16 +508,16 @@ function LaneRow({
               Cancel
             </Button>
           </span>
-        ) : accepted ? (
+        ) : signedOff ? (
           <span className="flex items-center justify-end gap-2">
             <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-              accepted
+              signed off
             </span>
             <Button
               size="sm"
               variant="ghost"
               title="Takes the sign-off back. Any time you entered by hand stays."
-              onClick={() => store.unacceptLane(meet.id, heat, lane)}
+              onClick={() => save({ final: false })}
             >
               Undo
             </Button>
@@ -541,15 +533,15 @@ function LaneRow({
                 setEditing(true);
               }}
             >
-              {ruling?.timeMs !== undefined ? "Re-enter" : "Edit"}
+              {call?.timeMs !== undefined ? "Re-enter" : "Edit"}
             </Button>
             <Button
               size="sm"
               variant="success"
               disabled={idle || !proposed}
-              onClick={() => save()}
+              onClick={() => save({ final: true })}
             >
-              Accept
+              Sign off
             </Button>
           </span>
         )}

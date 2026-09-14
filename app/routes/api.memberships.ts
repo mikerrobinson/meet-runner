@@ -55,6 +55,7 @@ export async function action({ request, context }: Route.ActionArgs) {
       admit?: boolean;
       role?: string;
       create?: boolean;
+      name?: string;
     }>(request);
     if (!body.teamId) throw new SyncError("Which team?", 400);
 
@@ -62,7 +63,7 @@ export async function action({ request, context }: Route.ActionArgs) {
       // `create` is a device saying "this id is a team I just made", which is
       // a different question from "let me into that one".
       const result = body.create
-        ? await claimNewTeam(db, user.id, body.teamId)
+        ? await claimNewTeam(db, user.id, body.teamId, body.name)
         : await requestToJoin(db, user.id, body.teamId);
       if (!result.ok) throw new SyncError(result.error, 409);
       return json({
