@@ -10,7 +10,7 @@ import { buildHeats } from "../app/lib/heats.ts";
   eq(fresh.course, "SCY", "new meets default to SCY");
   eq(fresh.options.laneCount, 6, "new meets default to 6 lanes");
   eq("opponent" in fresh, false, "opponent is gone");
-  eq(fresh.version, 8, "doc version bumped");
+  eq(fresh.version, 9, "doc version bumped");
   eq(fresh.teamIds, ["team1"], "one team is still a list of teams");
 
   // Two schools, one meet — the shape the old model couldn't hold.
@@ -148,8 +148,6 @@ import { buildHeats } from "../app/lib/heats.ts";
     rulings: [
       { id: `${heats[0].id}:6`, eventId: events[2].id, heatId: heats[0].id, lane: 6, status: "DQ" as const, decidedAt: 1757000000002 },
     ],
-    progress: { eventIndex: 2, heatIndex: 0 },
-    timer: null,
   });
 
   // What Settings > Export season writes, and what Import reads back. Athletes
@@ -189,14 +187,20 @@ import { buildHeats } from "../app/lib/heats.ts";
     id: "m-old", teamId: team.id, name: "vs Horizon", date: "2026-09-01", type: "dual",
     format: "SCY", opponent: "Horizon High", location: "Horizon",
     options: { laneCount: 6, laneLayout: "list-desc", leadGender: "F", includeDiving: false },
-    events: [], entries: {}, heats: [], results: [], progress: { eventIndex: 0, heatIndex: 0 },
-    timer: null, updatedAt: 1756000000000,
+    events: [], entries: {}, heats: [], results: [],
+    // A stopwatch and a place in the running order used to ride on the meet.
+    // They're device state now, so a document that still carries them loses
+    // them rather than putting them back on the wire.
+    progress: { eventIndex: 0, heatIndex: 0 }, timer: { heatId: "h1", startedAt: 1 },
+    updatedAt: 1756000000000,
   })!;
   eq(old.course, "SCY", "old `format` is read as `course`");
   eq("opponent" in old, false, "`opponent` is dropped");
   eq("laneLayout" in old.options, false, "`laneLayout` is dropped");
   eq(old.name, "vs Horizon", "everything else is untouched");
   eq(old.updatedAt, 1756000000000, "updatedAt is preserved exactly");
+  eq("timer" in old, false, "a stopwatch left on an old document is dropped");
+  eq("progress" in old, false, "and so is where that device had got to");
 }
 
 done();

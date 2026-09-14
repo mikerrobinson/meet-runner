@@ -109,7 +109,6 @@ interface MeetCore {
   course: MeetDoc["course"];
   location?: string;
   options: MeetDoc["options"];
-  timer: MeetDoc["timer"];
 }
 
 export function entryId(
@@ -144,9 +143,11 @@ export function seatId(heatId: string, lane: number): string {
 /**
  * Break the model into objects.
  *
- * `progress` is deliberately left behind: where a device has scrolled to in
- * the running order is nobody else's business, and syncing it would put a
- * write on the wire every time someone taps an arrow.
+ * Everything a device knows only about itself has already been kept out of
+ * the document: where this device sits in the running order and whether its
+ * stopwatch is running both live in device storage, so there is nothing to
+ * strip here. That used to be a rule this function enforced, which is one
+ * more place the rule could be forgotten.
  */
 export function toObjects(
   teams: TeamDoc[],
@@ -221,7 +222,6 @@ function meetObjects(meet: MeetDoc): SyncObject[] {
     course: meet.course,
     location: meet.location,
     options: meet.options,
-    timer: meet.deletedAt ? null : meet.timer,
   };
 
   // A deleted meet is one tombstone and nothing else — its parts went with it.
@@ -339,7 +339,6 @@ export function fromObjects(objects: SyncObject[]): {
       watches: [],
       rulings: [],
       results: [],
-      progress: { eventIndex: 0, heatIndex: 0 },
       updatedAt: object.updatedAt,
     });
   }

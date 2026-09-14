@@ -1,5 +1,6 @@
 import { done, eq } from "./harness.ts";
-import { buildHeats, laneOrder } from "../app/lib/heats.ts";
+import { buildHeats, laneOrder, reseedHeats } from "../app/lib/heats.ts";
+import type { MeetDoc, WatchTime } from "../app/types/meet.ts";
 
 /* ------------------------------------------------ lanes */
 
@@ -26,5 +27,73 @@ eq(heats[1].lanes.filter(Boolean).length, 10, "full heat second");
 const five = buildHeats("e2", Array.from({ length: 7 }, (_, i) => `s${i + 1}`), 5);
 eq(five.length, 2, "7 in a 5-lane pool makes 2 heats");
 eq(five[0].lanes, [null, "s2", "s1", null, null], "5-lane short heat seeds 3 then 2");
+
+/* --------------------------------------------- reseeding */
+
+// Reseeding used to mint fresh heat ids and delete the event's times to make
+// room. Both are tested here because both were real: the first orphaned every
+// seat and result pointing at the old heat, the second deleted other people's
+// watches from one device and synced the deletion to the rest.
+{
+  const seeded = buildHeats("e1", ["s1", "s2", "s3", "s4", "s5", "s6", "s7"], 6);
+  const base = {
+    heats: seeded,
+    watches: [] as WatchTime[],
+    rulings: [],
+    results: [],
+    options: { laneCount: 6 },
+  } as unknown as MeetDoc;
+
+  const again = reseedHeats(base, "e1", ["s7", "s6", "s5", "s4", "s3", "s2", "s1"]);
+  eq(again !== null, true, "an untouched event reseeds");
+  eq(again!.map((h) => h.id), seeded.map((h) => h.id), "heat ids are reused in place");
+  eq(again!.length, 2, "still two heats");
+  eq(again![0].lanes.filter(Boolean), ["s7"], "and the order actually changed");
+
+  // One watch anywhere in the event is enough.
+  const timed = {
+    ...base,
+    watches: [
+      {
+        id: `${seeded[1].id}:3:t1`,
+        eventId: "e1",
+        heatId: seeded[1].id,
+        lane: 3,
+        timerId: "t1",
+        timeMs: 27_140,
+        recordedAt: 1,
+        source: "stopwatch",
+      },
+    ],
+  } as unknown as MeetDoc;
+  eq(reseedHeats(timed, "e1", ["s1"]), null, "an event with a time on it refuses");
+
+  // A ruling with no watch behind it is still a record of the heat.
+  const dq = {
+    ...base,
+    rulings: [
+      { id: `${seeded[0].id}:2`, eventId: "e1", heatId: seeded[0].id, lane: 2, status: "DQ", decidedAt: 2 },
+    ],
+  } as unknown as MeetDoc;
+  eq(reseedHeats(dq, "e1", ["s1"]), null, "so does an event with only a DQ on it");
+
+  // Another event's times are no business of this one.
+  const elsewhere = {
+    ...base,
+    watches: [
+      {
+        id: "other:3:t1",
+        eventId: "e2",
+        heatId: "other",
+        lane: 3,
+        timerId: "t1",
+        timeMs: 27_140,
+        recordedAt: 1,
+        source: "stopwatch",
+      },
+    ],
+  } as unknown as MeetDoc;
+  eq(reseedHeats(elsewhere, "e1", ["s1"]) !== null, true, "another event's times don't block it");
+}
 
 done();

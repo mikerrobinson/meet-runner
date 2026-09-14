@@ -49,6 +49,7 @@ export function LaneTile({
   lane,
   athlete,
   result,
+  stoppedHere,
   running,
   clockRunning,
   layout,
@@ -60,7 +61,18 @@ export function LaneTile({
 }: {
   lane: number;
   athlete?: Athlete;
+  /** The lane's official time, from whoever's watches are on it. */
   result?: Result;
+  /**
+   * Whether *this* device has taken this lane.
+   *
+   * Separate from `result` on purpose. A lane that another timer has already
+   * stopped shows their time, and this device may still take its own watch on
+   * it — that's what several watches per lane are for. Reading stoppability
+   * off `result` meant a time arriving from a phone locked the button here,
+   * which is the opposite of what an extra watch is.
+   */
+  stoppedHere: boolean;
   running: boolean;
   clockRunning: boolean;
   layout: LaneLayout;
@@ -91,9 +103,8 @@ export function LaneTile({
     );
   }
 
-  const stopped = result !== undefined;
-  const canStop = running && !stopped;
-  const value = stopped
+  const canStop = running && !stoppedHere;
+  const value = result
     ? result.status === "OK"
       ? formatTime(result.timeMs)
       : result.status

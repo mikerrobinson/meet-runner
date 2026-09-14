@@ -6,6 +6,7 @@ import { useAppStore } from "~/state/app-store";
 import { syncLabel, useSyncStatus } from "~/state/auto-sync";
 import { useSession } from "~/state/session";
 import { useViewPrefs } from "~/state/view-prefs";
+import { useRunClock } from "~/state/run-clock";
 import { LANE_LAYOUTS, meetSubtitle, type LaneLayout } from "~/types/meet";
 
 const CHIP_TONES: Record<string, string> = {
@@ -279,6 +280,7 @@ export default function Shell() {
   const settling = useSeasonForSession(publicPath);
   const status = useSyncStatus();
   const { laneLayout, setLaneLayout } = useViewPrefs();
+  const { clock } = useRunClock();
   const params = useParams();
 
   // Browsing is server-driven and needs nothing from this device. Blocking it
@@ -354,8 +356,10 @@ export default function Shell() {
   const genderParam = rawGender === "f" || rawGender === "m" ? rawGender : "all";
 
   // Rearranging the stop buttons under a running clock is how a lane gets
-  // missed, so the layout is fixed until the heat is off the clock.
-  const heatLive = openMeet?.timer != null;
+  // missed, so the layout is fixed until the heat is off the clock. Asked of
+  // this device's own stopwatch — somebody else starting a heat elsewhere is
+  // no reason to hold this header still.
+  const heatLive = clock != null;
   const toggles = onRegistration ? (
     <HeaderToggles
       label="Filter roster by gender"

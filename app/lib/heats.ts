@@ -1,4 +1,5 @@
 import { generateId } from "./id";
+import { heatTouched } from "./timing";
 import type { Heat, LaneCount, MeetDoc } from "~/types/meet";
 
 /**
@@ -75,4 +76,39 @@ export function heatsForEvent(meet: MeetDoc, eventId: string): Heat[] {
   return meet.heats
     .filter((h) => h.eventId === eventId)
     .sort((a, b) => a.index - b.index);
+}
+
+/**
+ * Seed an event's lanes again, or refuse to.
+ *
+ * Two rules, both learned from watching it go wrong.
+ *
+ * It refuses once anything has been recorded against the event. Reseeding used
+ * to clear the event's watches and rulings to make room, and on a deck with
+ * three timers on it that is somebody's whole afternoon — deleted from one
+ * device and synced to the rest.
+ *
+ * And it reuses the existing heats' ids in place rather than minting fresh
+ * ones. A new id orphans every seat, watch and result pointing at the old
+ * heat: they stay in the meet, count towards things, and render nowhere. It's
+ * the same failure the roster's "Replace" has, and once is enough.
+ *
+ * Returns null when it refuses, so the caller can say so rather than appearing
+ * to work.
+ */
+export function reseedHeats(
+  meet: Pick<MeetDoc, "heats" | "watches" | "rulings" | "results" | "options">,
+  eventId: string,
+  entrants: string[],
+): Heat[] | null {
+  const existing = meet.heats
+    .filter((h) => h.eventId === eventId)
+    .sort((a, b) => a.index - b.index);
+  if (existing.some((heat) => heatTouched(meet, heat))) return null;
+
+  const byIndex = new Map(existing.map((h) => [h.index, h.id] as const));
+  return buildHeats(eventId, entrants, meet.options.laneCount).map((heat) => ({
+    ...heat,
+    id: byIndex.get(heat.index) ?? heat.id,
+  }));
 }

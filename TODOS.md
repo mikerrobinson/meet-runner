@@ -10,56 +10,26 @@ Nothing here is committed to — it's a parking lot. Add your own freely.
 Roughly in the order that made sense when we stopped. Everything below this
 section is still a parking lot — this part isn't.
 
-### 1. Deploy, which needs a schema conversion first
-`scripts/migrate-to-scopes.sql` turns the live `objects` table from
-team/meet columns into a single `scope`. It has been run against a copy of the
-2026-09-07 production backup and verified: 659 rows in, 659 out, correctly
-scoped, and the new code read the result back with all 47 Chaparral athletes,
-5 meets and 82 times intact.
+### 1. Settle site navigation - bottom tab bar, top left header, profile dropdown
 
-The two steps that touch production have *not* been run:
-
-```sh
-npx wrangler d1 export meet-runner --remote --output backups/prod-$(date +%F).sql
-npx wrangler d1 execute meet-runner --remote --file=scripts/migrate-to-scopes.sql
-npm run deploy
-```
-
-Nothing is lost by it — athletes were already their own rows, and the only
-invented field is a meet learning to name the team it used to belong to.
-
-### 2. Verify the public-shell change with a working device
-`shell.tsx` renders a minimal chrome on `/meets`, `/teams` and `/athletes` when
-local storage isn't ready. Verified for the broken-storage case; **not**
-verified for a signed-in coach with healthy storage, because the browser it was
-tested in had its IndexedDB wedged. Reading the code it should fall through to
-the normal shell once `ready` flips, with a brief flash of the minimal one.
-If the bottom tab bar doesn't come back on `/meets` when signed in, that's the
-change to look at.
-
-### 3. Settle the bottom tab bar
-Deferred with "decide once the screens exist". They exist now. It's still
+Bottom bar nav was deferred with "decide once the screens exist". They exist now. It's still
 Team / Meets / Browse / Settings, which predates meets becoming the home. The
 suggestion on the table was Meets / Teams / Athletes with Settings moving into
 the account menu, since that menu already covers Profile and sign-out.
 
-### 4. An athlete's own screen
+### 2. An athlete's own screen
+
 See below — the permission is built and verified, only the screen is missing.
 
-### 5. Incremental timer snapshot
-`/api/timer/meet` sends the whole meet every poll — roughly 30KB for a
-24-event meet with 96 swimmers, every 3s, per timer. A `since` cursor like the
-one `/api/sync` uses would make an unchanged poll near-empty and let the
-interval come down. Now that lanes are their own objects the deltas are small
-too: a seat is a few hundred bytes, where it used to be the whole heat.
+### 3. Entry visibility on the wire
 
-### 6. Entry visibility on the wire
 `meet.options.entryVisibility` is honoured by the entries screen but not by
 sync: a coach who pulls a shared meet still receives every team's entries. The
 UI hides them; the network doesn't. Restricting reads inside the cursor is the
 harder half and was deliberately left.
 
-### 7. Scoring
+### 4. Scoring
+
 `ScoringRules` and `DUAL_MEET_SCORING` (6-4-3-2-1 / 8-4, split by gender) are
 defined in `types/meet.ts` and computed by nothing.
 
@@ -68,8 +38,9 @@ defined in `types/meet.ts` and computed by nothing.
 ## Features
 
 ### An athlete's own screen
+
 Phase 3 linked accounts to roster entries and gave a linked swimmer permission
-to enter and scratch *themselves* through `/api/sync` — verified, and refused
+to enter and scratch _themselves_ through `/api/sync` — verified, and refused
 for anyone else's entries. What's missing is the screen. `/users/{id}` shows
 their teams, meets and times read-only; there's nothing to tap to sign up for
 the 100 Free.
@@ -84,21 +55,25 @@ deck before a meet so swimmers sort out their own entries. It's the only part
 of that still missing, and the permission work is already done.
 
 ### Entry limits
+
 NFHS caps a swimmer at 4 events, max 2 individual (varies by state). The
 registration row already shows "3 ev" — turn it amber at the cap and red past
 it. Small, and catches an illegal lineup before an official does.
 
 ### Dual-meet scoring, scored separately by gender
+
 6-4-3-2-1 individual, 8-4 relay, with a running team score. The obvious missing
 piece for a real dual meet, and the split girls/boys lineup is already the
 structure it needs. The biggest item on this list.
 
 ### Auto-pair when adding an event
+
 In a split lineup, adding "100 Fly" nearly always means adding both girls' and
 boys'. Right now you add one and repeat. Could add the pair in lead order from
 one tap.
 
 ### Live updates while a heat is on the clock
+
 Polling is at two seconds now (`POLL_MS` in `auto-sync.tsx`), shortened for the
 admin control desk, which watches three timers' watches land on one lane. That
 is about the ceiling of what polling can sensibly do — the honest answer is a
@@ -107,12 +82,14 @@ underneath is already the right shape for it: scoped, per-object,
 last-write-wins.
 
 ### Tombstone retention
+
 Deleted objects stay in the table forever; every un-entered swimmer leaves a
 row. Harmless for a long while, but it wants a rule eventually — and you can't
 safely purge until every device has seen the deletion, which is an argument for
 tracking device cursors.
 
 ### SD3 import and export
+
 The plan: read the standard `.sd3` files Hy-Tek, SwimTopia and Commit export, so
 an opponent's lineup can be imported rather than typed, and write results back
 out so a meet can be shared into whatever the other team runs. Needs teams as
@@ -127,32 +104,38 @@ is derived from the birth date and name, but a real registration ID is not
 something we can invent, so unregistered swimmers will need a fallback.
 
 ### ~~Teams as first-class references~~ — built
+
 A meet now carries `teamIds` referencing real team documents, athletes are
 global, and a team can exist unclaimed until a coach from that school signs in.
 Two schools work the same meet rather than keeping half a copy each. This was
 the prerequisite blocking SD3 and multi-team scoring; both are now unblocked.
 
 ### Copy the lineup from a previous meet
+
 Cheaper than full reusable templates (which we passed on) and gets most of the
 benefit — "same as last time" covers most of a season.
 
 ### Jump to the next unswum event
+
 With 22+ events there's a lot of tapping past ones already done. A "next event
 with entries and no times" jump would save it.
 
 ### Relay lane labels
+
 A relay lane is currently held by a single swimmer standing in for the squad.
 Letting a lane be labelled "Blue A" / "Gold B" instead would read better, at the
 cost of a real relay model.
 
 ### Service worker (offline cold launch)
-Installed to the home screen, the app still needs the network for the *first*
+
+Installed to the home screen, the app still needs the network for the _first_
 load of a session. Discussed in detail and deliberately deferred — if we do it:
 network-first HTML, cache-on-demand for hashed assets with no eviction,
 `/api/*` untouched, no `skipWaiting`. The conservative shape matters; the
 aggressive one risks serving a stale build that can't be fixed remotely.
 
 ### Column striping on registration
+
 Rows are striped now. Columns could be too, though doing both makes a
 checkerboard — worth trying only if rows alone aren't enough on a wide grid.
 
@@ -161,16 +144,19 @@ checkerboard — worth trying only if rows alone aren't enough on a wide grid.
 ## Safety / correctness
 
 ### False-start recovery
+
 `Reset` is deliberately off-screen while a heat is live, so an early START
 costs seven taps to unwind (stop every lane, then reset). Suggested fix:
 long-press the running clock to reset — deliberate enough not to happen by
 accident, one gesture instead of seven.
 
 ### "Next heat" is live mid-race
+
 It sits bottom-right, big and blue, and ending a heat early drops times for any
 lane that hadn't stopped. Could require a confirm while lanes are outstanding.
 
 ### Roster "Replace" orphans entries
+
 Replace mints new swimmer ids, so entries and results in past meets end up
 pointing at swimmers no longer listed. Matching incoming rows on name and
 reusing the existing id would preserve history. Archive-and-add is the safe path

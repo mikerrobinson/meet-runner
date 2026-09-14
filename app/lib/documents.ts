@@ -91,8 +91,6 @@ export function createMeetDoc(
     watches: [],
     rulings: [],
     results: [],
-    progress: { eventIndex: 0, heatIndex: 0 },
-    timer: null,
     updatedAt: Date.now(),
   };
   const doc: MeetDoc = {
@@ -206,8 +204,6 @@ export function parseMeetDoc(
     watches: doc.watches ?? [],
     rulings: doc.rulings ?? [],
     results: doc.results ?? [],
-    progress: doc.progress ?? { eventIndex: 0, heatIndex: 0 },
-    timer: doc.timer ?? null,
     // Absent on a live meet rather than an explicit null, so a document that
     // was never deleted is byte-for-byte what it always was.
     deletedAt: doc.deletedAt || undefined,

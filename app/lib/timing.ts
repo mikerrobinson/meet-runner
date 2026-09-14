@@ -312,6 +312,25 @@ export function activeLanes(
 }
 
 /**
+ * Whether anything has been recorded against a heat.
+ *
+ * The test for "this heat is history now". Reseeding lanes, or changing the
+ * pool's width, may rearrange a heat nobody has swum; once there is a watch,
+ * a ruling or an accepted result pointing at it, rearranging it would leave
+ * those pointing at lanes that no longer mean what they meant.
+ */
+export function heatTouched(
+  meet: Pick<MeetDoc, "watches" | "rulings" | "results">,
+  heat: Pick<Heat, "id">,
+): boolean {
+  return (
+    meet.watches.some((w) => w.heatId === heat.id) ||
+    meet.rulings.some((r) => r.heatId === heat.id) ||
+    (meet.results ?? []).some((r) => r.heatId === heat.id)
+  );
+}
+
+/**
  * A heat is closed once every lane that swam has been accepted.
  *
  * Derived rather than stored, for the same reason official times are: there is

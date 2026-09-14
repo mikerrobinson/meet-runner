@@ -40,10 +40,11 @@ import {
   withDiving,
   withoutDiving,
 } from "~/lib/events";
-import { buildHeats, shuffle } from "~/lib/heats";
+import { buildHeats, reseedHeats, shuffle } from "~/lib/heats";
 import {
   acceptResult,
   activeLanes,
+  heatTouched,
   makeRuling,
   makeWatch,
 } from "~/lib/timing";
@@ -177,8 +178,17 @@ interface AppStore {
     eventId: string,
     options?: { shuffle?: boolean },
   ) => void;
-  setProgress: (id: string, eventIndex: number, heatIndex: number) => void;
-  startTimer: (id: string, heatId: string) => void;
+  /**
+   * Throw away this device's own watches for a heat, and nobody else's.
+   *
+   * What a false start costs, and what starting a heat again means. It used to
+   * clear the heat outright — every watch and ruling on it, from every device
+   * — and that deletion synced, so a coach tapping START erased times the
+   * timing phones had already sent. A device may discard its own evidence.
+   * Discarding somebody else's is a decision, and decisions are made at the
+   * desk.
+   */
+  clearOwnWatches: (id: string, heatId: string, timerId: string) => void;
   /** Record this device's watch on a lane. */
   stopLane: (
     id: string,
@@ -187,7 +197,6 @@ interface AppStore {
     elapsedMs: number,
     timerId: string,
   ) => void;
-  resetHeat: (id: string, heatId: string) => void;
   /** Type a time in as this device's watch. */
   recordManualTime: (
     id: string,
@@ -649,13 +658,10 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       applyFromSync: (nextTeam, nextAthletes, nextMeets) => {
         setTeam(nextTeam);
         setAthletes(nextAthletes);
-        setMeets((current) => {
-          const localById = new Map(current.map((m) => [m.id, m] as const));
-          return nextMeets.map((meet) => {
-            const local = localById.get(meet.id);
-            return local ? { ...meet, progress: local.progress } : meet;
-          });
-        });
+        // Nothing to preserve across the swap any more: where this device sits
+        // in the running order, and whether its stopwatch is running, are no
+        // longer fields of the document to be carried over by hand.
+        setMeets(nextMeets);
       },
 
       replaceMeet: (next) =>
@@ -682,11 +688,12 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         editMeet(id, (m) => ({
           ...m,
           options: { ...m.options, laneCount },
-          // Lane assignments only mean something for one pool width. Events
-          // already swum keep theirs; the rest are rebuilt on arrival.
-          heats: m.heats.filter((h) =>
-            m.watches.some((w) => w.eventId === h.eventId),
-          ),
+          // Lane assignments only mean something for one pool width. A heat
+          // with anything recorded against it is history and keeps its lanes;
+          // the rest are rebuilt on arrival. Asked heat by heat rather than
+          // event by event, so an event half-swum keeps only the half that
+          // was.
+          heats: m.heats.filter((h) => heatTouched(m, h)),
         })),
 
       // Reorders rather than regenerates, so entries and times survive a flip.
@@ -739,7 +746,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
             heats: m.heats.filter((h) => h.eventId !== eventId),
             watches: m.watches.filter((w) => w.eventId !== eventId),
             rulings: m.rulings.filter((r) => r.eventId !== eventId),
-            progress: { eventIndex: 0, heatIndex: 0 },
+            results: m.results.filter((r) => r.eventId !== eventId),
           });
         }),
 
@@ -850,36 +857,28 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         }),
 
       rebuildHeats: (id, eventId, options) =>
-        editMeet(id, (m) => ({
-          ...m,
-          heats: [
-            ...m.heats.filter((h) => h.eventId !== eventId),
-            ...makeHeats(m, eventId, options?.shuffle ?? false),
-          ],
-          watches: m.watches.filter((w) => w.eventId !== eventId),
-          rulings: m.rulings.filter((r) => r.eventId !== eventId),
-          timer: null,
-        })),
+        editMeet(id, (m) => {
+          const entrants = entrantsFor(m, eventId);
+          const rebuilt = reseedHeats(
+            m,
+            eventId,
+            options?.shuffle ? shuffle(entrants) : entrants,
+          );
+          // Refused: the event has times against it. The screen disables the
+          // control for the same reason, so this is the backstop.
+          if (!rebuilt) return m;
+          return {
+            ...m,
+            heats: [...m.heats.filter((h) => h.eventId !== eventId), ...rebuilt],
+          };
+        }),
 
-      // Where this device sits in the running order isn't synced at all — it
-      // never becomes an object — so moving through events costs nothing on
-      // the wire. Stopping a live clock does change the meet, and says so.
-      setProgress: (id, eventIndex, heatIndex) =>
+      clearOwnWatches: (id, heatId, timerId) =>
         editMeet(id, (m) => ({
           ...m,
-          progress: { eventIndex, heatIndex },
-          // Never carry a running clock across a heat change.
-          timer: null,
-        })),
-
-      startTimer: (id, heatId) =>
-        editMeet(id, (m) => ({
-          ...m,
-          timer: { heatId, startedAt: Date.now() },
-          // Starting again wipes this heat: the watches from the false start
-          // aren't times of the race about to be swum.
-          watches: m.watches.filter((w) => w.heatId !== heatId),
-          rulings: m.rulings.filter((r) => r.heatId !== heatId),
+          watches: m.watches.filter(
+            (w) => !(w.heatId === heatId && w.timerId === timerId),
+          ),
         })),
 
       // This device's own watch. Recording again replaces its own time and
@@ -890,14 +889,6 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
             ? withWatch(m, makeWatch(heat, lane, timerId, elapsedMs, "stopwatch"))
             : m,
         ),
-
-      resetHeat: (id, heatId) =>
-        editMeet(id, (m) => ({
-          ...m,
-          timer: null,
-          watches: m.watches.filter((w) => w.heatId !== heatId),
-          rulings: m.rulings.filter((r) => r.heatId !== heatId),
-        })),
 
       recordManualTime: (id, heat, lane, timeMs, timerId) =>
         editMeet(id, (m) => {

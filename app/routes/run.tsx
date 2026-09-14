@@ -14,11 +14,13 @@ import {
 } from "~/components/ui";
 import { useElapsed, useWakeLock } from "~/hooks/use-stopwatch";
 import { heatsForEvent } from "~/lib/heats";
-import { resultsForHeat, watchesForLane } from "~/lib/timing";
+import { heatTouched, resultsForHeat, watchesForLane } from "~/lib/timing";
+import { loadProgress, saveProgress } from "~/lib/storage";
 import { formatClock, formatTime, parseTime } from "~/lib/time";
 import { enrollmentIndex, rosterForMeet, seasonForMeet } from "~/lib/roster";
 import { useAppStore } from "~/state/app-store";
 import { useMeetRole } from "~/state/meet-role";
+import { useRunClock } from "~/state/run-clock";
 import { RunControl } from "./run-control";
 import { useViewPrefs } from "~/state/view-prefs";
 import {
@@ -32,6 +34,7 @@ import {
   type MeetDoc,
   type MeetEvent,
   type NameOrder,
+  type Progress,
   type Result,
   type Athlete,
   type WatchTime,
@@ -65,6 +68,8 @@ export default function RunMeet() {
   const store = useAppStore();
   const { meetId } = useParams();
   const role = useMeetRole();
+  const clock = useRunClock();
+  const { laneLayout: layout, timerId, nameOrder } = useViewPrefs();
   const meet = store.meets.find((m) => m.id === meetId);
   const roster = store.athletes;
   const [view, setView] = useState<"control" | "stopwatch" | null>(null);
@@ -74,8 +79,19 @@ export default function RunMeet() {
   const [assigningLane, setAssigningLane] = useState<number | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
 
+  // Where this device is in the running order. Device state, read back from
+  // storage once the meet is known — an administrator signing off event 4
+  // while the deck swims event 6 is the normal case, not a conflict.
+  const [progress, setProgressState] = useState<Progress>({
+    eventIndex: 0,
+    heatIndex: 0,
+  });
+  useEffect(() => {
+    if (meetId) setProgressState(loadProgress(meetId));
+  }, [meetId]);
+
   const eventIndex = Math.min(
-    meet?.progress.eventIndex ?? 0,
+    progress.eventIndex,
     Math.max(0, (meet?.events.length ?? 1) - 1),
   );
   const event = meet?.events[eventIndex];
@@ -83,10 +99,7 @@ export default function RunMeet() {
     () => (meet && event ? heatsForEvent(meet, event.id) : []),
     [meet, event],
   );
-  const heatIndex = Math.min(
-    meet?.progress.heatIndex ?? 0,
-    Math.max(0, heats.length - 1),
-  );
+  const heatIndex = Math.min(progress.heatIndex, Math.max(0, heats.length - 1));
   const heat: Heat | undefined = heats[heatIndex];
 
   // Seed heats the first time we land on an event. Diving never gets heats —
@@ -95,8 +108,7 @@ export default function RunMeet() {
     if (meet && event && !isDiving(event)) store.ensureHeats(meet.id, event.id);
   }, [meet, event, store]);
 
-  const { laneLayout: layout, timerId, nameOrder } = useViewPrefs();
-  const running = meet != null && heat != null && meet.timer?.heatId === heat.id;
+  const running = heat != null && clock.clock?.heatId === heat.id;
 
   // Derived, not stored: each lane's official time comes from the watches on
   // it, so several timers can be recording at once without colliding.
@@ -107,12 +119,54 @@ export default function RunMeet() {
     return map;
   }, [meet, heat]);
 
+  /**
+   * The lanes *this device* has stopped.
+   *
+   * The heat is complete when the person holding this stopwatch has taken
+   * every lane in front of them — not when times turn up from the timing
+   * phones. Reading the shared results instead meant a lane a phone submitted
+   * mid-race counted as stopped here, and the clock could vanish from under a
+   * coach while swimmers were still in the water.
+   */
+  const stoppedByMe = useMemo(() => {
+    const lanes = new Set<number>();
+    if (!meet || !heat) return lanes;
+    for (const watch of meet.watches) {
+      if (watch.heatId === heat.id && watch.timerId === timerId) {
+        lanes.add(watch.lane);
+      }
+    }
+    return lanes;
+  }, [meet, heat, timerId]);
+
   const occupiedLanes = heat
     ? heat.lanes.map((id, i) => (id ? i + 1 : null)).filter((n): n is number => n !== null)
     : [];
+  /**
+   * Nothing left on this screen that still wants a time *for this run*.
+   *
+   * Either this device took the lane, or a time arrived on it from somebody
+   * else since the clock started. All three parts were learned by running it:
+   * counting only this device's watches left a coach who times two lanes
+   * waiting forever on the four the phones cover; counting every result let a
+   * phone end the heat while swimmers were in the water; and counting results
+   * that predate the start made pressing START on a re-swim declare the heat
+   * over on the spot.
+   */
   const allStopped =
     occupiedLanes.length > 0 &&
-    occupiedLanes.every((lane) => resultsByLane.has(lane));
+    occupiedLanes.every(
+      (lane) =>
+        stoppedByMe.has(lane) ||
+        (resultsByLane.has(lane) &&
+          !(clock.clock?.alreadyTimed ?? []).includes(lane)),
+    );
+
+  // Lanes already swum can't be reseeded out from under their times.
+  const eventTouched = useMemo(
+    () => (meet ? heats.some((h) => heatTouched(meet, h)) : false),
+    [meet, heats],
+  );
 
   /**
    * The three states of the action panel below the lanes: swimmers are still
@@ -124,7 +178,7 @@ export default function RunMeet() {
 
   // Anchored to the wall clock, and the frame loop stops as soon as the last
   // lane is in — there's nothing left to animate.
-  const elapsed = useElapsed(clockRunning ? meet.timer!.startedAt : null);
+  const elapsed = useElapsed(clockRunning ? clock.clock!.startedAt : null);
   useWakeLock(running);
 
   useEffect(() => {
@@ -132,8 +186,12 @@ export default function RunMeet() {
   }, [heatComplete]);
 
   const goToHeat = (nextEvent: number, nextHeat: number) => {
-    if (!meet) return;
-    store.setProgress(meet.id, nextEvent, nextHeat);
+    if (!meetId) return;
+    const next = { eventIndex: nextEvent, heatIndex: nextHeat };
+    setProgressState(next);
+    saveProgress(meetId, next);
+    // Never carry a running clock across a heat change.
+    clock.stop();
     setEditingLane(null);
     setAssigningLane(null);
   };
@@ -261,6 +319,7 @@ export default function RunMeet() {
                 lane={lane}
                 athlete={findAthlete(roster, heat.lanes[lane - 1])}
                 result={resultsByLane.get(lane)}
+                stoppedHere={stoppedByMe.has(lane)}
                 running={running}
                 clockRunning={clockRunning}
                 layout={layout}
@@ -271,7 +330,7 @@ export default function RunMeet() {
                     meet.id,
                     heat,
                     lane,
-                    Date.now() - meet.timer!.startedAt,
+                    Date.now() - clock.clock!.startedAt,
                     timerId,
                   )
                 }
@@ -306,12 +365,16 @@ export default function RunMeet() {
                 size="xl"
                 className="!min-h-24 !text-xl"
                 onClick={() => {
-                  store.resetHeat(meet.id, heat.id);
+                  // This device's own watches, and nobody else's. A timer at
+                  // the far end of the pool doesn't lose their afternoon
+                  // because somebody reset a heat here.
+                  store.clearOwnWatches(meet.id, heat.id, timerId);
+                  clock.stop();
                   setConfirmReset(false);
                 }}
               >
-                Erase {resultsByLane.size} time
-                {resultsByLane.size === 1 ? "" : "s"}
+                Erase {stoppedByMe.size} time
+                {stoppedByMe.size === 1 ? "" : "s"}
               </Button>
             </div>
           ) : heatComplete ? (
@@ -339,7 +402,14 @@ export default function RunMeet() {
               size="xl"
               full
               className="!min-h-24 !text-4xl"
-              onClick={() => store.startTimer(meet.id, heat.id)}
+              onClick={() => {
+                // A false start's watches aren't times of the race about to
+                // be swum, so this device drops its own before starting.
+                store.clearOwnWatches(meet.id, heat.id, timerId);
+                // Whatever else is already on these lanes belongs to the
+                // previous swim, not this one.
+                clock.start(heat.id, [...resultsByLane.keys()]);
+              }}
             >
               START
             </Button>
@@ -353,6 +423,12 @@ export default function RunMeet() {
               <Button
                 size="sm"
                 variant="ghost"
+                disabled={eventTouched}
+                title={
+                  eventTouched
+                    ? "This event has times against it — reseeding would move swimmers out from under them."
+                    : undefined
+                }
                 onClick={() => store.rebuildHeats(meet.id, event.id, { shuffle: true })}
               >
                 Reseed lanes
@@ -366,7 +442,10 @@ export default function RunMeet() {
           {!running && resultsByLane.size > 0 && (
             <Banner tone="info">
               This heat already has {resultsByLane.size} time
-              {resultsByLane.size === 1 ? "" : "s"}. Starting again clears them.
+              {resultsByLane.size === 1 ? "" : "s"}
+              {stoppedByMe.size > 0
+                ? `, ${stoppedByMe.size} of them taken here. Starting again clears those and leaves the rest.`
+                : ", none of them taken here. Starting again leaves them alone."}
             </Banner>
           )}
         </>

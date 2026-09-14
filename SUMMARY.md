@@ -97,6 +97,16 @@ Two things fall out of storing the acceptance rather than deriving everything:
 timer put a name to. So an exhibition swim holds a heat open until somebody
 decides about it; an untouched empty lane doesn't.
 
+**Nothing about a clock or a cursor is stored in the meet.** `meet.timer` used
+to be a field on the meet core object, so it synced: one person tapping START
+reached into every other device's copy, and because starting a heat also
+cleared that heat's times, it reached in and deleted watches the timing phones
+had already sent. The timers' own screens never read it. It's device state now
+(`state/run-clock.tsx`), as is where a device sits in the running order
+(`storage.ts`), and the rule that follows is that a device may discard its own
+evidence and nobody else's — clearing somebody else's is a decision, and
+decisions are made at the desk. See `RUN-PLAN.md`.
+
 **The timer screen is on its own path, not the sync engine.** It reads
 `/api/timer/meet` and writes `/api/timer/watch`; the deck and the admin desk
 use `/api/sync`. That's deliberate — a phone behind a QR code holds no season

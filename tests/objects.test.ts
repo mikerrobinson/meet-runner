@@ -68,7 +68,7 @@ const meet = createMeetDoc([home.id, visitor.id], {
     acceptedAt: 1757000000200, acceptedBy: "u1",
     fromWatches: { timeMs: 71290, watchCount: 2, method: "average" as const },
   }],
-  timer: null, updatedAt: 1757000000100,
+  updatedAt: 1757000000100,
 });
 const dead = tombstone(createMeetDoc(home.id, { name: "Cancelled", date: "2026-12-01" }));
 
@@ -133,6 +133,11 @@ eq(bm.results[0].acceptedBy, "u1", "and who signed it");
 eq(back.meets.some((m) => m.id === dead.id), false, "a deleted meet doesn't come back live");
 eq(objects.filter((o) => o.id === dead.id && o.deletedAt).length, 1, "its tombstone is in the set");
 eq(objects.some((o) => JSON.stringify(o.data).includes("eventIndex")), false, "progress never leaves the device");
+eq(
+  objects.filter((o) => o.type === "meet").some((o) => "timer" in (o.data as object)),
+  false,
+  "and the stopwatch is no longer part of the meet",
+);
 
 // The composite key matters: meet and lineup share an id on purpose.
 const sharedId = objects.filter((o) => o.id === meet.id).map((o) => o.type).sort();

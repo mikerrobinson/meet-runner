@@ -106,7 +106,6 @@ const meet = createMeetDoc([home.id, away.id], {
   rulings: [
     { id: `${heats[0].id}:${laneOf("a2")}`, eventId: free50.id, heatId: heats[0].id, lane: laneOf("a2"), status: "DQ" as const, decidedAt: 4 },
   ],
-  timer: null,
 });
 
 /* ---- summary ---- */
@@ -171,7 +170,6 @@ const meet = createMeetDoc([home.id, away.id], {
     events,
     entries: { [free50.id]: ["a1"] },
     heats: buildHeats(free50.id, ["a1"], 6),
-    timer: null,
   });
   const faster = {
     ...second,

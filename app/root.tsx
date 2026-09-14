@@ -12,6 +12,7 @@ import { AutoSyncProvider } from "./state/auto-sync";
 import { AppStoreProvider } from "./state/app-store";
 import { SessionProvider } from "./state/session";
 import { ViewPrefsProvider } from "./state/view-prefs";
+import { RunClockProvider } from "./state/run-clock";
 import "./app.css";
 
 /**
@@ -77,7 +78,9 @@ export default function App() {
       <AppStoreProvider>
         <AutoSyncProvider>
           <ViewPrefsProvider>
-            <Outlet />
+            <RunClockProvider>
+              <Outlet />
+            </RunClockProvider>
           </ViewPrefsProvider>
         </AutoSyncProvider>
       </AppStoreProvider>

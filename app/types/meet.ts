@@ -571,15 +571,18 @@ export const DUAL_MEET_SCORING: ScoringRules = {
 };
 
 /**
- * A stopwatch run in progress. Anchored to an absolute epoch timestamp rather
- * than an accumulating counter so the clock stays correct across a reload, a
- * backgrounded tab, or an iOS screen lock.
+ * Where a device has got to in the running order.
+ *
+ * Device state, not meet state, and it lives in `storage.ts` alongside the
+ * lane layout. Three people work one meet from three different places in the
+ * programme — an administrator signing off event 4 while the deck swims 6 —
+ * so there is no single answer to store.
+ *
+ * A stopwatch is device state for the same reason, and a stronger one: the
+ * clock used to ride on the meet, which meant one person tapping START
+ * reached into everybody else's copy. It lives in `run-clock.tsx` now and
+ * never leaves the device.
  */
-export interface TimerState {
-  heatId: string;
-  startedAt: number;
-}
-
 export interface Progress {
   eventIndex: number;
   heatIndex: number;
@@ -620,8 +623,6 @@ export interface MeetDoc {
   rulings: Ruling[];
   /** Lanes an administrator has signed off. Absent means not yet official. */
   results: AcceptedResult[];
-  progress: Progress;
-  timer: TimerState | null;
   /**
    * When this meet was deleted, if it was.
    *
@@ -635,7 +636,7 @@ export interface MeetDoc {
   updatedAt: number;
 }
 
-export const MEET_DOC_VERSION = 8;
+export const MEET_DOC_VERSION = 9;
 
 export function isDeleted(meet: Pick<MeetDoc, "deletedAt">): boolean {
   return meet.deletedAt != null;
