@@ -1,9 +1,11 @@
 /**
- * Accounts, sessions and team membership.
+ * Accounts, sessions, and the invitations that hand out a job.
  *
- * The rules live in `identity.ts`; this is where they meet a database. Five
+ * The rules live in `identity.ts`; this is where they meet a database. Four
  * tables, all small: who exists, the code they were last sent, the sessions
- * they hold, which teams they belong to, and outstanding invites.
+ * they hold, and outstanding invites. Which teams somebody coaches used to be
+ * a fifth — `memberships`, with a role and a standing — and is now a row in
+ * `team_coaches`, beside the meet's own list in `admins.server`.
  *
  * Two things are stored hashed rather than plainly — session tokens and login
  * codes. Neither is a password, but both are live credentials for as long as
@@ -15,7 +17,6 @@ import {
   CODE_TTL_MS,
   RESEND_INTERVAL_MS,
   checkChallenge,
-  isCoach,
   NEVER_SEEN,
   newCode,
   normalizeCode,
@@ -23,13 +24,16 @@ import {
   timingSafeEqual,
   type ChallengeCheck,
   type Contact,
-  type Membership,
-  type MembershipStatus,
-  type Role,
 } from "./identity";
 import { addMeetAdmin } from "./admins.server";
+import {
+  addTeamCoach,
+  coachedTeams,
+  teamsCoachedBy,
+} from "./coaches.server";
 import { ensureSchema } from "./schema.server";
 import { createSeason, createTeam } from "./teams.server";
+import type { Team } from "~/types/meet";
 
 /**
  * An account is an id and the contacts that open it — nothing more.
@@ -85,17 +89,6 @@ const SCHEMA = [
      expires_at INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS sessions_by_user ON sessions (user_id)`,
-  `CREATE TABLE IF NOT EXISTS memberships (
-     team_id TEXT NOT NULL,
-     user_id TEXT NOT NULL,
-     role TEXT NOT NULL,
-     status TEXT NOT NULL,
-     created_at INTEGER NOT NULL,
-     decided_at INTEGER,
-     decided_by TEXT,
-     PRIMARY KEY (team_id, user_id)
-   )`,
-  `CREATE INDEX IF NOT EXISTS memberships_by_user ON memberships (user_id)`,
   /**
    * An invitation, whatever it lets you into.
    *
@@ -105,15 +98,15 @@ const SCHEMA = [
    * always is — rather than a kind column, so a row can't claim to be a team
    * invitation while carrying a meet.
    *
-   * `role` belongs to the team case alone; a meet has one job to hand out.
-   * `contact` is set when the link was sent to somebody in particular, and
-   * null when it's one a coach copies and passes around.
+   * There is one job to hand out on each side — coaching the team, running
+   * the meet — so there is nothing for a role column to say. `contact` is set
+   * when the link was sent to somebody in particular, and null when it's one a
+   * coach copies and passes around.
    */
   `CREATE TABLE IF NOT EXISTS invites (
      token_hash TEXT PRIMARY KEY,
      team_id TEXT,
      meet_id TEXT,
-     role TEXT,
      contact TEXT,
      created_by TEXT NOT NULL,
      created_at INTEGER NOT NULL,
@@ -687,22 +680,23 @@ export async function setLastPlace(
     .run();
 }
 
-/* ------------------------------------------------------------- membership */
+/* ------------------------------------------------------------------ teams */
 
-export interface TeamMembership extends Membership {
+/**
+ * What a team is called and how big it is, for the screens that list teams
+ * alongside your standing with them.
+ *
+ * Straight off the tables. Auth keeps no copy of a team, so there is nothing
+ * here that can disagree with the roster.
+ */
+export interface TeamFacts {
   name: string;
   code: string;
   athletes: number;
   meets: number;
-  requestedAt: number;
 }
 
-/** Name and size of each team, read from the synced objects. */
-async function teamFacts(
-  db: D1Database,
-): Promise<Map<string, { name: string; code: string; athletes: number; meets: number }>> {
-  // Straight off the tables. Auth keeps no copy of a team, so there is nothing
-  // here that can disagree with the roster.
+async function teamFacts(db: D1Database): Promise<Map<string, TeamFacts>> {
   await ensureSchema(db);
   const { results } = await db
     .prepare(
@@ -721,503 +715,83 @@ async function teamFacts(
   );
 }
 
-/** Every team this person belongs to or has asked to join. */
-export async function membershipsFor(
+export interface CoachedTeam extends TeamFacts {
+  teamId: string;
+}
+
+/** Every team this person coaches, named. */
+export async function coachedTeamsFor(
   db: D1Database,
   userId: string,
-): Promise<TeamMembership[]> {
-  await ensureAuthStore(db);
-
-  const { results } = await db
-    .prepare(
-      `SELECT team_id, role, status, created_at FROM memberships
-       WHERE user_id = ? ORDER BY created_at`,
-    )
-    .bind(userId)
-    .all<{ team_id: string; role: Role; status: MembershipStatus; created_at: number }>();
-  if (results.length === 0) return [];
+): Promise<CoachedTeam[]> {
+  const mine = await teamsCoachedBy(db, userId);
+  if (mine.length === 0) return [];
 
   const facts = await teamFacts(db);
-  return results.map((row) => ({
-    teamId: row.team_id,
-    role: row.role,
-    status: row.status,
-    requestedAt: row.created_at,
-    ...(facts.get(row.team_id) ?? {
-      name: "Untitled team",
-      code: "",
-      athletes: 0,
-      meets: 0,
-    }),
+  return mine.map((teamId) => ({
+    teamId,
+    ...(facts.get(teamId) ?? { name: "Untitled team", code: "", athletes: 0, meets: 0 }),
   }));
 }
 
-export async function membershipIn(
-  db: D1Database,
-  userId: string,
-  teamId: string,
-): Promise<Membership | undefined> {
-  await ensureAuthStore(db);
-  const row = await db
-    .prepare("SELECT team_id, role, status FROM memberships WHERE user_id = ? AND team_id = ?")
-    .bind(userId, teamId)
-    .first<{ team_id: string; role: Role; status: MembershipStatus }>();
-  return row ? { teamId: row.team_id, role: row.role, status: row.status } : undefined;
-}
-
-/** Whether anyone at all is an active member — i.e. whether it's spoken for. */
-export async function isTeamClaimed(
-  db: D1Database,
-  teamId: string,
-): Promise<boolean> {
-  await ensureAuthStore(db);
-  const row = await db
-    .prepare(
-      "SELECT COUNT(*) AS active FROM memberships WHERE team_id = ? AND status = 'active'",
-    )
-    .bind(teamId)
-    .first<{ active: number }>();
-  return (row?.active ?? 0) > 0;
-}
-
-/**
- * Whether this caller may work with this team's data at all.
- *
- * One question, not a permission matrix. Members get the season; everyone else
- * gets nothing. What a member may *do* once they have it is decided by the
- * app — a viewer simply isn't shown the buttons — because the risk worth
- * spending code on here is disclosure, not a signed-in coach misbehaving.
- *
- * The unclaimed case keeps every season that predates accounts working until
- * someone claims it. Claiming is therefore the act that closes a team.
- */
-export async function canUseTeam(
-  db: D1Database,
-  userId: string | null,
-  teamId: string,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const [claimed, membership] = await Promise.all([
-    isTeamClaimed(db, teamId),
-    userId ? membershipIn(db, userId, teamId) : Promise.resolve(undefined),
-  ]);
-
-  if (!claimed || membership?.status === "active") return { ok: true };
-  if (membership?.status === "pending") {
-    return {
-      ok: false,
-      reason: "You've asked to join this team. A coach has to let you in.",
-    };
-  }
-  return {
-    ok: false,
-    reason: userId ? "You're not on this team." : "Sign in to see this team.",
-  };
-}
-
-export interface JoinableTeam {
+export interface JoinableTeam extends TeamFacts {
   teamId: string;
-  name: string;
-  code: string;
-  athletes: number;
-  meets: number;
-  /** False when no one has claimed the team yet — see `requestToJoin`. */
+  /** False when nobody coaches it yet — which is what makes it claimable. */
   claimed: boolean;
-  /** This person's standing with it, if they have one. */
-  status?: MembershipStatus;
 }
 
 /**
- * Teams a person could ask to join.
+ * Teams somebody could take on.
  *
  * Names and sizes only. That's deliberately more than nothing — you have to be
- * able to recognise your own team in the list — and deliberately not the
- * roster, which is the thing membership is for.
+ * able to recognise your own school in the list — and deliberately not the
+ * roster. The unclaimed ones are the point: every team an opponent typed in
+ * during meet setup is sitting here waiting for the coach it belongs to.
  */
 export async function joinableTeams(
   db: D1Database,
   userId: string,
 ): Promise<JoinableTeam[]> {
-  await ensureAuthStore(db);
-
-  const facts = await teamFacts(db);
-  const { results: claims } = await db
-    .prepare(
-      `SELECT team_id, COUNT(*) AS active FROM memberships
-       WHERE status = 'active' GROUP BY team_id`,
-    )
-    .all<{ team_id: string; active: number }>();
-  const claimed = new Map(claims.map((row) => [row.team_id, row.active > 0]));
-
-  const mine = new Map(
-    (await membershipsFor(db, userId)).map((m) => [m.teamId, m.status] as const),
-  );
+  const [facts, claimed, mine] = await Promise.all([
+    teamFacts(db),
+    coachedTeams(db),
+    teamsCoachedBy(db, userId),
+  ]);
 
   return [...facts.entries()]
+    .filter(([teamId]) => !mine.includes(teamId))
     .map(([teamId, fact]) => ({
       teamId,
       ...fact,
-      claimed: claimed.get(teamId) ?? false,
-      status: mine.get(teamId),
+      claimed: claimed.has(teamId),
     }))
     .sort((a, b) => b.athletes - a.athletes || a.name.localeCompare(b.name));
 }
 
-export type JoinResult =
-  | { ok: true; membership: Membership; claimed: boolean }
-  | { ok: false; error: string };
-
 /**
- * Ask to join a team — or take it over, if nobody holds it yet.
+ * Start a team, with yourself coaching it.
  *
- * The second case is the bootstrap. Teams that predate accounts have no
- * members at all, and somebody has to become their first coach; the first
- * person to ask does, and from then on the team is claimed and everyone else
- * waits for approval. It's a land grab of exactly one team, once, and it's the
- * only way in that doesn't require someone already being inside.
+ * The team, its first season and the coach are written together. A season is
+ * here because a team with none can hold no roster and every path that adds
+ * one asks which season it's for; the coach is here because a team created
+ * with nobody on it would be indistinguishable from an unclaimed one, and the
+ * next person along could take it.
  */
-export async function requestToJoin(
+export async function startTeam(
   db: D1Database,
   userId: string,
-  teamId: string,
+  input: { name: string; code?: string },
   now = Date.now(),
-): Promise<JoinResult> {
+): Promise<Team> {
   await ensureAuthStore(db);
-
-  const existing = await membershipIn(db, userId, teamId);
-  if (existing) {
-    return existing.status === "active"
-      ? { ok: false, error: "You're already on that team." }
-      : { ok: false, error: "You've already asked to join. A coach has to approve it." };
-  }
-
-  const facts = await teamFacts(db);
-  if (!facts.has(teamId)) return { ok: false, error: "No such team." };
-
-  const held = await db
-    .prepare(
-      "SELECT COUNT(*) AS active FROM memberships WHERE team_id = ? AND status = 'active'",
-    )
-    .bind(teamId)
-    .first<{ active: number }>();
-
-  const unclaimed = (held?.active ?? 0) === 0;
-  const membership: Membership = {
-    teamId,
-    role: unclaimed ? "head_coach" : "viewer",
-    status: unclaimed ? "active" : "pending",
-  };
-
-  await db
-    .prepare(
-      `INSERT INTO memberships (team_id, user_id, role, status, created_at, decided_at, decided_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .bind(
-      teamId,
-      userId,
-      membership.role,
-      membership.status,
-      now,
-      unclaimed ? now : null,
-      unclaimed ? userId : null,
-    )
-    .run();
-
-  return { ok: true, membership, claimed: unclaimed };
-}
-
-/**
- * Take ownership of a team id that doesn't exist on the server yet.
- *
- * A brand-new coach starting a brand-new team is the one case where the
- * ownership has to come first: the team itself only appears on the server
- * after the device syncs, and if the id were unowned until then, whoever
- * synced next could claim it. Minting the membership against the id the device
- * has already generated closes that window.
- */
-export async function claimNewTeam(
-  db: D1Database,
-  userId: string,
-  teamId: string,
-  input: { name?: string; code?: string } = {},
-  now = Date.now(),
-): Promise<JoinResult> {
-  await ensureAuthStore(db);
-
-  const taken = await db
-    .prepare("SELECT COUNT(*) AS n FROM memberships WHERE team_id = ?")
-    .bind(teamId)
-    .first<{ n: number }>();
-  if ((taken?.n ?? 0) > 0) {
-    return { ok: false, error: "That team already has members." };
-  }
-  if ((await teamFacts(db)).has(teamId)) {
-    return { ok: false, error: "That team already exists — ask to join it instead." };
-  }
-
-  // The team and its first season are created here rather than pushed up by
-  // the device afterwards. A membership pointing at a team that doesn't exist
-  // yet was only ever safe while a client was expected to fill the gap.
-  await createTeam(
+  const team = await createTeam(
     db,
-    {
-      id: teamId,
-      name: input.name || "My Team",
-      code: input.code,
-      createdBy: userId,
-    },
+    { name: input.name, code: input.code, createdBy: userId },
     now,
   );
-  await createSeason(db, { teamId, name: "Current season" });
-
-  await db
-    .prepare(
-      `INSERT INTO memberships (team_id, user_id, role, status, created_at, decided_at, decided_by)
-       VALUES (?, ?, 'head_coach', 'active', ?, ?, ?)`,
-    )
-    .bind(teamId, userId, now, now, userId)
-    .run();
-
-  return {
-    ok: true,
-    membership: { teamId, role: "head_coach", status: "active" },
-    claimed: true,
-  };
-}
-
-export interface PendingRequest {
-  userId: string;
-  contact: string;
-  name: string | null;
-  requestedAt: number;
-}
-
-/** Who's waiting to be let into a team. */
-export async function pendingRequests(
-  db: D1Database,
-  teamId: string,
-): Promise<PendingRequest[]> {
-  await ensureAuthStore(db);
-  const { results } = await db
-    .prepare(
-      `SELECT m.user_id, m.created_at, u.name,
-              ${primaryContact("contact")} AS contact
-       FROM memberships m JOIN users u ON u.id = m.user_id
-       WHERE m.team_id = ? AND m.status = 'pending'
-       ORDER BY m.created_at`,
-    )
-    .bind(teamId)
-    .all<{ user_id: string; created_at: number; contact: string; name: string | null }>();
-
-  return results.map((row) => ({
-    userId: row.user_id,
-    contact: row.contact,
-    name: row.name,
-    requestedAt: row.created_at,
-  }));
-}
-
-export interface TeamMember {
-  userId: string;
-  contact: string;
-  name: string | null;
-  role: Role;
-  since: number;
-}
-
-/**
- * Everyone actually on a team.
- *
- * Coaches need this to say which account belongs to which swimmer, which is
- * the one thing that turns a roster row into a person who can sign in and
- * manage their own entries.
- */
-export async function teamMembers(
-  db: D1Database,
-  teamId: string,
-): Promise<TeamMember[]> {
-  await ensureAuthStore(db);
-  const { results } = await db
-    .prepare(
-      `SELECT m.user_id, m.role, m.created_at, u.name,
-              ${primaryContact("contact")} AS contact
-       FROM memberships m JOIN users u ON u.id = m.user_id
-       WHERE m.team_id = ? AND m.status = 'active'
-       ORDER BY u.name, contact`,
-    )
-    .bind(teamId)
-    .all<{
-      user_id: string;
-      role: Role;
-      created_at: number;
-      contact: string;
-      name: string | null;
-    }>();
-
-  return results.map((row) => ({
-    userId: row.user_id,
-    contact: row.contact,
-    name: row.name,
-    role: row.role,
-    since: row.created_at,
-  }));
-}
-
-/** Let someone in with a role, or turn them down. Coaches only — checked by
- *  the caller, which is the one that knows who's asking. */
-export async function decideRequest(
-  db: D1Database,
-  teamId: string,
-  userId: string,
-  decision: { admit: boolean; role?: Role; by: string },
-  now = Date.now(),
-): Promise<void> {
-  await ensureAuthStore(db);
-  if (!decision.admit) {
-    await db
-      .prepare("DELETE FROM memberships WHERE team_id = ? AND user_id = ? AND status = 'pending'")
-      .bind(teamId, userId)
-      .run();
-    return;
-  }
-  await db
-    .prepare(
-      `UPDATE memberships SET status = 'active', role = ?, decided_at = ?, decided_by = ?
-       WHERE team_id = ? AND user_id = ?`,
-    )
-    .bind(decision.role ?? "viewer", now, decision.by, teamId, userId)
-    .run();
-}
-
-export async function removeMember(
-  db: D1Database,
-  teamId: string,
-  userId: string,
-): Promise<void> {
-  await ensureAuthStore(db);
-  await db
-    .prepare("DELETE FROM memberships WHERE team_id = ? AND user_id = ?")
-    .bind(teamId, userId)
-    .run();
-}
-
-/* ---------------------------------------------------------------- coaches */
-
-/**
- * Who coaches a team.
- *
- * A team has as many as it needs and cannot go down to none, which is the same
- * shape as the people running a meet — see `admins.server`. The difference is
- * only where the relationship lives: running a meet is its own table because a
- * meet belongs to no team, while coaching *is* a membership, so this is a view
- * over the rows that are already there rather than a second list to keep level
- * with them.
- */
-export interface TeamCoach {
-  userId: string;
-  contact: string;
-  name: string | null;
-  role: Role;
-  since: number;
-  /** Invited, but has never signed in — so the contact is still unproven. */
-  pending: boolean;
-}
-
-export async function teamCoaches(
-  db: D1Database,
-  teamId: string,
-): Promise<TeamCoach[]> {
-  await ensureAuthStore(db);
-  const { results } = await db
-    .prepare(
-      `SELECT m.user_id, m.role, m.created_at, u.name, u.last_seen_at,
-              ${primaryContact("contact")} AS contact
-       FROM memberships m JOIN users u ON u.id = m.user_id
-       WHERE m.team_id = ? AND m.status = 'active'
-         AND m.role IN ('head_coach', 'coach')
-       ORDER BY m.created_at`,
-    )
-    .bind(teamId)
-    .all<{
-      user_id: string;
-      role: Role;
-      created_at: number;
-      contact: string;
-      name: string | null;
-      last_seen_at: number;
-    }>();
-
-  return results.map((row) => ({
-    userId: row.user_id,
-    contact: row.contact,
-    name: row.name,
-    role: row.role,
-    since: row.created_at,
-    pending: row.last_seen_at === NEVER_SEEN,
-  }));
-}
-
-/**
- * Make somebody a coach here, directly.
- *
- * Never a demotion: a head coach appointed again stays head coach, and a
- * pending request answered this way is admitted rather than left waiting. The
- * caller is the one that checks whether the person doing it may — same rule as
- * everywhere else, and the same reason: only the caller knows who's asking.
- */
-export async function addTeamCoach(
-  db: D1Database,
-  teamId: string,
-  userId: string,
-  addedBy: string,
-  now = Date.now(),
-): Promise<void> {
-  await ensureAuthStore(db);
-  const existing = await membershipIn(db, userId, teamId);
-  const role: Role =
-    existing?.status === "active" && rank(existing.role) >= rank("coach")
-      ? existing.role
-      : "coach";
-
-  await db
-    .prepare(
-      `INSERT INTO memberships (team_id, user_id, role, status, created_at, decided_at, decided_by)
-       VALUES (?, ?, ?, 'active', ?, ?, ?)
-       ON CONFLICT(team_id, user_id) DO UPDATE SET
-         role = excluded.role, status = 'active',
-         decided_at = excluded.decided_at, decided_by = excluded.decided_by`,
-    )
-    .bind(teamId, userId, role, now, now, addedBy)
-    .run();
-}
-
-/**
- * Step down, or take it off somebody else.
- *
- * Refuses the last one, exactly as a meet refuses its last administrator: a
- * team with no coach can't admit anyone, hand the job on, or edit its own
- * roster, and the only way back would be a database edit. Note what this
- * removes is the membership — they're off the team, not quietly demoted to a
- * viewer who still sees everything.
- */
-export async function removeTeamCoach(
-  db: D1Database,
-  teamId: string,
-  userId: string,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
-  await ensureAuthStore(db);
-  const current = await teamCoaches(db, teamId);
-  if (!current.some((coach) => coach.userId === userId)) {
-    return { ok: false, reason: "They don't coach this team." };
-  }
-  if (current.length <= 1) {
-    return {
-      ok: false,
-      reason: "A team needs a coach. Add another one first.",
-    };
-  }
-  await removeMember(db, teamId, userId);
-  return { ok: true };
+  await createSeason(db, { teamId: team.id, name: "Current season" });
+  await addTeamCoach(db, team.id, userId, null, now);
+  return team;
 }
 
 /* --------------------------------------------------------------- invites */
@@ -1229,21 +803,21 @@ const INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 /**
  * What an invitation lets you into. Exactly one of the two.
  *
- * A team invitation carries the role it grants; a meet invitation doesn't,
- * because running a meet is the only job there is to hand out. `contact` is
- * set when the link was sent to somebody in particular — it lets the sign-in
- * screen fill the box in — and left off for a link that's simply copied.
+ * Neither carries a role, because each side has exactly one job to hand out:
+ * coaching the team, or running the meet. `contact` is set when the link was
+ * sent to somebody in particular — it lets the sign-in screen fill the box in
+ * — and left off for a link that's simply copied.
  */
 export type InviteGrant =
-  | { teamId: string; role: Role; contact?: string }
+  | { teamId: string; contact?: string }
   | { meetId: string; contact?: string };
 
 /**
  * Mint a one-time invitation.
  *
  * Returned in plaintext once, exactly like a session token, because it *is*
- * one — a bearer credential that turns into membership, or into running a
- * meet, for whoever redeems it. That's the trade for letting somebody be
+ * one — a bearer credential that turns into coaching a team, or into running
+ * a meet, for whoever redeems it. That's the trade for letting somebody be
  * added by sending them a link.
  */
 export async function createInvite(
@@ -1256,19 +830,17 @@ export async function createInvite(
   const token = newToken();
   const teamId = "teamId" in grant ? grant.teamId : null;
   const meetId = "meetId" in grant ? grant.meetId : null;
-  const role = "role" in grant ? grant.role : null;
 
   await db
     .prepare(
       `INSERT INTO invites
-         (token_hash, team_id, meet_id, role, contact, created_by, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (token_hash, team_id, meet_id, contact, created_by, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       await tokenHash(token),
       teamId,
       meetId,
-      role,
       grant.contact ?? null,
       createdBy,
       now,
@@ -1301,7 +873,7 @@ export async function supersedeInvites(
 }
 
 export type InviteInfo =
-  | { kind: "team"; teamId: string; role: Role; name: string; code: string }
+  | { kind: "team"; teamId: string; name: string; code: string }
   | { kind: "meet"; meetId: string; name: string; date: string; contact: string | null };
 
 /**
@@ -1317,14 +889,13 @@ export async function inspectInvite(
   await ensureAuthStore(db);
   const row = await db
     .prepare(
-      `SELECT team_id, meet_id, role, contact FROM invites
+      `SELECT team_id, meet_id, contact FROM invites
        WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?`,
     )
     .bind(await tokenHash(token), now)
     .first<{
       team_id: string | null;
       meet_id: string | null;
-      role: Role | null;
       contact: string | null;
     }>();
   if (!row) return null;
@@ -1348,14 +919,13 @@ export async function inspectInvite(
   return {
     kind: "team",
     teamId: row.team_id!,
-    role: row.role ?? "coach",
     name: facts?.name ?? "Untitled team",
     code: facts?.code ?? "",
   };
 }
 
 export type InviteRedemption =
-  | { ok: true; kind: "team"; membership: Membership }
+  | { ok: true; kind: "team"; teamId: string }
   | { ok: true; kind: "meet"; meetId: string }
   | { ok: false; error: string };
 
@@ -1382,10 +952,10 @@ export async function redeemInvite(
     .prepare(
       `UPDATE invites SET used_at = ?, used_by = ?
        WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
-       RETURNING team_id, meet_id, role`,
+       RETURNING team_id, meet_id`,
     )
     .bind(now, userId, await tokenHash(token), now)
-    .first<{ team_id: string | null; meet_id: string | null; role: Role | null }>();
+    .first<{ team_id: string | null; meet_id: string | null }>();
 
   if (!claimed) return { ok: false, error: "That invitation has expired or been used." };
 
@@ -1394,31 +964,11 @@ export async function redeemInvite(
     return { ok: true, kind: "meet", meetId: claimed.meet_id };
   }
 
+  // Already coaching there is not an error — a second link, or one forwarded
+  // back to somebody who is already in, simply lands them where it says.
   const teamId = claimed.team_id!;
-  // An existing member keeps whatever they already had if it reaches further;
-  // an invite should never quietly demote a coach who follows one.
-  const existing = await membershipIn(db, userId, teamId);
-  const granted = claimed.role ?? "coach";
-  const role: Role =
-    existing?.status === "active" && rank(existing.role) >= rank(granted)
-      ? existing.role
-      : granted;
-
-  await db
-    .prepare(
-      `INSERT INTO memberships (team_id, user_id, role, status, created_at, decided_at, decided_by)
-       VALUES (?, ?, ?, 'active', ?, ?, ?)
-       ON CONFLICT(team_id, user_id) DO UPDATE SET
-         role = excluded.role, status = 'active', decided_at = excluded.decided_at`,
-    )
-    .bind(teamId, userId, role, now, now, userId)
-    .run();
-
-  return {
-    ok: true,
-    kind: "team",
-    membership: { teamId, role, status: "active" },
-  };
+  await addTeamCoach(db, teamId, userId, null, now);
+  return { ok: true, kind: "team", teamId };
 }
 
 /* ------------------------------------------------------------- the answer */
@@ -1431,7 +981,8 @@ export interface SessionPayload {
     name: string | null;
     lastSeasonId: string | null;
   };
-  memberships: TeamMembership[];
+  /** The teams this person coaches. There is no other standing to have. */
+  teams: CoachedTeam[];
   /** Which team to open. Null means there's nothing this person can open yet. */
   openTeamId: string | null;
   /** Teams to offer, and only when there's no team to open. */
@@ -1452,11 +1003,11 @@ export async function sessionPayload(
   user: User,
   invitedTeamId?: string | null,
 ): Promise<SessionPayload> {
-  const memberships = await membershipsFor(db, user.id);
-  const openTeamId = teamToOpen(memberships, {
-    invitedTeamId,
-    lastTeamId: user.lastTeamId,
-  });
+  const teams = await coachedTeamsFor(db, user.id);
+  const openTeamId = teamToOpen(
+    teams.map((team) => team.teamId),
+    { invitedTeamId, lastTeamId: user.lastTeamId },
+  );
 
   return {
     user: {
@@ -1466,18 +1017,10 @@ export async function sessionPayload(
       name: user.name,
       lastSeasonId: user.lastSeasonId,
     },
-    memberships,
+    teams,
     openTeamId,
     joinable: openTeamId ? [] : await joinableTeams(db, user.id),
   };
-}
-
-/** Only used to stop an invite demoting someone. Not a permission model. */
-function rank(role: Role): number {
-  if (role === "head_coach") return 3;
-  if (isCoach(role)) return 2;
-  if (role === "viewer") return 0;
-  return 1;
 }
 
 /* ------------------------------------------------------------- directory */
@@ -1553,6 +1096,35 @@ export interface DirectoryUser {
  * returns nothing, so the endpoint answers "is this person here?" rather than
  * printing the directory.
  */
+/**
+ * One account, named — for a screen showing who something is attached to.
+ *
+ * Deliberately narrow: an id in, a name and a contact out, and no way to list.
+ * The caller has to already hold the id, which it only does because somebody
+ * with the standing to link them put it there.
+ */
+export async function describeUser(
+  db: D1Database,
+  userId: string,
+): Promise<DirectoryUser | null> {
+  await ensureAuthStore(db);
+  const row = await db
+    .prepare(
+      `SELECT u.id, u.name, u.last_seen_at,
+              ${primaryContact("contact")} AS contact
+       FROM users u WHERE u.id = ?`,
+    )
+    .bind(userId)
+    .first<{ id: string; name: string | null; contact: string; last_seen_at: number }>();
+  if (!row) return null;
+  return {
+    userId: row.id,
+    name: row.name,
+    contact: row.contact,
+    pending: row.last_seen_at === NEVER_SEEN,
+  };
+}
+
 export async function searchUsers(
   db: D1Database,
   query: string,

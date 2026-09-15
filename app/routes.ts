@@ -77,13 +77,11 @@ export default [
   route("api/athletes/:athleteId", "routes/api.public.athlete.ts"),
   route("api/users/:userId", "routes/api.public.user.ts"),
 
-  // Accounts and membership.
+  // Accounts, and the invitations that hand out a job.
   route("api/auth/start", "routes/api.auth.start.ts"),
   route("api/auth/verify", "routes/api.auth.verify.ts"),
   route("api/auth/session", "routes/api.auth.session.ts"),
   route("api/profile", "routes/api.profile.ts"),
-  route("api/memberships", "routes/api.memberships.ts"),
-  route("api/members", "routes/api.members.ts"),
   route("api/users", "routes/api.users.ts"),
   route("api/athletes/:athleteId/link", "routes/api.athlete.link.ts"),
   route("api/invites", "routes/api.invites.ts"),

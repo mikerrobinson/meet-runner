@@ -14,8 +14,7 @@ import {
 import { listPublicTeams } from "~/lib/public.server";
 import { useSession } from "~/state/session";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
-import { claimNewTeam } from "~/lib/auth.server";
-import { generateId } from "~/lib/id";
+import { startTeam } from "~/lib/auth.server";
 import { normalizeTeamCode } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
@@ -45,8 +44,9 @@ export async function loader({ context }: Route.LoaderArgs) {
  *
  * The same shape as creating a meet, and for the same reason: the list of
  * teams is where you are when you notice yours isn't on it. Whoever fills the
- * form is its head coach from that moment — a team with no coach can't admit
- * anybody, so the alternative is making one and then asking to be let into it.
+ * form coaches it from that moment — a team created with nobody coaching it
+ * would be indistinguishable from the unclaimed ones, and the next person
+ * along could take it.
  *
  * A name that's already here is answered with the team that has it rather than
  * a second copy. Two "Horizon"s is the failure this guards against, and it's
@@ -70,33 +70,30 @@ export async function action({ request, context }: Route.ActionArgs) {
   if (clash) {
     return {
       error: clash.claimed
-        ? `${clash.name} is already here. Open it and ask to join.`
-        : `${clash.name} is already here, and nobody has claimed it. Open it and claim it.`,
+        ? `${clash.name} is already here. A coach there can add you.`
+        : `${clash.name} is already here, and nobody coaches it yet. Open it and take it on.`,
       teamId: clash.id,
     };
   }
 
-  // The id is minted here and the team, its first season and the membership
-  // are written together — see `claimNewTeam`, which exists so a team can
-  // never exist with nobody holding it.
-  const result = await claimNewTeam(db, user.id, generateId(), {
+  // The team, its first season and the coach are written together — see
+  // `startTeam`, which exists so a team started here can never be mistaken for
+  // one of the unclaimed ones.
+  const team = await startTeam(db, user.id, {
     name,
     code: String(form.get("code") ?? "") || undefined,
   });
-  if (!result.ok) return { error: result.error };
 
-  return redirect(`/teams/${result.membership.teamId}`);
+  return redirect(`/teams/${team.id}`);
 }
 
 export default function Teams({ loaderData, actionData }: Route.ComponentProps) {
   const { teams, offline } = loaderData;
-  // Which of these are yours comes from your memberships — the page is a
-  // directory of everyone's teams, and "yours" is just a heading on it.
+  // Which of these are yours is which ones you coach — the page is a directory
+  // of everyone's teams, and "yours" is just a heading on it.
   const session = useSession();
   const [adding, setAdding] = useState(false);
-  const mineIds = new Set(
-    session.memberships.filter((m) => m.status === "active").map((m) => m.teamId),
-  );
+  const mineIds = new Set(session.teams.map((team) => team.teamId));
 
   const ours = teams.filter((t) => mineIds.has(t.id));
   const others = teams.filter((t) => !mineIds.has(t.id));
@@ -124,9 +121,9 @@ export default function Teams({ loaderData, actionData }: Route.ComponentProps) 
           </SectionTitle>
 
           {ours.length === 0 ? (
-            <EmptyState title="You're not on a team yet">
-              Start one and you&rsquo;re its head coach. If yours is in the list
-              below, open it and ask to join instead.
+            <EmptyState title="You don't coach a team yet">
+              Start one and it&rsquo;s yours. If yours is already in the list
+              below with no coach, open it and take it on instead.
             </EmptyState>
           ) : (
             <ul className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -233,8 +230,8 @@ function NewTeamSheet({
         </Field>
 
         <p className="text-xs text-slate-500 dark:text-slate-400">
-          You&rsquo;ll be its head coach. Add the roster, its seasons and the
-          other coaches on the team&rsquo;s own page.
+          You&rsquo;ll be its coach. Add the roster, its seasons and the other
+          coaches on the team&rsquo;s own page.
         </p>
 
         <Button

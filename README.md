@@ -35,9 +35,9 @@ them. It references teams by id, so a dual meet is a single shared thing both
 schools open — rather than two half-copies where the entries land on one and the
 times on the other.
 
-A team can exist without an owner. Setting up a meet against a school that has
-never used the app mints an _unclaimed_ team; a coach from there claims it
-later, and the meets it already appears in are unaffected.
+A team can exist with nobody coaching it. Setting up a meet against a school
+that has never used the app mints an _unclaimed_ team; a coach from there takes
+it on later, and the meets it already appears in are unaffected.
 
 ### Running a meet: four rows
 
@@ -430,7 +430,7 @@ UI and API mirror each other, with one query and one projection behind both.
 | -------------------------------------------------------- | ------------------------------------------------------------ |
 | `GET /api/meets`, `/api/meets/:id`                       | Every meet; one meet with its results                        |
 | `GET /api/teams`, `/api/teams/:id`                       | Every team; one team's seasons and roster                    |
-| `POST /api/teams`                                        | Mint an unclaimed opponent (signed in)                       |
+| `POST /api/teams`                                        | Start a team you coach, or mint an unclaimed opponent        |
 | `GET /api/athletes`, `/api/athletes/:id`                 | People, and one person's history                             |
 | `GET /api/users/:id`                                     | Somebody's own dashboard — only ever their own               |
 | `POST`/`DELETE /api/meets/:id/entries`                   | Enter or scratch one swimmer                                 |
@@ -438,23 +438,37 @@ UI and API mirror each other, with one query and one projection behind both.
 | `POST`/`DELETE /api/meets/:id/watches`                   | Times, and dropping your own                                 |
 | `POST`/`DELETE /api/meets/:id/calls`                     | Deciding a lane                                              |
 | `GET`/`POST`/`DELETE /api/meets/:id/admins`              | Who runs a meet                                              |
-| `GET`/`POST`/`DELETE /api/teams/:id/coaches`             | Who coaches a team, and who's waiting to join                |
+| `GET`/`POST`/`DELETE /api/teams/:id/coaches`             | Who coaches a team; claiming one nobody coaches              |
 | `POST /api/athletes/:id/link`                            | Say which account a swimmer is. Coaches only                 |
-| `/api/auth/*`, `/api/memberships`, `/api/invites`        | Accounts and membership                                      |
+| `/api/auth/*`, `/api/invites`                            | Accounts, and links that hand out a job                      |
 | `/api/timer/grant`, `/timer/meet`                        | The QR-code timing path                                      |
 | `POST /api/meets/:id/timers/:timerId/:event/:heat/:lane` | One lane, one timer — body-less; the cookies are the payload |
 
 ### Who may do what
 
-Roles are team-scoped except one. **Running a meet is scoped to the meet**,
-because a meet belongs to no team — often it's the host's coach, sometimes a
-referee who coaches nobody. Whoever creates a meet administrates it.
+**Two lists, and being on one is the whole of it.** `team_coaches` says who
+coaches a team; `meet_admins` says who runs a meet. There is no role to
+interpret and no standing to be in — the row is the permission. They are
+separate because a meet belongs to no team: often its administrator is the
+host's coach, sometimes a referee who coaches nobody.
 
-Whoever creates a team is its head coach, and a team can have as many coaches as
-it needs — added by name from the directory, or invited by email or text, which
-makes an account for them and mails the link that proves it. Neither a team nor
-a meet can go down to nobody: removing the last coach, or the last
-administrator, is refused rather than leaving a thing nobody can run.
+Both lists work the same way. Whoever creates the thing is on it; anyone on it
+can add anyone else, by name from the directory or by email or text — which
+makes the account and sends the link that proves the contact; and neither can
+go down to nobody, so removing the last one is refused rather than leaving a
+thing nobody can run.
+
+A team is the one that can *start* empty, because every school typed in as an
+opponent is a team nobody has signed in to. That's what unclaimed means, and
+it's the only time somebody can add themselves.
+
+This replaced a `memberships` table carrying five roles and two standings.
+Only "is this person a coach" ever changed what the code did; the rest
+described relationships that live somewhere truer — a swimmer is on a team
+because they're *enrolled* in one of its seasons, and their account is tied to
+them by `athletes.user_id`. Asking to join and being approved went with it:
+getting onto a team that has a coach is the coach's move, exactly as it is for
+a meet.
 
 |                                  | Meet admin | Coach of a racing team |         Linked athlete         |
 | -------------------------------- | :--------: | :--------------------: | :----------------------------: |
@@ -512,8 +526,8 @@ and must never be set on a deployed worker.
 
 3. `npm run deploy`
 
-4. Sign in and claim the team — the first person to ask for an unclaimed team
-   becomes its head coach.
+4. Sign in and start a team, or take on one nobody coaches — the first person
+   to ask for an unclaimed team becomes its coach.
 
 ### Home screen
 

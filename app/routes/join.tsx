@@ -2,10 +2,9 @@ import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import type { Route } from "./+types/join";
 import { Banner, Button, Card, Field, SectionTitle, TextInput } from "~/components/ui";
-import { askToJoin } from "~/lib/auth";
+import { claimTeam, startTeam } from "~/lib/auth";
 import { APP_HOME } from "./home";
 import { describeContact } from "~/lib/identity";
-import { generateId } from "~/lib/id";
 import { useSession } from "~/state/session";
 
 export function meta({}: Route.MetaArgs) {
@@ -15,10 +14,15 @@ export function meta({}: Route.MetaArgs) {
 /**
  * Where a signed-in person with no team lands.
  *
- * Three ways out, in the order they're likely: a team that exists but nobody
- * has claimed (the seasons that predate accounts), a team that someone else
- * runs and you have to be let into, or nothing at all — in which case you're
- * starting one.
+ * Two ways out: a team nobody coaches yet — the ones that predate accounts,
+ * and every school somebody typed in as an opponent — or nothing that fits, in
+ * which case you're starting one.
+ *
+ * There is no third way, and there used to be: asking to join a team somebody
+ * already coaches, and waiting to be approved. Getting onto a team that has a
+ * coach is now the coach's move, exactly as it is for a meet — they add you by
+ * name, or send you a link. Nobody waits on a screen for a decision that has
+ * nowhere to be made.
  */
 export default function Join() {
   const session = useSession();
@@ -37,17 +41,18 @@ export default function Join() {
    * also what happens right after signing out from it.
    *
    * Having a team to open is the other way out, and it's an effect rather than
-   * something the join button does for itself: approval can arrive from
-   * anywhere. Tapping "Check again" after a coach lets you in has to leave
-   * this screen, and so does a coach admitting you while you sit here.
+   * something the buttons do for themselves: it can become true from
+   * elsewhere. Tapping "Check again" after a coach has added you has to leave
+   * this screen, and so does following an invite in another tab.
    */
   useEffect(() => {
     if (session.status === "out") navigate("/sign-in", { replace: true });
     else if (session.openTeamId) navigate(APP_HOME, { replace: true });
   }, [session.status, session.openTeamId, navigate]);
 
-  const pending = session.memberships.filter((m) => m.status === "pending");
-  const offered = session.joinable.filter((t) => t.status === undefined);
+  // Only the unclaimed ones can be acted on from here. A team with a coach is
+  // theirs to hand out, so it isn't offered.
+  const offered = session.joinable.filter((team) => !team.claimed);
 
   if (!session.user) {
     return (
@@ -57,14 +62,13 @@ export default function Join() {
     );
   }
 
-  const join = async (teamId: string) => {
+  /** Take on a team nobody coaches. The effect above decides where it leaves
+   *  you, because it's the same answer as arriving already coaching one. */
+  const claim = async (teamId: string) => {
     setBusy(teamId);
     setError(null);
     try {
-      // Claiming an unheld team makes you its coach outright; asking to join a
-      // held one means waiting. Either way the effect above decides where that
-      // leaves you.
-      session.adopt(await askToJoin(teamId));
+      session.adopt(await claimTeam(teamId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "That didn't work.");
     } finally {
@@ -72,19 +76,12 @@ export default function Join() {
     }
   };
 
-  /**
-   * Register the id first, then build the team around it.
-   *
-   */
-  const startTeam = async () => {
-    const teamId = generateId();
-    setBusy(teamId);
+  const start = async () => {
+    setBusy("new");
     setError(null);
     try {
-      // The server mints the team and the membership together; there is no
-      // local copy to create first any more.
-      const next = await askToJoin(teamId, true, name.trim() || "My Team");
-      session.adopt(next);
+      // The server writes the team, its first season and the coach together.
+      session.adopt((await startTeam(name.trim() || "My Team")).session);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't start the team.");
     } finally {
@@ -104,28 +101,17 @@ export default function Join() {
       {location.state?.notice && <Banner tone="warn">{location.state.notice}</Banner>}
       {error && <Banner tone="error">{error}</Banner>}
 
-      {pending.length > 0 && (
-        <Card>
-          <SectionTitle>Waiting on a coach</SectionTitle>
-          <ul className="space-y-2 text-sm">
-            {pending.map((m) => (
-              <li key={m.teamId} className="text-slate-600 dark:text-slate-300">
-                You&rsquo;ve asked to join <strong>{m.name}</strong>. A coach there
-                has to let you in.
-              </li>
-            ))}
-          </ul>
-          <div className="mt-3">
-            <Button size="sm" onClick={() => void session.refresh()}>
-              Check again
-            </Button>
-          </div>
-        </Card>
-      )}
-
       {offered.length > 0 && (
         <Card>
-          <SectionTitle>Teams on this server</SectionTitle>
+          <SectionTitle
+            action={
+              <Button size="sm" onClick={() => void session.refresh()}>
+                Check again
+              </Button>
+            }
+          >
+            Teams nobody coaches
+          </SectionTitle>
           <ul className="divide-y divide-slate-200 dark:divide-slate-800">
             {offered.map((team) => (
               <li
@@ -140,27 +126,24 @@ export default function Join() {
                   <p className="text-xs text-slate-500 dark:text-slate-400">
                     {team.athletes} athlete{team.athletes === 1 ? "" : "s"} ·{" "}
                     {team.meets} meet{team.meets === 1 ? "" : "s"}
-                    {!team.claimed && " · no coach yet"}
                   </p>
                 </div>
                 <Button
                   size="sm"
-                  variant={team.claimed ? "secondary" : "primary"}
+                  variant="primary"
                   disabled={busy !== null}
-                  onClick={() => void join(team.teamId)}
+                  onClick={() => void claim(team.teamId)}
                 >
-                  {team.claimed ? "Ask to join" : "Claim"}
+                  This is mine
                 </Button>
               </li>
             ))}
           </ul>
-          {offered.some((t) => !t.claimed) && (
-            <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
-              A team with no coach yet is one that was set up before sign-in
-              existed. Claiming it makes you its head coach, and from then on
-              everyone else has to be let in.
-            </p>
-          )}
+          <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+            These are teams somebody raced without anyone from the school ever
+            signing in. Taking one on makes you its coach, and from then on
+            everyone else has to be added by a coach.
+          </p>
         </Card>
       )}
 
@@ -180,7 +163,7 @@ export default function Join() {
               <Button
                 variant="primary"
                 disabled={busy !== null}
-                onClick={() => void startTeam()}
+                onClick={() => void start()}
               >
                 Create
               </Button>
@@ -192,7 +175,7 @@ export default function Join() {
         ) : (
           <>
             <p className="text-sm text-slate-600 dark:text-slate-300">
-              You&rsquo;ll be its head coach, and can invite others.
+              You&rsquo;ll be its coach, and can add others.
             </p>
             <div className="mt-3">
               <Button onClick={() => setStarting(true)}>New team</Button>

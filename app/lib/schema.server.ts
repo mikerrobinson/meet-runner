@@ -20,9 +20,9 @@
  * property of the keys rather than something the app has to reconcile
  * afterwards.
  *
- * The account tables — users, identities, sessions, memberships, invites — are
- * defined in `auth.server.ts` and unchanged; meet grants in `grants.server.ts`,
- * meet administrators in `admins.server.ts`.
+ * The account tables — users, identities, sessions, invites — are defined in
+ * `auth.server.ts`; meet grants in `grants.server.ts`, and who runs what in
+ * `admins.server.ts` (meets) and `coaches.server.ts` (teams).
  */
 
 const SCHEMA = [

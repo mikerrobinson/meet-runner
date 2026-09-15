@@ -8,8 +8,8 @@
  * used before becomes a new person on first successful verification.
  *
  * Everything here is pure so the rules that matter — what counts as the same
- * contact, when a code has expired, who may approve a join — can be tested
- * without a database. The storage lives in `auth.server.ts`.
+ * contact, when a code has expired, which team to open — can be tested without
+ * a database. The storage lives in `auth.server.ts`.
  */
 
 /* --------------------------------------------------------------- contacts */
@@ -216,69 +216,30 @@ export function messageFor(check: ChallengeCheck): string {
   return "That code isn't right.";
 }
 
-/* ------------------------------------------------------------------ roles */
-
-/**
- * What someone is to a team.
- *
- * Rigour scales with reach: a coach edits everyone's data and signs in
- * properly, an athlete or parent edits their own, a viewer only looks.
- * Timers are deliberately absent — they hold a meet-scoped grant rather than
- * membership of a team, which is what lets them work without giving a name.
- */
-export const ROLES = ["head_coach", "coach", "athlete", "parent", "viewer"] as const;
-export type Role = (typeof ROLES)[number];
-
-export const ROLE_LABELS: Record<Role, string> = {
-  head_coach: "Head coach",
-  coach: "Coach",
-  athlete: "Athlete",
-  parent: "Parent",
-  viewer: "Viewer",
-};
-
-/** `pending` asked to join and is waiting; `active` is in. */
-export type MembershipStatus = "active" | "pending";
-
-export interface Membership {
-  teamId: string;
-  role: Role;
-  status: MembershipStatus;
-}
-
-/** Edits the roster, the schedule and everyone's results. */
-export function isCoach(role: Role): boolean {
-  return role === "head_coach" || role === "coach";
-}
-
-/** May let someone else in, or hand out an invite. Only coaches. */
-export function canAdmit(membership: Membership | undefined): boolean {
-  return membership?.status === "active" && isCoach(membership.role);
-}
-
-/** Roles a coach can hand out. Nobody can mint a second head coach by invite;
- *  that's a transfer, and it should look like one. */
-export const INVITABLE_ROLES: Role[] = ["coach", "athlete", "parent", "viewer"];
+/* ------------------------------------------------------------------ teams */
 
 /**
  * Which team to open, given everything we know.
  *
  * The order is what a person would expect: an invite they just followed beats
  * where they were last time, and where they were last time beats an arbitrary
- * pick. Returns null when there's nothing to open — a new coach with no team
- * yet — which is the signal to ask them to join one.
+ * pick. Returns null when there's nothing to open — a coach with no team yet —
+ * which is the signal to send them off to find one.
+ *
+ * Takes the teams this person coaches, in the order they took them on. There
+ * used to be a role and a standing to filter by first; coaching a team is now
+ * a row in `team_coaches` and nothing else, so the list *is* the answer.
  */
 export function teamToOpen(
-  memberships: Membership[],
+  coached: string[],
   options: { invitedTeamId?: string | null; lastTeamId?: string | null },
 ): string | null {
-  const active = memberships.filter((m) => m.status === "active");
   const has = (id: string | null | undefined) =>
-    id != null && active.some((m) => m.teamId === id);
+    id != null && coached.includes(id);
 
   if (has(options.invitedTeamId)) return options.invitedTeamId!;
   if (has(options.lastTeamId)) return options.lastTeamId!;
-  return active[0]?.teamId ?? null;
+  return coached[0] ?? null;
 }
 
 /**

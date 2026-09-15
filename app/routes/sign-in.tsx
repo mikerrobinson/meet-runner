@@ -9,7 +9,7 @@ import {
   type CodeSent,
   type InviteInfo,
 } from "~/lib/auth";
-import { CODE_LENGTH, ROLE_LABELS, normalizeCode } from "~/lib/identity";
+import { CODE_LENGTH, normalizeCode } from "~/lib/identity";
 import { APP_HOME } from "./home";
 import { useSession } from "~/state/session";
 
@@ -157,7 +157,7 @@ export default function SignIn() {
             ? "Sign in with your email or mobile number."
             : invited.kind === "meet"
               ? `Sign in to help run ${invited.name}.`
-              : `Join ${invited.name} as ${ROLE_LABELS[invited.role].toLowerCase()}.`}
+              : `Sign in to coach ${invited.name}.`}
         </p>
       </div>
 

@@ -15,8 +15,7 @@
 
 import { ensureSchema } from "./schema.server";
 import { isMeetAdmin } from "./admins.server";
-import { membershipsFor } from "./auth.server";
-import { isCoach, type Role } from "./identity";
+import { isTeamCoach, teamsCoachedBy } from "./coaches.server";
 import { ANONYMOUS, type MeetAccess, type TeamAccess } from "./access";
 import type { User } from "./auth.server";
 
@@ -30,9 +29,9 @@ export async function meetAccess(
   if (!user) return ANONYMOUS;
   await ensureSchema(db);
 
-  const [admin, memberships, racing, mine] = await Promise.all([
+  const [admin, coached, racing, mine] = await Promise.all([
     isMeetAdmin(db, user.id, meetId),
-    membershipsFor(db, user.id),
+    teamsCoachedBy(db, user.id),
     db.prepare("SELECT team_id FROM meet_teams WHERE meet_id = ?")
       .bind(meetId)
       .all<{ team_id: string }>(),
@@ -46,12 +45,7 @@ export async function meetAccess(
     signedIn: true,
     userId: user.id,
     admin,
-    coachOf: memberships
-      .filter(
-        (m) =>
-          m.status === "active" && isCoach(m.role as Role) && teamIds.has(m.teamId),
-      )
-      .map((m) => m.teamId),
+    coachOf: coached.filter((teamId) => teamIds.has(teamId)),
     athleteId: mine?.id ?? null,
   };
 }
@@ -63,13 +57,10 @@ export async function teamAccess(
   teamId: string,
   user: User | null,
 ): Promise<TeamAccess> {
-  if (!user) return { signedIn: false, userId: null, coach: false, member: false };
-  const memberships = await membershipsFor(db, user.id);
-  const mine = memberships.find((m) => m.teamId === teamId && m.status === "active");
+  if (!user) return { signedIn: false, userId: null, coach: false };
   return {
     signedIn: true,
     userId: user.id,
-    coach: mine ? isCoach(mine.role as Role) : false,
-    member: mine !== undefined,
+    coach: await isTeamCoach(db, user.id, teamId),
   };
 }

@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { Banner, Button, Card, SectionTitle } from "./ui";
+import { PersonPicker } from "./PersonPicker";
 import { request } from "~/lib/http";
+import { describeContact } from "~/lib/identity";
 import type { Athlete } from "~/types/meet";
 
-interface Member {
+export interface LinkedAccount {
   userId: string;
-  contact: string;
   name: string | null;
-  role: string;
+  contact: string;
 }
 
 /**
@@ -18,63 +19,50 @@ interface Member {
  * so swimmers sort out their own entries — has no way to know whose entries
  * are whose.
  *
- * A coach does the linking, from the list of people already admitted to the
- * team. Self-claiming would let anyone assert they were anyone.
+ * A coach does the linking, never the person themselves: a roster record is an
+ * assertion about who somebody is, and letting anyone claim any swimmer would
+ * make it worthless.
+ *
+ * The account is searched from the whole directory. It used to be picked from
+ * the team's own members, back when a swimmer held a membership row of their
+ * own — which meant they had to ask to join and be approved before a coach
+ * could say who they were, a whole flow in front of one fact. The roster is
+ * enrollments, the account is this, and neither needs anything in between.
  */
 export function AthleteAccount({
   athlete,
   teamId,
-  onLinked,
+  linked,
 }: {
-  athlete: Athlete;
+  athlete: Pick<Athlete, "id">;
   teamId: string;
-  onLinked: (athlete: Athlete) => void;
+  linked: LinkedAccount | null;
 }) {
-  const [members, setMembers] = useState<Member[] | null>(null);
+  const [account, setAccount] = useState(linked);
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** Null while we don't know — a viewer who isn't a coach never finds out. */
-  const [allowed, setAllowed] = useState<boolean | null>(null);
 
-  const load = useCallback(() => {
-    request<{ members: Member[] }>(
-      `/api/members?teamId=${encodeURIComponent(teamId)}`,
-    )
-      .then((body) => {
-        setMembers(body.members);
-        setAllowed(true);
-      })
-      .catch(() => setAllowed(false));
-  }, [teamId]);
-
-  useEffect(load, [load]);
-
-  const linked = members?.find((m) => m.userId === athlete.userId);
-
-  const set = async (userId: string | null) => {
+  const set = async (person: LinkedAccount | null) => {
     setBusy(true);
     setError(null);
     try {
-      const body = await request<{ athlete: Athlete }>(
+      await request<{ athlete: Athlete }>(
         `/api/athletes/${encodeURIComponent(athlete.id)}/link`,
         {
           method: "POST",
-          body: JSON.stringify({ teamId, userId: userId ?? undefined }),
+          body: JSON.stringify({ teamId, userId: person?.userId }),
         },
       );
-      onLinked(body.athlete);
+      setAccount(person);
       setPicking(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "That didn't work.");
+      throw err;
     } finally {
       setBusy(false);
     }
   };
-
-  // Nothing useful to show someone who can't change it, and the member list —
-  // which is contact details — never loaded for them anyway.
-  if (allowed === false && !athlete.userId) return null;
 
   return (
     <Card>
@@ -86,28 +74,27 @@ export function AthleteAccount({
         </div>
       )}
 
-      {athlete.userId ? (
+      {account ? (
         <div className="flex items-center justify-between gap-3">
           <p className="min-w-0 text-sm">
             <span className="block truncate font-semibold">
-              {linked?.name ?? linked?.contact ?? "Linked account"}
+              {account.name ?? describeContact(account)}
             </span>
             <span className="block text-xs text-slate-500">
+              {account.name && `${describeContact(account)} · `}
               Can sign in and see their own entries.
             </span>
           </p>
-          {allowed && (
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={busy}
-              onClick={() => void set(null)}
-            >
-              Unlink
-            </Button>
-          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => void set(null).catch(() => {})}
+          >
+            Unlink
+          </Button>
         </div>
-      ) : !picking ? (
+      ) : (
         <div className="flex items-center justify-between gap-3">
           <p className="text-sm text-slate-600 dark:text-slate-300">
             No account yet.
@@ -116,47 +103,17 @@ export function AthleteAccount({
             Link an account
           </Button>
         </div>
-      ) : (
-        <div className="space-y-2">
-          {members === null ? (
-            <p className="text-sm text-slate-500">Loading…</p>
-          ) : members.length === 0 ? (
-            <p className="text-sm text-slate-500">
-              Nobody else is on this team yet. People appear here once they ask
-              to join and you let them in.
-            </p>
-          ) : (
-            <ul className="max-h-56 overflow-y-auto">
-              {members.map((member) => (
-                <li key={member.userId}>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void set(member.userId)}
-                    className="flex w-full items-center justify-between gap-2 border-b border-slate-100 py-2 text-left dark:border-slate-900"
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium">
-                        {member.name ?? member.contact}
-                      </span>
-                      {member.name && (
-                        <span className="block truncate text-xs text-slate-500">
-                          {member.contact}
-                        </span>
-                      )}
-                    </span>
-                    <span className="shrink-0 text-xs text-slate-500">
-                      {member.role.replace("_", " ")}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <Button full onClick={() => setPicking(false)}>
-            Cancel
-          </Button>
-        </div>
+      )}
+
+      {picking && (
+        <PersonPicker
+          title="Link an account"
+          exclude={[]}
+          onAppoint={(user) =>
+            set({ userId: user.userId, name: user.name, contact: user.contact })
+          }
+          onClose={() => setPicking(false)}
+        />
       )}
     </Card>
   );

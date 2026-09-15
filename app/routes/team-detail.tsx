@@ -94,7 +94,7 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
  * of the same request that loaded the page, so the controls and the endpoint
  * cannot disagree about who may use them. These used to live under Settings,
  * which picked *which* team implicitly from the signed-in coach's first
- * membership; here the team is the URL, so a coach of two can reach both.
+ * coached team; here the team is the URL, so a coach of two can reach both.
  */
 export async function action({ params, request, context }: Route.ActionArgs) {
   const env = context.cloudflare.env as SyncEnv;
@@ -276,14 +276,6 @@ export default function TeamDetail({ loaderData }: Route.ComponentProps) {
           </p>
         </div>
 
-        {!team.claimed && (
-          <div className="mt-3">
-            <Banner tone="warn">
-              Nobody has claimed this team yet. If you coach here, sign in and
-              ask to join — the first person to ask becomes its head coach.
-            </Banner>
-          </div>
-        )}
       </Card>
 
       <Card>

@@ -8,8 +8,7 @@ import {
   requireUser,
   type SyncEnv,
 } from "~/lib/api.server";
-import { canUseTeam, membershipIn, teamMembers } from "~/lib/auth.server";
-import { isCoach } from "~/lib/identity";
+import { isTeamCoach } from "~/lib/coaches.server";
 import { getAthlete, linkAthleteToUser, athleteForUser } from "~/lib/athletes.server";
 import type { Athlete } from "~/types/meet";
 
@@ -24,9 +23,12 @@ import type { Athlete } from "~/types/meet";
  * make it worthless — the coach is the one who knows which address belongs to
  * which kid.
  *
- * The account has to already be on the team, so the existing join flow does
- * the work of proving the person can read that contact. This only says which
- * of the team's people a roster row is.
+ * The account is whichever one the coach names, searched across the whole
+ * directory. It used to have to be on the team first — back when a swimmer
+ * held a `memberships` row of their own — which put a join-and-approve dance
+ * in front of the only thing that was ever being asserted here. What guards
+ * this now is who's asking (a coach of this team) and the rule below (one
+ * account, one swimmer); the contact proves itself when they sign in.
  */
 export async function action({ params, request, context }: Route.ActionArgs) {
   const env = context.cloudflare.env as SyncEnv;
@@ -38,24 +40,8 @@ export async function action({ params, request, context }: Route.ActionArgs) {
     const body = await readJson<{ teamId?: string; userId?: string }>(request);
     if (!body.teamId) throw new SyncError("Which team?", 400);
 
-    const allowed = await canUseTeam(db, actor.id, body.teamId);
-    if (!allowed.ok) throw new SyncError(allowed.reason, 403);
-
-    const mine = await membershipIn(db, actor.id, body.teamId);
-    if (!mine || !isCoach(mine.role)) {
+    if (!(await isTeamCoach(db, actor.id, body.teamId))) {
       throw new SyncError("Only a coach can link an account to a swimmer", 403);
-    }
-
-    // The target must be on this team. Without this, a coach could point one
-    // of their roster rows at any account on the server.
-    if (body.userId) {
-      const members = await teamMembers(db, body.teamId);
-      if (!members.some((m) => m.userId === body.userId)) {
-        throw new SyncError(
-          "That person isn't on this team yet. Admit them first.",
-          400,
-        );
-      }
     }
 
     const athlete = await getAthlete(db, params.athleteId);

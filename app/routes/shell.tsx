@@ -12,7 +12,7 @@ import { AccountMenu } from "~/components/AccountMenu";
 import { useViewPrefs } from "~/state/view-prefs";
 import { useOutbox } from "~/state/outbox";
 import { currentUser, type SyncEnv } from "~/lib/api.server";
-import { membershipsFor } from "~/lib/auth.server";
+import { teamsCoachedBy } from "~/lib/coaches.server";
 import { getTeam } from "~/lib/teams.server";
 import { ensureSchema } from "~/lib/schema.server";
 import { LANE_LAYOUTS, meetSubtitle, type LaneLayout } from "~/types/meet";
@@ -35,10 +35,9 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   if (!user) return { team: null };
 
   await ensureSchema(env.DB);
-  const memberships = await membershipsFor(env.DB, user.id);
-  const active = memberships.filter((m) => m.status === "active");
+  const coached = await teamsCoachedBy(env.DB, user.id);
   const teamId =
-    active.find((m) => m.teamId === user.lastTeamId)?.teamId ?? active[0]?.teamId;
+    coached.find((id) => id === user.lastTeamId) ?? coached[0];
   if (!teamId) return { team: null };
 
   return { team: await getTeam(env.DB, teamId) };

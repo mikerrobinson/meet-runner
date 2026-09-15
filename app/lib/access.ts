@@ -33,9 +33,9 @@ export const ANONYMOUS: MeetAccess = {
 export interface TeamAccess {
   signedIn: boolean;
   userId: string | null;
-  /** Coaches this team, so may change its roster and seasons. */
+  /** Coaches this team, so may change its roster and seasons. The only
+   *  standing there is: you are in `team_coaches` or you are a visitor. */
   coach: boolean;
-  member: boolean;
 }
 
 

@@ -10,45 +10,45 @@ import {
   requireUser,
   type SyncEnv,
 } from "~/lib/api.server";
+import { createInvite, inviteUser, supersedeInvites } from "~/lib/auth.server";
 import {
   addTeamCoach,
-  createInvite,
-  inviteUser,
-  membershipIn,
-  pendingRequests,
+  claimTeam,
+  isTeamCoach,
   removeTeamCoach,
-  supersedeInvites,
   teamCoaches,
-} from "~/lib/auth.server";
-import { canAdmit, parseContact } from "~/lib/identity";
+} from "~/lib/coaches.server";
+import { parseContact } from "~/lib/identity";
 import { getTeam } from "~/lib/teams.server";
 import { revealsCodes, sendTeamInvite } from "~/lib/notify.server";
 
 /**
  * Who coaches a team.
  *
- *   GET    /api/teams/:teamId/coaches                    -> the list, and who's waiting
+ *   GET    /api/teams/:teamId/coaches                    -> the list
  *   POST   /api/teams/:teamId/coaches { userId }         -> make someone here a coach
  *   POST   /api/teams/:teamId/coaches { contact, name? } -> invite someone who isn't
+ *   POST   /api/teams/:teamId/coaches { claim: true }    -> take on a team nobody coaches
  *   DELETE /api/teams/:teamId/coaches { userId }         -> take it back, or step down
  *
  * The same shape as `/api/meets/:meetId/admins`, deliberately: a team has as
  * many coaches as it needs, only a coach can add one, and it cannot go down to
- * none. Both POST forms end the same way — an active membership and a link in
- * the post — and the difference is only whether the account had to be made
- * first, which is the app's problem rather than something the screen should
- * have to ask about before it knows the answer.
+ * none. Both invite forms end the same way — a row in `team_coaches` and a
+ * link in the post — and the difference is only whether the account had to be
+ * made first, which is the app's problem rather than something the screen
+ * should have to ask about before it knows the answer.
+ *
+ * Claiming is the one thing anybody signed in may do, and only to a team with
+ * no coaches at all: that is the bootstrap, since the teams typed in as
+ * opponents have nobody inside to let their real coach in.
  */
 export async function loader({ params, request, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env as SyncEnv;
   try {
     const db = requireDb(env);
     const user = await currentUser(request, env);
-    const youCoachThis = user
-      ? canAdmit(await membershipIn(db, user.id, params.teamId))
-      : false;
-
     const coaches = await teamCoaches(db, params.teamId);
+    const youCoachThis = coaches.some((coach) => coach.userId === user?.id);
     return json({
       // Who coaches a team is as public as the team is — it's on the heat
       // sheet. How to reach them isn't, so the contact is only for the people
@@ -58,10 +58,9 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
       coaches: youCoachThis
         ? coaches
         : coaches.map((coach) => ({ ...coach, contact: null })),
-      // Who's asked to join is a coach's business, and it rides along here so
-      // the one card about people on this team needs one round trip.
-      pending: youCoachThis ? await pendingRequests(db, params.teamId) : [],
       youCoachThis,
+      /** True when this team is anybody's for the asking — see `claimTeam`. */
+      claimable: coaches.length === 0,
     });
   } catch (error) {
     return errorResponse(error);
@@ -74,15 +73,25 @@ export async function action({ params, request, context }: Route.ActionArgs) {
     const db = requireDb(env);
     const user = await requireUser(request, env);
 
-    if (!canAdmit(await membershipIn(db, user.id, params.teamId))) {
-      throw new SyncError("Only a coach of this team can change that", 403);
-    }
-
     const body = await readJson<{
       userId?: string;
       contact?: string;
       name?: string;
+      claim?: boolean;
     }>(request);
+
+    // Taking on an unclaimed team is the one move that doesn't require being
+    // inside already, so it's answered before the check everything else goes
+    // through. `claimTeam` refuses the moment anybody is there.
+    if (request.method === "POST" && body.claim) {
+      const claimed = await claimTeam(db, params.teamId, user.id);
+      if (!claimed.ok) throw new SyncError(claimed.reason, 409);
+      return json({ coaches: await teamCoaches(db, params.teamId) });
+    }
+
+    if (!(await isTeamCoach(db, user.id, params.teamId))) {
+      throw new SyncError("Only a coach of this team can change that", 403);
+    }
 
     if (request.method === "DELETE") {
       if (!body.userId) throw new SyncError("Which person?", 400);
@@ -117,7 +126,7 @@ export async function action({ params, request, context }: Route.ActionArgs) {
     });
     const token = await createInvite(
       db,
-      { teamId: params.teamId, role: "coach", contact: parsed.contact.value },
+      { teamId: params.teamId, contact: parsed.contact.value },
       user.id,
     );
     const link = `${appBaseUrl(request)}sign-in?invite=${encodeURIComponent(token)}`;

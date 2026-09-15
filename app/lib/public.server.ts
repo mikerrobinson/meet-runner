@@ -11,7 +11,7 @@
  */
 
 import { ensureSchema } from "./schema.server";
-import { ensureAuthStore } from "./auth.server";
+import { coachedTeams, teamsCoachedBy } from "./coaches.server";
 import { athleteRow, type AthleteRow } from "./athletes.server";
 import { teamRow, type TeamRow } from "./teams.server";
 import { listMeets, meetDetail } from "./meets.server";
@@ -78,21 +78,6 @@ async function teamCounts(
   return counts;
 }
 
-/**
- * Which teams somebody has signed in as a coach of.
- *
- * `memberships` belongs to the account tables rather than the domain schema,
- * so this is the one query that spans both — and on a database nobody has
- * signed into yet, the auth side may not exist at all.
- */
-async function claimedTeams(db: D1Database): Promise<Set<string>> {
-  await ensureAuthStore(db);
-  const { results } = await db
-    .prepare("SELECT DISTINCT team_id FROM memberships WHERE status = 'active'")
-    .all<{ team_id: string }>();
-  return new Set(results.map((r) => r.team_id));
-}
-
 export async function listPublicTeams(db: D1Database): Promise<PublicTeam[]> {
   await ensureSchema(db);
   const { results } = await db
@@ -101,7 +86,7 @@ export async function listPublicTeams(db: D1Database): Promise<PublicTeam[]> {
   const ids = results.map((r) => r.id);
   const [counts, claimed] = await Promise.all([
     teamCounts(db, ids),
-    claimedTeams(db),
+    coachedTeams(db),
   ]);
 
   return results.map((row) => {
@@ -178,7 +163,7 @@ export async function publicTeamDetail(
         }
       >(),
     teamCounts(db, [teamId]),
-    claimedTeams(db),
+    coachedTeams(db),
     listMeets(db, { teamId }),
   ]);
 
@@ -377,7 +362,8 @@ export async function publicAthleteDetail(
 export interface UserDashboard {
   userId: string;
   name: string | null;
-  teams: Array<TeamRef & { role: string; status: string }>;
+  /** The teams this person coaches. */
+  teams: TeamRef[];
   meets: PublicMeetSummary[];
   /** The athlete record this account is, when one has been linked. */
   athlete: PublicAthlete | null;
@@ -395,13 +381,8 @@ export async function userDashboard(
     .first<{ id: string; name: string | null }>();
   if (!user) return null;
 
-  const { results: memberships } = await db
-    .prepare("SELECT team_id, role, status FROM memberships WHERE user_id = ?")
-    .bind(userId)
-    .all<{ team_id: string; role: string; status: string }>();
-
-  const teamIds = memberships.map((m) => m.team_id);
-  const teams: Array<TeamRef & { role: string; status: string }> = [];
+  const teamIds = await teamsCoachedBy(db, userId);
+  const teams: TeamRef[] = [];
   if (teamIds.length > 0) {
     const { results } = await db
       .prepare(
@@ -409,14 +390,7 @@ export async function userDashboard(
       )
       .bind(...teamIds)
       .all<TeamRow>();
-    for (const row of results) {
-      const membership = memberships.find((m) => m.team_id === row.id)!;
-      teams.push({
-        ...teamRef(teamRow(row)),
-        role: membership.role,
-        status: membership.status,
-      });
-    }
+    for (const row of results) teams.push(teamRef(teamRow(row)));
   }
 
   const linked = await db

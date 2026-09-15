@@ -162,7 +162,7 @@ export function MeetAdmins({ meetId }: { meetId: string }) {
           inviteTitle="Invite an admin"
           inviteHint="We'll send a link that signs them in and opens this meet."
           exclude={admins.map((a) => a.userId)}
-          onAppoint={(userId) => add({ userId })}
+          onAppoint={(user) => add({ userId: user.userId })}
           onInvite={(contact, name) => add({ contact, name })}
           onClose={() => setAdding(false)}
         />

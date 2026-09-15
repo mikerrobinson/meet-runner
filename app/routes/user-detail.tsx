@@ -81,7 +81,8 @@ export default function UserDetail({ loaderData }: Route.ComponentProps) {
         <SectionTitle>Your teams</SectionTitle>
         {dashboard.teams.length === 0 ? (
           <EmptyState title="No teams yet">
-            Ask to join one and a coach will let you in.
+            Start one, take on a team nobody coaches, or wait for a coach to add
+            you to theirs.
           </EmptyState>
         ) : (
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -96,8 +97,7 @@ export default function UserDetail({ loaderData }: Route.ComponentProps) {
                       {team.name}
                     </span>
                     <span className="block text-xs text-slate-500">
-                      {team.role.replace("_", " ")}
-                      {team.status !== "active" && ` · ${team.status}`}
+                      Coach{team.code && ` · ${team.code}`}
                     </span>
                   </span>
                   <span aria-hidden className="shrink-0 text-slate-400">

@@ -18,7 +18,6 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS meet_grants (
      token_hash TEXT PRIMARY KEY,
      meet_id TEXT NOT NULL,
-     team_id TEXT NOT NULL,
      created_at INTEGER NOT NULL,
      expires_at INTEGER NOT NULL,
      revoked_at INTEGER
@@ -90,7 +89,7 @@ export function grantExpiry(meetDate: string, now = Date.now()): number {
  */
 export async function issueGrant(
   db: D1Database,
-  meet: { id: string; teamId: string; date: string },
+  meet: { id: string; date: string },
   now = Date.now(),
 ): Promise<{ token: string; expiresAt: number }> {
   await ensureGrantStore(db);
@@ -105,10 +104,10 @@ export async function issueGrant(
   const expiresAt = grantExpiry(meet.date, now);
   await db
     .prepare(
-      `INSERT INTO meet_grants (token_hash, meet_id, team_id, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO meet_grants (token_hash, meet_id, created_at, expires_at)
+       VALUES (?, ?, ?, ?)`,
     )
-    .bind(await hash(token), meet.id, meet.teamId, now, expiresAt)
+    .bind(await hash(token), meet.id, now, expiresAt)
     .run();
 
   return { token, expiresAt };
@@ -227,7 +226,6 @@ export function deviceCookie(
 
 export interface Grant {
   meetId: string;
-  teamId: string;
   expiresAt: number;
 }
 
@@ -241,15 +239,13 @@ export async function grantFor(
   await ensureGrantStore(db);
   const row = await db
     .prepare(
-      `SELECT meet_id, team_id, expires_at FROM meet_grants
+      `SELECT meet_id, expires_at FROM meet_grants
        WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?`,
     )
     .bind(await hash(token), now)
-    .first<{ meet_id: string; team_id: string; expires_at: number }>();
+    .first<{ meet_id: string; expires_at: number }>();
 
-  return row
-    ? { meetId: row.meet_id, teamId: row.team_id, expiresAt: row.expires_at }
-    : null;
+  return row ? { meetId: row.meet_id, expiresAt: row.expires_at } : null;
 }
 
 /** Whether a meet currently has a working grant, for the coach's screen. */

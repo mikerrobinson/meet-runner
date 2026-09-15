@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Banner, Button, Field, Sheet, TextInput } from "./ui";
 import { request } from "~/lib/http";
 
-interface DirectoryUser {
+export interface DirectoryUser {
   userId: string;
   name: string | null;
   contact: string;
@@ -36,13 +36,25 @@ export function PersonPicker({
   onClose,
 }: {
   title: string;
-  inviteTitle: string;
+  inviteTitle?: string;
   /** What the link will do for them, said on the invite form. */
-  inviteHint: string;
+  inviteHint?: string;
   exclude: string[];
-  /** Both may throw; the message is shown here and the sheet stays open. */
-  onAppoint: (userId: string) => Promise<void>;
-  onInvite: (contact: string, name?: string) => Promise<void>;
+  /**
+   * Both may throw; the message is shown here and the sheet stays open.
+   *
+   * The whole person is handed over rather than an id, so a caller that wants
+   * to show who was picked doesn't have to read back what the list already
+   * said.
+   */
+  onAppoint: (user: DirectoryUser) => Promise<void>;
+  /**
+   * Left off when this picker can't make an account. Linking a swimmer is the
+   * case: inviting somebody is how you hand out a job, and the only job a team
+   * has to hand out is coaching it — which is not what naming a roster row's
+   * account means.
+   */
+  onInvite?: (contact: string, name?: string) => Promise<void>;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -75,11 +87,11 @@ export function PersonPicker({
 
   const candidates = (found ?? []).filter((u) => !exclude.includes(u.userId));
 
-  const appoint = async (userId: string) => {
+  const appoint = async (user: DirectoryUser) => {
     setBusy(true);
     setError(null);
     try {
-      await onAppoint(userId);
+      await onAppoint(user);
     } catch (err) {
       setError(err instanceof Error ? err.message : "That didn't work.");
     } finally {
@@ -121,7 +133,7 @@ export function PersonPicker({
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => void appoint(user.userId)}
+                  onClick={() => void appoint(user)}
                   className="flex w-full items-center justify-between gap-2 border-b border-slate-100 py-2 text-left dark:border-slate-900"
                 >
                   <span className="min-w-0">
@@ -145,18 +157,20 @@ export function PersonPicker({
           </ul>
         )}
 
-        <Button full onClick={() => setInviting(true)} disabled={busy}>
-          Invite someone new
-        </Button>
+        {onInvite && (
+          <Button full onClick={() => setInviting(true)} disabled={busy}>
+            Invite someone new
+          </Button>
+        )}
         <Button full variant="ghost" onClick={onClose} disabled={busy}>
           Cancel
         </Button>
       </div>
 
-      {inviting && (
+      {inviting && onInvite && (
         <InviteSheet
-          title={inviteTitle}
-          hint={inviteHint}
+          title={inviteTitle ?? "Invite someone"}
+          hint={inviteHint ?? "We'll send a link that signs them in."}
           // What was typed is very often the address they were about to send
           // to, so it carries over rather than being typed twice.
           initial={typed}

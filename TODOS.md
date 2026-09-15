@@ -294,3 +294,31 @@ lane that hadn't stopped. Could require a confirm while lanes are outstanding.
 ## Your ideas
 
 <!-- add below -->
+
+### ~~`memberships` → `team_coaches`~~ — done
+
+`memberships` carried a `role` of five values and a `status` of two so it could
+describe a coach, an athlete, a parent, a viewer and somebody waiting to be let
+in. Only the first ever changed what the code did — every check in the app was
+`isCoach()` or `canAdmit()` — and the rest described relationships that already
+lived somewhere truer: a swimmer is on a team because they're *enrolled* in one
+of its seasons, and their account is tied to them by `athletes.user_id`.
+
+It's now `team_coaches (team_id, user_id, added_at, added_by)`, the same shape
+as `meet_admins`, in `coaches.server.ts` beside `admins.server.ts`. "May I?" is
+"am I in the list?" on both sides. `ensureCoachStore` carries the coach rows
+across and drops the old table — one-shot, and the absence of the table is the
+flag that it ran.
+
+Gone with it: asking to join and being approved (getting onto a team that has a
+coach is the coach's move now, as it is for a meet), the role on an invitation,
+`GET /api/memberships`, `/api/members`, `ROLES`/`ROLE_LABELS`/`isCoach`/
+`canAdmit`/`rank`, and the "must already be on this team" check in front of
+linking a swimmer's account.
+
+Asymmetry worth keeping straight: a meet is always created with an
+administrator, a team may start with none. An empty coach list *is* unclaimed,
+and it's the only time somebody can add themselves — `POST
+/api/teams/:id/coaches { claim: true }`. Falling back into that state from one
+coach would mean a team anybody could take over, so removing the last coach is
+refused.

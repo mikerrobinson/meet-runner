@@ -10,6 +10,7 @@ import { teamAccess } from "~/lib/access.server";
 import { getAthlete, putAthlete } from "~/lib/athletes.server";
 import { enrol, listSeasons, getTeam } from "~/lib/teams.server";
 import { publicAthleteDetail } from "~/lib/public.server";
+import { describeUser } from "~/lib/auth.server";
 import { seasonForDate } from "~/lib/roster";
 import { ensureSchema } from "~/lib/schema.server";
 import { ageOn, athleteName, todayIso, type Gender } from "~/types/meet";
@@ -69,6 +70,11 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
     detail,
     // Birth date is a coach's to see, so it travels only when one is asking.
     birthDate: coach ? (athlete?.birthDate ?? null) : null,
+    // Who the linked account is. A contact, so only for the coach who linked
+    // it — and read here rather than by the card, because the card would need
+    // an endpoint that names any account from its id.
+    linked:
+      coach && athlete?.userId ? await describeUser(db, athlete.userId) : null,
     access: { coach },
     enrollment,
     season,
@@ -317,7 +323,11 @@ export default function AthleteDetail({ loaderData }: Route.ComponentProps) {
 
       {mayEdit && teamId && (
         <>
-          <AthleteAccount athlete={athlete} teamId={teamId} onLinked={() => {}} />
+          <AthleteAccount
+            athlete={athlete}
+            teamId={teamId}
+            linked={loaderData.linked ?? null}
+          />
 
           <Card>
             <SectionTitle>Roster</SectionTitle>

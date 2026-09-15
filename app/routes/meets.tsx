@@ -13,9 +13,10 @@ import {
   TextInput,
 } from "~/components/ui";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
-import { membershipsFor } from "~/lib/auth.server";
+import { coachedTeamsFor } from "~/lib/auth.server";
 import { createMeet, listMeets, type MeetSummary } from "~/lib/meets.server";
 import { addMeetAdmin } from "~/lib/admins.server";
+import { teamsCoachedBy } from "~/lib/coaches.server";
 import { defaultEvents, dualMeetRaceCount } from "~/lib/events";
 import { addEventsToMeet } from "~/lib/meets.server";
 import { useSession } from "~/state/session";
@@ -47,14 +48,16 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env as SyncEnv;
   const db = requireDb(env);
 
-  // The teams this person is on, so the new-meet sheet can start with their
-  // own school already racing. `membershipsFor` carries the name and code
+  // The teams this person coaches, so the new-meet sheet can start with their
+  // own school already racing. `coachedTeamsFor` carries the name and code
   // along, so naming them costs no second query.
   const user = await currentUser(request, env);
   const myTeams = user
-    ? (await membershipsFor(db, user.id))
-        .filter((m) => m.status === "active")
-        .map((m) => ({ id: m.teamId, name: m.name, code: m.code }))
+    ? (await coachedTeamsFor(db, user.id)).map((team) => ({
+        id: team.teamId,
+        name: team.name,
+        code: team.code,
+      }))
     : [];
 
   return { meets: await listMeets(db), myTeams };
@@ -80,26 +83,23 @@ export async function action({ request, context }: Route.ActionArgs) {
   /**
    * Who's racing, as chosen on the form.
    *
-   * The sheet starts with the teams this person is on — a meet belongs to none
-   * of them, this just saves picking your own school from a list every time —
+   * The sheet starts with the teams this person coaches — a meet belongs to
+   * none of them, this just saves picking your own school from a list —
    * and they can drop it, so what comes back is the answer rather than a
    * suggestion. The fallback is for a form posted without the field at all:
    * a meet with nobody racing can hold no entries, and silently creating one
    * is worse than assuming the obvious.
    */
   const chosen = form.getAll("teamId").map(String).filter(Boolean);
-  const memberships = await membershipsFor(db, user.id);
-  const teamIds = chosen.length
-    ? [...new Set(chosen)]
-    : memberships.filter((m) => m.status === "active").map((m) => m.teamId);
+  const mine = await teamsCoachedBy(db, user.id);
+  const teamIds = chosen.length ? [...new Set(chosen)] : mine;
 
   // The pool it's swum in, defaulting to the creator's own team when they're
   // racing. Changed on the meet's own page afterwards.
   const host = String(form.get("hostTeamId") ?? "");
   const hostTeamId = teamIds.includes(host)
     ? host
-    : (teamIds.find((id) => memberships.some((m) => m.teamId === id)) ??
-      teamIds[0]);
+    : (teamIds.find((id) => mine.includes(id)) ?? teamIds[0]);
 
   const meet = await createMeet(db, {
     name: name || suggested || meetTypeLabel(type),

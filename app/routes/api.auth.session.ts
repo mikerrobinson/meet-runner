@@ -14,16 +14,16 @@ import {
   endAllSessions,
   endSession,
   sessionCookie,
-  membershipIn,
   sessionPayload,
   setLastPlace,
   setName,
 } from "~/lib/auth.server";
+import { isTeamCoach } from "~/lib/coaches.server";
 
 /**
  * The session this device holds.
  *
- *   GET    -> { user, memberships, openTeamId, joinable } or { user: null }
+ *   GET    -> { user, teams, openTeamId, joinable } or { user: null }
  *   PATCH  -> same, after recording a name or where they are
  *   DELETE -> sign out (`?everywhere` for every device)
  *
@@ -68,11 +68,10 @@ export async function action({ request, context }: Route.ActionArgs) {
     }>(request);
 
     if (body.name !== undefined) await setName(db, user.id, body.name);
-    // Where someone is only counts once they're actually on the team, so a
+    // Where someone is only counts once they actually coach the team, so a
     // stale or hopeful team id can't be parked on the account.
     if (body.lastTeamId) {
-      const membership = await membershipIn(db, user.id, body.lastTeamId);
-      if (membership?.status === "active") {
+      if (await isTeamCoach(db, user.id, body.lastTeamId)) {
         await setLastPlace(db, user.id, body.lastTeamId, body.lastSeasonId ?? null);
       }
     }

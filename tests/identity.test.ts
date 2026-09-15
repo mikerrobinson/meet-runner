@@ -3,7 +3,6 @@ import {
   CODE_LENGTH,
   CODE_TTL_MS,
   MAX_ATTEMPTS,
-  canAdmit,
   checkChallenge,
   formatContact,
   maskContact,
@@ -13,7 +12,6 @@ import {
   parseContact,
   teamToOpen,
   timingSafeEqual,
-  type Membership,
 } from "../app/lib/identity.ts";
 
 /* ---------------------------------------------------------------- contacts */
@@ -128,63 +126,34 @@ eq(
   "the last permitted attempt still counts",
 );
 
-/* ------------------------------------------------------------------- roles */
-
-const active = (role: Membership["role"]): Membership => ({
-  teamId: "t1",
-  role,
-  status: "active",
-});
-
-eq(canAdmit(active("head_coach")), true, "a head coach can let people in");
-eq(canAdmit(active("coach")), true, "so can a coach");
-eq(canAdmit(active("athlete")), false, "an athlete can't");
-eq(canAdmit(active("parent")), false, "nor a parent");
-eq(canAdmit(active("viewer")), false, "nor a viewer");
-eq(canAdmit(undefined), false, "nor someone who isn't on the team at all");
-
-// The one that would actually hurt: a request that hasn't been approved yet
-// must not carry the powers of the role it asked for.
-eq(
-  canAdmit({ teamId: "t1", role: "head_coach", status: "pending" }),
-  false,
-  "a pending head coach can do nothing yet",
-);
-
 /* --------------------------------------------------------- which team opens */
 
-const memberships: Membership[] = [
-  { teamId: "chap", role: "head_coach", status: "active" },
-  { teamId: "horizon", role: "coach", status: "active" },
-  { teamId: "central", role: "viewer", status: "pending" },
-];
+// The teams somebody coaches, in the order they took them on. There is no
+// role or standing to filter by any more — coaching a team is a row in
+// `team_coaches`, so being in this list is the whole of it.
+const coached = ["chap", "horizon"];
 
-eq(teamToOpen(memberships, {}), "chap", "with nothing else to go on, the first team");
+eq(teamToOpen(coached, {}), "chap", "with nothing else to go on, the first team");
 eq(
-  teamToOpen(memberships, { lastTeamId: "horizon" }),
+  teamToOpen(coached, { lastTeamId: "horizon" }),
   "horizon",
   "where they were last beats the first",
 );
 eq(
-  teamToOpen(memberships, { lastTeamId: "horizon", invitedTeamId: "chap" }),
+  teamToOpen(coached, { lastTeamId: "horizon", invitedTeamId: "chap" }),
   "chap",
   "an invitation they just followed beats where they were",
 );
 eq(
-  teamToOpen(memberships, { lastTeamId: "gone" }),
+  teamToOpen(coached, { lastTeamId: "gone" }),
   "chap",
-  "a team they've been removed from is ignored",
+  "a team they no longer coach is ignored",
 );
 eq(
-  teamToOpen(memberships, { invitedTeamId: "central" }),
+  teamToOpen(coached, { invitedTeamId: "central" }),
   "chap",
-  "an invite to a team still pending approval doesn't open it",
+  "and so is an invitation to one they were never added to",
 );
 eq(teamToOpen([], {}), null, "somebody with no teams has nothing to open");
-eq(
-  teamToOpen([{ teamId: "central", role: "viewer", status: "pending" }], {}),
-  null,
-  "and a pending request is not a team you're on",
-);
 
 done();

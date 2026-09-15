@@ -1,14 +1,12 @@
 /**
  * The client half of signing in.
  *
- * Thin on purpose: every rule about codes, roles and which team to open lives
- * on the server or in `identity.ts`, and this is only the shape of the
- * conversation.
+ * Thin on purpose: every rule about codes and which team to open lives on the
+ * server or in `identity.ts`, and this is only the shape of the conversation.
  */
 
 import { request } from "./http";
 import { saveSessionToken } from "./storage";
-import type { MembershipStatus, Role } from "./identity";
 
 export interface SessionUser {
   id: string;
@@ -18,30 +16,24 @@ export interface SessionUser {
   lastSeasonId: string | null;
 }
 
-export interface TeamMembership {
+/** A team, as the session knows it: what it's called and how big it is. */
+export interface SessionTeam {
   teamId: string;
-  role: Role;
-  status: MembershipStatus;
   name: string;
   code: string;
   athletes: number;
   meets: number;
-  requestedAt: number;
 }
 
-export interface JoinableTeam {
-  teamId: string;
-  name: string;
-  code: string;
-  athletes: number;
-  meets: number;
+export interface JoinableTeam extends SessionTeam {
+  /** False when nobody coaches it yet, which is what makes it claimable. */
   claimed: boolean;
-  status?: MembershipStatus;
 }
 
 export interface Session {
   user: SessionUser | null;
-  memberships: TeamMembership[];
+  /** The teams this person coaches. There is no other standing to have. */
+  teams: SessionTeam[];
   openTeamId: string | null;
   joinable: JoinableTeam[];
 }
@@ -49,7 +41,7 @@ export interface Session {
 /** A signed-out session, so callers never have to handle a null of their own. */
 export const SIGNED_OUT: Session = {
   user: null,
-  memberships: [],
+  teams: [],
   openTeamId: null,
   joinable: [],
 };
@@ -57,7 +49,7 @@ export const SIGNED_OUT: Session = {
 function normalize(body: Partial<Session>): Session {
   return {
     user: body.user ?? null,
-    memberships: body.memberships ?? [],
+    teams: body.teams ?? [],
     openTeamId: body.openTeamId ?? null,
     joinable: body.joinable ?? [],
   };
@@ -150,41 +142,30 @@ export async function signOut(everywhere = false): Promise<void> {
 }
 
 /**
- * Ask to join a team, or — with `create` — declare a team id as a new team of
- * your own. The second is how a coach with no team gets one: the id is minted
- * on the device, claimed here, and only then synced.
+ * Take on a team nobody coaches.
+ *
+ * The only way into a team from outside it, and it only works while the team
+ * has no coaches at all — see `claimTeam` on the server. Answers with the
+ * fresh session, so the screen that called it can move on.
  */
-export async function askToJoin(
-  teamId: string,
-  create = false,
-  name?: string,
-): Promise<Session & { claimed: boolean }> {
-  const body = await request<Session & { claimed: boolean }>("/api/memberships", {
+export async function claimTeam(teamId: string): Promise<Session> {
+  await request(`/api/teams/${encodeURIComponent(teamId)}/coaches`, {
     method: "POST",
-    body: JSON.stringify({ teamId, create, name }),
+    body: JSON.stringify({ claim: true }),
   });
-  return { ...normalize(body), claimed: body.claimed };
+  return readSession();
 }
 
-export interface PendingRequest {
-  userId: string;
-  contact: string;
-  name: string | null;
-  requestedAt: number;
-}
-
-export async function decideRequest(
-  teamId: string,
-  userId: string,
-  admit: boolean,
-  role?: Role,
-): Promise<Session> {
-  return normalize(
-    await request<Partial<Session>>("/api/memberships", {
-      method: "PATCH",
-      body: JSON.stringify({ teamId, userId, admit, role }),
-    }),
-  );
+/** Start a team, with yourself coaching it. */
+export async function startTeam(
+  name: string,
+  code?: string,
+): Promise<{ session: Session; teamId: string }> {
+  const body = await request<{ team: { id: string } }>("/api/teams", {
+    method: "POST",
+    body: JSON.stringify({ name, code, coach: true }),
+  });
+  return { session: await readSession(), teamId: body.team.id };
 }
 
 /**
@@ -193,7 +174,7 @@ export async function decideRequest(
  * one of the people running that meet.
  */
 export type InviteInfo =
-  | { kind: "team"; teamId: string; role: Role; name: string; code: string }
+  | { kind: "team"; teamId: string; name: string; code: string }
   | { kind: "meet"; meetId: string; name: string; date: string; contact: string };
 
 /** What a link joins, read before anyone has signed in. */
@@ -201,12 +182,12 @@ export async function inspectInvite(token: string): Promise<InviteInfo> {
   return request(`/api/invites?token=${encodeURIComponent(token)}`);
 }
 
+/** A link that makes whoever opens it a coach of this team. */
 export async function createInvite(
   teamId: string,
-  role: Role,
-): Promise<{ token: string; role: Role; url: string }> {
+): Promise<{ token: string; url: string }> {
   return request("/api/invites", {
     method: "POST",
-    body: JSON.stringify({ teamId, role }),
+    body: JSON.stringify({ teamId }),
   });
 }

@@ -167,9 +167,9 @@ export function seasonForDate(
  * Make a team.
  *
  * `createdBy` is who set it up, recorded the same way a meet records it: not a
- * permission — coaching a team is a membership, and the creator holds one of
- * those too — but the answer to "where did this come from", which matters most
- * for the placeholder teams typed in as opponents.
+ * permission — coaching a team is a row in `team_coaches`, and the creator
+ * gets one of those too — but the answer to "where did this come from", which
+ * matters most for the placeholder teams typed in as opponents.
  */
 export async function createTeam(
   db: D1Database,

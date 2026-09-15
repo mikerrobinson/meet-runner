@@ -54,7 +54,7 @@ export async function action({ request, context }: Route.ActionArgs) {
       // bounced back to a screen that says nothing.
       if (!redeemed.ok) inviteError = redeemed.error;
       else if (redeemed.kind === "meet") invitedMeetId = redeemed.meetId;
-      else invitedTeamId = redeemed.membership.teamId;
+      else invitedTeamId = redeemed.teamId;
     }
 
     const token = await createSession(db, result.user.id);
