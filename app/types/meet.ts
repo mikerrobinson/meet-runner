@@ -432,20 +432,88 @@ export type ResultStatus = "OK" | "DQ" | "NS";
  * Keyed by heat, lane and timer, so sending the same watch twice — a retry
  * after the wifi drops at the wall — is an update rather than a duplicate.
  */
+export type WatchRole = "timer" | "coach" | "admin";
+
+/**
+ * A stopwatch that has been armed on a lane, and perhaps stopped.
+ *
+ * Not a watch: a watch is evidence of a time somebody swam, and this is only
+ * the fact that a thumb has been pressed. It exists so the desk can tell a
+ * lane nobody is covering from one whose timers are simply still holding their
+ * clocks — a question worth asking *before* the race rather than after.
+ */
+export interface TimerActivity {
+  heatId: string;
+  lane: number;
+  timerId: string;
+  /**
+   * When the watch was started and stopped, **on the server's clock**.
+   *
+   * Translated from the phone's own on the way in, because this is the one
+   * place an absolute time is compared across devices: the desk draws a
+   * running stopwatch from it, which means measuring a phone's start against
+   * the desk's now. Everywhere else a phone's clock is only trusted to order
+   * that phone's own actions.
+   */
+  startedAt?: number;
+  stoppedAt?: number;
+  updatedAt: number;
+}
+
 export interface Watch {
   heatId: string;
   /** 1-based lane. The watch times a lane; who was in it comes from the seat. */
   lane: number;
-  /** Whoever took it: a device, or a signed-in timer. */
+  /**
+   * Whoever took it, and the key one watch per lane is filed under.
+   *
+   * A device id for a volunteer behind a lane, who has no account and is
+   * identified only by the phone they scanned with. A *user* id for anybody
+   * signed in — a coach on the multi-lane stopwatch, an administrator typing
+   * a time at the desk — so that person keeps one watch per lane whichever
+   * device they happen to pick up.
+   */
   timerId: string;
+  /**
+   * What the submitter was to this meet when they took it.
+   *
+   * Not derivable from the watch, and not re-derivable later: a coach who is
+   * made an administrator in March must not retroactively turn the watch they
+   * held in January into the official's own reading. Recorded at the moment
+   * of submission for the same reason a sign-off snapshots the watches — a
+   * record of a decision has to say what was true when it was made.
+   *
+   * `timer` is a volunteer behind a lane with no account. `coach` is a coach
+   * of a racing team. `admin` is whoever runs the meet, whose reading stands
+   * over the rest.
+   */
+  role: WatchRole;
+  /**
+   * The account behind it, when there was one.
+   *
+   * Set for coaches and administrators, absent for a QR-code timer. Its
+   * presence is what tells a person from a phone, and it is what a screen
+   * joins on to show a name instead of `d-4f2a91b3`. The server sets it from
+   * the session rather than believing the client, because a watch that
+   * claimed to be somebody else's would be evidence with the wrong name on it.
+   */
+  userId?: string;
   /** Elapsed time in milliseconds, measured on the timer's own device. */
   timeMs: number;
   recordedAt: number;
-  /** How it arrived: a stopwatch tap, or typed in afterwards. */
-  source: "stopwatch" | "typed";
   /**
-   * When the watch was started and stopped, on the timer's own clock. Nothing
-   * reads these yet; they're recorded because they can't be recovered later.
+   * When the watch was started and stopped, on the submitter's own clock.
+   *
+   * Both present means a stopwatch in this app ran the race; neither means the
+   * time was typed in — off a handheld, off the board, or from the desk. There
+   * is no separate "source" field saying which, because it could only ever
+   * repeat what these two already say, and a field that restates another is a
+   * field that can contradict it.
+   *
+   * Absolute timestamps from a phone whose clock may be minutes out, so they
+   * order one device's own actions and nothing else. The time itself is
+   * `timeMs`, a difference between two readings of one clock, which is the
+   * only thing about that clock worth trusting.
    */
   startedAt?: number;
   stoppedAt?: number;
@@ -530,6 +598,8 @@ export interface MeetDetail {
   heats: Heat[];
   watches: Watch[];
   calls: LaneCall[];
+  /** Which stopwatches are armed, so the desk can see a lane being covered. */
+  activity: TimerActivity[];
   /** Everyone these rows refer to, so no screen has to fetch people itself. */
   athletes: Athlete[];
   /**

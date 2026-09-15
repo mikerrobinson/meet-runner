@@ -6,8 +6,7 @@ import {
   requireDb,
   type SyncEnv,
 } from "~/lib/api.server";
-import { bearerToken } from "~/lib/auth.server";
-import { grantFor } from "~/lib/grants.server";
+import { grantFor, grantToken } from "~/lib/grants.server";
 import { timerSnapshot } from "~/lib/timer.server";
 
 /**
@@ -23,7 +22,18 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env as SyncEnv;
   try {
     const db = requireDb(env);
-    const grant = await grantFor(db, bearerToken(request));
+    // Two different answers, because they need two different things done
+    // about them: somebody who opened `/timer` directly has never scanned
+    // anything, and telling them their link expired sends them looking for a
+    // link they never had.
+    const token = grantToken(request);
+    if (!token) {
+      throw new SyncError(
+        "Scan the code your coach gave you to start timing.",
+        401,
+      );
+    }
+    const grant = await grantFor(db, token);
     if (!grant) {
       throw new SyncError("This timing link has expired. Scan the code again.", 403);
     }

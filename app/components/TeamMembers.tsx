@@ -17,14 +17,14 @@ import {
 import { useSession } from "~/state/session";
 
 /**
- * The account, as far as anyone needs to see it.
+ * Letting people onto a team: who is waiting, and a link to hand someone.
  *
- * Who you are, what you are on this team, who's waiting to be let in, and a
- * link to hand someone else. Everything here is a coach's business; an athlete
- * or a parent will get a much shorter version of this card when those roles
- * arrive.
+ * Lives on the team's own page, because that is what it is about. It used to
+ * be the "Account" card on Settings and carried the signed-in identity and
+ * the sign-out buttons along with it — which put signing out on whatever page
+ * happened to show the card, and duplicated what Profile already says.
  */
-export function AccountPanel() {
+export function TeamMembers({ teamId: forTeam }: { teamId?: string } = {}) {
   const session = useSession();
 
   const [pending, setPending] = useState<PendingRequest[]>([]);
@@ -37,12 +37,15 @@ export function AccountPanel() {
   /**
    * The team this panel is about.
    *
-   * Whichever active membership the account has — the panel exists to admit
-   * people to a team you coach, and a coach of two is rare enough that the
-   * first one is the right default rather than a picker nobody needs.
+   * Named by whoever rendered it — it lives on a team's own page, so the team
+   * is the URL. It used to pick the account's first active membership, which
+   * meant a coach of two schools could admit people to one of them and had no
+   * way to reach the other.
    */
-  const membership = session.memberships.find((m) => m.status === "active");
-  const teamId = membership?.teamId ?? "";
+  const membership = session.memberships.find(
+    (m) => m.status === "active" && (!forTeam || m.teamId === forTeam),
+  );
+  const teamId = forTeam || membership?.teamId || "";
   const teamName = membership?.name ?? "your team";
   const coach = canAdmit(membership);
 
@@ -101,24 +104,13 @@ export function AccountPanel() {
 
   return (
     <Card>
-      <SectionTitle>Account</SectionTitle>
+      <SectionTitle>Who&rsquo;s on this team</SectionTitle>
 
       <p className="text-sm text-slate-600 dark:text-slate-300">
-        Signed in as <strong>{session.user && describeContact(session.user)}</strong>
-        {membership && ` — ${ROLE_LABELS[membership.role].toLowerCase()} of ${teamName}`}.
+        You are {membership ? ROLE_LABELS[membership.role].toLowerCase() : "a member"}{" "}
+        of {teamName}.
         {session.stale && " (last known; the server is unreachable right now)"}
       </p>
-
-      {session.user && (
-        <p className="mt-1 text-sm">
-          <Link
-            to={`/users/${session.user.id}`}
-            className="font-semibold text-blue-600"
-          >
-            Your teams, meets and times ›
-          </Link>
-        </p>
-      )}
 
       {error && (
         <div className="mt-3">
@@ -209,19 +201,7 @@ export function AccountPanel() {
         </div>
       )}
 
-      <div className="mt-4 flex gap-2">
-        <Button size="sm" disabled={busy} onClick={() => void session.signOut()}>
-          Sign out
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy}
-          onClick={() => void session.signOut(true)}
-        >
-          Sign out everywhere
-        </Button>
-      </div>
+
     </Card>
   );
 }

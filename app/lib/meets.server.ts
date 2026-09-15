@@ -32,6 +32,7 @@ import type {
   Seat,
   Stroke,
   Team,
+  TimerActivity,
   Watch,
 } from "~/types/meet";
 import { athleteRow, type AthleteRow } from "./athletes.server";
@@ -127,8 +128,9 @@ interface WatchRow {
   heat_id: string;
   lane: number;
   timer_id: string;
+  user_id: string | null;
+  role: string | null;
   time_ms: number;
-  source: string;
   recorded_at: number;
   started_at: number | null;
   stopped_at: number | null;
@@ -139,11 +141,40 @@ function watchFrom(row: WatchRow): Watch {
     heatId: row.heat_id,
     lane: row.lane,
     timerId: row.timer_id,
+    userId: row.user_id ?? undefined,
+    // Rows from before the column existed: a watch with an account behind it
+    // was a coach's or an administrator's, and coach is the answer that grants
+    // nothing it shouldn't.
+    role:
+      row.role === "admin" || row.role === "coach" || row.role === "timer"
+        ? row.role
+        : row.user_id
+          ? "coach"
+          : "timer",
     timeMs: row.time_ms,
-    source: row.source === "typed" ? "typed" : "stopwatch",
     recordedAt: row.recorded_at,
     startedAt: row.started_at ?? undefined,
     stoppedAt: row.stopped_at ?? undefined,
+  };
+}
+
+interface ActivityRow {
+  heat_id: string;
+  lane: number;
+  timer_id: string;
+  started_at: number | null;
+  stopped_at: number | null;
+  updated_at: number;
+}
+
+function activityFrom(row: ActivityRow): TimerActivity {
+  return {
+    heatId: row.heat_id,
+    lane: row.lane,
+    timerId: row.timer_id,
+    startedAt: row.started_at ?? undefined,
+    stoppedAt: row.stopped_at ?? undefined,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -315,7 +346,7 @@ export async function meetDetail(
   await ensureSchema(db);
 
   const meetRowP = db.prepare("SELECT * FROM meets WHERE id = ?").bind(meetId).first<MeetRow>();
-  const [meetRow, links, events, entries, heats, seats, watches, calls] =
+  const [meetRow, links, events, entries, heats, seats, watches, calls, activity] =
     await Promise.all([
       meetRowP,
       db.prepare("SELECT team_id FROM meet_teams WHERE meet_id = ?").bind(meetId).all<{ team_id: string }>(),
@@ -325,6 +356,7 @@ export async function meetDetail(
       db.prepare("SELECT heat_id, lane, athlete_id FROM seats WHERE meet_id = ?").bind(meetId).all<SeatRow>(),
       db.prepare("SELECT * FROM watches WHERE meet_id = ?").bind(meetId).all<WatchRow>(),
       db.prepare("SELECT * FROM calls WHERE meet_id = ?").bind(meetId).all<CallRow>(),
+      db.prepare("SELECT * FROM timer_activity WHERE meet_id = ?").bind(meetId).all<ActivityRow>(),
     ]);
   if (!meetRow) return null;
 
@@ -373,6 +405,7 @@ export async function meetDetail(
     heats: heatsFrom(heats.results, seats.results),
     watches: watches.results.map(watchFrom),
     calls: calls.results.map(callFrom),
+    activity: activity.results.map(activityFrom),
     athletes: await athletesByIds(db, [...wanted]),
     enrollments: rosters.results.map(enrollmentFrom),
   };
@@ -752,12 +785,13 @@ export async function putWatch(
   await ensureSchema(db);
   await db
     .prepare(
-      `INSERT INTO watches (meet_id, heat_id, lane, timer_id, time_ms, source,
-                            recorded_at, started_at, stopped_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO watches (meet_id, heat_id, lane, timer_id, user_id, role,
+                            time_ms, recorded_at, started_at, stopped_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(heat_id, lane, timer_id) DO UPDATE SET
+         user_id = excluded.user_id,
+         role = excluded.role,
          time_ms = excluded.time_ms,
-         source = excluded.source,
          recorded_at = excluded.recorded_at,
          started_at = excluded.started_at,
          stopped_at = excluded.stopped_at`,
@@ -767,8 +801,9 @@ export async function putWatch(
       watch.heatId,
       watch.lane,
       watch.timerId,
+      watch.userId ?? null,
+      watch.role,
       watch.timeMs,
-      watch.source,
       watch.recordedAt,
       watch.startedAt ?? null,
       watch.stoppedAt ?? null,

@@ -1,28 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router";
 import type { Route } from "./+types/timer";
 import { Button } from "~/components/ui";
 import { SwimmerPicker } from "~/components/SwimmerPicker";
 import { formatClock, formatTime } from "~/lib/time";
-import { loadTimerId } from "~/lib/storage";
 import {
   earliestAllowed,
-  enqueue,
   fetchSnapshot,
-  flush,
-  loadGrant,
-  loadLane,
-  clearLane,
-  loadPosition,
-  queueSize,
+  loadFurthest,
   runningOrder,
-  saveLane,
-  savePosition,
-  type Position,
+  saveFurthest,
   type QueuedAthlete,
   type Snapshot,
   type TimerAthlete,
 } from "~/lib/timer";
+import { stopPath } from "~/lib/timer-path";
 import { eventName } from "~/types/meet";
+import {
+  clearOverflow,
+  enqueueSeat,
+  enqueueStart,
+  enqueueStop,
+  enqueueSubmit,
+  flushQueue,
+  queueState,
+} from "~/lib/timer-queue";
+import type { LaneRef } from "~/lib/timer-messages";
 
 /**
  * How often this phone asks what changed. Short, because the thing it's
@@ -49,14 +52,55 @@ export function meta({}: Route.MetaArgs) {
  * moves on. Pool wifi may be gone the entire time and nothing here notices —
  * times queue and go up when they can.
  */
-export default function Timer() {
-  const timerId = useMemo(() => loadTimerId(), []);
+export default function Timer({ params }: Route.ComponentProps) {
+  const navigate = useNavigate();
+
+  /**
+   * Everything about where this timer is standing comes from the URL.
+   *
+   * There is no "current heat" in state to drift from the address bar, no
+   * lane remembered on the device, and nothing to restore on reload. The page
+   * *is* the position.
+   */
+  const meetId = params.meetId;
+  const timerId = params.timerId;
+  const lane = Number(params.lane);
+  const eventNo = Number(params.event);
+  const heatNo = Number(params.heat);
+
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [lane, setLane] = useState<number | null>(null);
-  const [position, setPosition] = useState<Position>({ at: 0, submitted: -1 });
+  const [furthest, setFurthest] = useState(-1);
   const [picking, setPicking] = useState(false);
+  /**
+   * Set when somebody deliberately re-arms a heat they've already sent.
+   *
+   * Going back to a submitted heat shows that it's done rather than a green
+   * START, but correcting the time you just took is exactly what going back
+   * is *for* — `earliestAllowed` lets you reach one heat behind the last
+   * submission precisely so you can. So the way through is there, one
+   * deliberate tap away, rather than absent. Lives in state, so it lasts until
+   * this screen is left.
+   */
+  const [retiming, setRetiming] = useState(false);
   const [waiting, setWaiting] = useState(0);
+  const [stuck, setStuck] = useState(false);
+
+  /**
+   * What this phone still owes, and whether it has stopped being a blip.
+   *
+   * A count is normal — a message sits in a cookie for a second on a good
+   * connection and a minute on a bad one. `overflow` is not: it means a
+   * message could not be *stored*, because the browser's cookie limits were
+   * reached, and no amount of waiting fixes that. Only that second one earns
+   * a colour, because a timer glancing down mid-heat should see nothing
+   * unless something is genuinely wrong.
+   */
+  const refreshQueue = () => {
+    const state = queueState();
+    setWaiting(state.pending.length);
+    setStuck(state.overflow);
+  };
 
   // Who this timer says is in the lane, per heat, before it's been submitted.
   const [overrides, setOverrides] = useState<Record<string, string>>({});
@@ -68,11 +112,11 @@ export default function Timer() {
   /* --------------------------------------------------------------- loading */
 
   const load = useCallback(async () => {
-    if (!loadGrant()) {
-      setError("Scan the code your coach gave you to start timing.");
-      return;
-    }
     try {
+      // Whether this phone is holding a code at all is the server's answer,
+      // not a guess from storage — the token is in an HttpOnly cookie and
+      // nothing here can see it. A phone without one gets a 401 and the
+      // message that goes with it.
       setSnapshot(await fetchSnapshot(timerId));
       setError(null);
     } catch (err) {
@@ -81,18 +125,18 @@ export default function Timer() {
   }, [timerId]);
 
   useEffect(() => {
-    setLane(loadLane());
-    setPosition(loadPosition());
-    setWaiting(queueSize());
+    setFurthest(loadFurthest(meetId, timerId));
+    refreshQueue();
     void load();
-  }, [load]);
+  }, [load, meetId, timerId]);
 
   // Anything stuck in the outbox goes out when the signal comes back, and when
   // the phone is picked up again. Neither is guaranteed to happen, which is why
   // submitting also flushes.
   useEffect(() => {
     const drain = () => {
-      void flush().then(() => setWaiting(queueSize()));
+      if (!meetId) return;
+      void flushQueue(meetId, timerId).then(refreshQueue);
     };
     window.addEventListener("online", drain);
     document.addEventListener("visibilitychange", drain);
@@ -102,7 +146,7 @@ export default function Timer() {
       document.removeEventListener("visibilitychange", drain);
       clearInterval(timer);
     };
-  }, []);
+  }, [meetId, timerId]);
 
   /**
    * Pick up what everyone else has changed.
@@ -132,7 +176,9 @@ export default function Timer() {
 
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState(0);
-  const [stopped, setStopped] = useState<{ ms: number; at: number } | null>(null);
+  const [stopped, setStopped] = useState<{ ms: number; at: number } | null>(
+    null,
+  );
   const frame = useRef<number | null>(null);
 
   useEffect(() => {
@@ -153,8 +199,19 @@ export default function Timer() {
     () => (snapshot ? runningOrder(snapshot.events, snapshot.heats) : []),
     [snapshot],
   );
-  const stop = order[Math.min(position.at, order.length - 1)];
-  const floor = earliestAllowed(position);
+  /**
+   * The heat this page is about, found by the numbering in its own URL.
+   *
+   * Undefined when the address names a heat this meet doesn't have — a stale
+   * link, or a reseed that removed it — which the render below turns into
+   * something readable rather than a blank screen.
+   */
+  const stopIndex = order.findIndex(
+    (s) => s.event.position === eventNo - 1 && s.heat.index === heatNo - 1,
+  );
+  const stop = stopIndex >= 0 ? order[stopIndex] : undefined;
+
+  const floor = earliestAllowed(furthest);
 
   const athletes = useMemo(() => {
     if (!snapshot) return [];
@@ -171,6 +228,16 @@ export default function Timer() {
   );
 
   const ownTeam = snapshot?.ownTeam ?? "Home";
+
+  /**
+   * Where this screen is, as the meet numbers it — event 7, heat 1, lane 3.
+   * The same three integers the cookie path is built from, so what the phone
+   * queues and what the person is looking at cannot disagree.
+   */
+  const where: LaneRef | null =
+    stop && lane
+      ? { event: stop.event.position + 1, heat: stop.heat.index + 1, lane }
+      : null;
   const laneKey = stop && lane ? `${stop.heat.id}:${lane}` : "";
   const seatedId = stop && lane ? stop.heat.lanes[lane - 1] : null;
   const swimmerId = overrides[laneKey] ?? seatedId ?? null;
@@ -185,13 +252,17 @@ export default function Timer() {
 
   /* --------------------------------------------------------------- actions */
 
+  /**
+   * Move to another heat by going to its page.
+   *
+   * The clock isn't carried across and doesn't need clearing: a different heat
+   * is a different URL, so this screen remounts and the stopwatch starts from
+   * nothing. Which is the honest behaviour anyway — a running clock belongs to
+   * the race it was started for.
+   */
   const move = (to: number) => {
-    const next = { ...position, at: Math.max(floor, Math.min(order.length - 1, to)) };
-    setPosition(next);
-    savePosition(next);
-    setStartedAt(null);
-    setStopped(null);
-    setElapsed(0);
+    const target = order[Math.max(floor, Math.min(order.length - 1, to))];
+    if (target) navigate(stopPath(meetId, timerId, target, lane));
   };
 
   /**
@@ -203,14 +274,31 @@ export default function Timer() {
    * person have to reach the server together or not at all.
    */
   const claimLane = (athleteId: string, newcomer?: QueuedAthlete) => {
-    if (!stop || !lane) return;
-    enqueue({
-      seats: [{ heatId: stop.heat.id, lane, athleteId }],
-      ...(newcomer ? { athletes: [newcomer] } : {}),
+    if (!where || !meetId) return;
+
+    // A swimmer picked from the list travels as an id. One typed in here
+    // travels as a name and the team the timer tapped — by its place in this
+    // meet's own list, because a timer may say "that's a Horizon swimmer",
+    // not which team document to write into. The person is minted on the
+    // server, which is the only side that can tell a new name from a name it
+    // already has.
+    const teamIndex = newcomer?.teamId
+      ? Math.max(
+          0,
+          snapshot?.meet.teams.findIndex((t) => t.id === newcomer.teamId) ?? 0,
+        )
+      : 0;
+
+    enqueueSeat(meetId, timerId, where, {
+      team: teamIndex,
+      ...(newcomer
+        ? { name: `${newcomer.firstName} ${newcomer.lastName}`.trim() }
+        : { athleteId }),
     });
-    setWaiting(queueSize());
-    void flush().then(() => {
-      setWaiting(queueSize());
+
+    refreshQueue();
+    void flushQueue(meetId, timerId).then(() => {
+      refreshQueue();
       // Straight back for the corrected lineup, so the name on screen is the
       // one everybody else is now looking at.
       void load();
@@ -218,39 +306,42 @@ export default function Timer() {
   };
 
   const submit = async () => {
-    if (!stop || !lane || !stopped) return;
-    const watch = {
-      heatId: stop.heat.id,
-      lane,
-      timerId,
-      timeMs: stopped.ms,
-      recordedAt: Date.now(),
-      source: "stopwatch" as const,
-      athleteId: swimmerId ?? undefined,
-      startedAt: stopped.at - stopped.ms,
-      stoppedAt: stopped.at,
-    };
-    // The swimmer travels with the time when they were typed in here, so a
-    // phone with no signal can still hand over both together later.
-    const newcomers = added.filter((a) => a.id === swimmerId);
-    enqueue({ watches: [watch], athletes: newcomers });
+    if (!where || !meetId || !stopped) return;
 
-    const next = {
-      at: Math.min(order.length - 1, position.at + 1),
-      submitted: Math.max(position.submitted, position.at),
-    };
-    setPosition(next);
-    savePosition(next);
+    // The time, and only the time. Whether the built-in stopwatch was used is
+    // something the server works out from whether a start and a stop came
+    // through for this lane — it doesn't have to be asserted here, and a
+    // phone that was offline through the race still submits the same message.
+    enqueueSubmit(meetId, timerId, where, stopped.ms);
+
+    // How far this device has got. The only thing about a timer's progress
+    // that is still device state — the URL says where they *are*, not the
+    // furthest they have been, and going back past a submitted heat is what
+    // this exists to prevent.
+    const reached = Math.max(furthest, stopIndex);
+    setFurthest(reached);
+    saveFurthest(meetId, timerId, reached);
+
+    // Clear the clock before moving. Usually the next heat is a different URL
+    // and this screen remounts anyway — but on the last heat of the meet there
+    // is nowhere further to go, the URL doesn't change, nothing remounts, and
+    // without this the time just submitted stays on screen above a Submit
+    // button offering to send it again.
     setStartedAt(null);
     setStopped(null);
     setElapsed(0);
+    setRetiming(false);
 
-    // A failure here is not worth reporting: the time is already in the
-    // outbox, the header says how many are waiting, and the next attempt is
-    // twenty seconds away. What matters is that the screen has already moved
-    // on to the next heat.
-    await flush();
-    setWaiting(queueSize());
+    // On to the next heat, which is the next page.
+    const next = order[Math.min(order.length - 1, stopIndex + 1)];
+    if (next) navigate(stopPath(meetId, timerId, next, lane));
+
+    // A failure here is not worth reporting: the time is already in a cookie
+    // addressed to the lane it belongs to, the header says how many are
+    // waiting, and the next attempt is twenty seconds away. What matters is
+    // that the screen has already moved on to the next heat.
+    await flushQueue(meetId, timerId);
+    refreshQueue();
   };
 
   /* ---------------------------------------------------------------- render */
@@ -260,7 +351,9 @@ export default function Timer() {
       <main className="flex min-h-screen items-center justify-center p-6">
         <div className="max-w-sm text-center">
           <p className="text-lg font-bold">Not timing yet</p>
-          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{error}</p>
+          <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+            {error}
+          </p>
         </div>
       </main>
     );
@@ -270,34 +363,6 @@ export default function Timer() {
     return (
       <main className="flex min-h-screen items-center justify-center text-slate-400">
         Loading…
-      </main>
-    );
-  }
-
-  // Standing behind a lane is the first thing that happens, and until it's
-  // answered nothing else on this screen means anything.
-  if (lane === null) {
-    return (
-      <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center p-6">
-        <h1 className="mb-1 text-center text-xl font-bold">{snapshot.meet.name}</h1>
-        <p className="mb-6 text-center text-slate-600 dark:text-slate-300">
-          Which lane are you timing?
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          {Array.from({ length: snapshot.meet.laneCount }, (_, i) => i + 1).map((n) => (
-            <button
-              key={n}
-              type="button"
-              onClick={() => {
-                saveLane(n);
-                setLane(n);
-              }}
-              className="min-h-24 touch-manipulation rounded-2xl border-2 border-slate-300 text-4xl font-bold active:bg-blue-600 active:text-white dark:border-slate-700"
-            >
-              {n}
-            </button>
-          ))}
-        </div>
       </main>
     );
   }
@@ -329,24 +394,30 @@ export default function Timer() {
         <Button
           size="sm"
           variant="ghost"
-          disabled={running || position.at <= floor}
-          onClick={() => move(position.at - 1)}
+          disabled={running || stopIndex <= floor}
+          onClick={() => move(stopIndex - 1)}
           aria-label="Previous heat"
         >
           ‹
         </Button>
         <div className="min-w-0 flex-1 text-center">
           <p className="truncate text-sm font-bold">{eventName(stop.event)}</p>
-          <p className="text-xs text-slate-500">
+          <p
+            className={`text-xs ${
+              stuck ? "font-bold text-red-600" : "text-slate-500"
+            }`}
+          >
             Heat {stop.number} of {stop.of}
-            {waiting > 0 && ` · ${waiting} to send`}
+            {stuck
+              ? " · not saving — find signal"
+              : waiting > 0 && ` · ${waiting} to send`}
           </p>
         </div>
         <Button
           size="sm"
           variant="ghost"
-          disabled={running || position.at >= order.length - 1}
-          onClick={() => move(position.at + 1)}
+          disabled={running || stopIndex >= order.length - 1}
+          onClick={() => move(stopIndex + 1)}
           aria-label="Next heat"
         >
           ›
@@ -355,18 +426,19 @@ export default function Timer() {
 
       <div className="flex flex-1 flex-col justify-between p-4">
         <div className="space-y-3">
-          <button
-            type="button"
-            disabled={running}
-            onClick={() => {
-              clearLane();
-              setLane(null);
-            }}
-            className="flex w-full touch-manipulation items-center justify-between rounded-2xl bg-white px-4 py-3 text-left dark:bg-slate-900"
+          {/* Back to the lane picker, which is a page rather than a state —
+              so this is a link, and the browser's own back button does the
+              same thing. A timer swapping ends of the pool mid-meet is the
+              case it exists for. */}
+          <Link
+            to={`/meets/${meetId}/timers/${timerId}`}
+            className={`flex w-full touch-manipulation items-center justify-between rounded-2xl bg-white px-4 py-3 text-left dark:bg-slate-900 ${
+              running ? "pointer-events-none opacity-60" : ""
+            }`}
           >
             <span className="text-3xl font-bold">Lane {lane}</span>
             <span className="text-sm font-semibold text-blue-600">change</span>
-          </button>
+          </Link>
 
           <button
             type="button"
@@ -375,13 +447,17 @@ export default function Timer() {
           >
             <span className="min-w-0">
               <span className="block truncate text-2xl font-bold">
-                {swimmer ? `${swimmer.firstName} ${swimmer.lastName}`.trim() : "Empty lane"}
+                {swimmer
+                  ? `${swimmer.firstName} ${swimmer.lastName}`.trim()
+                  : "Empty lane"}
               </span>
               <span className="block truncate text-sm text-slate-500">
                 {swimmer ? (swimmer.team ?? ownTeam) : "Tap to say who's here"}
               </span>
             </span>
-            <span className="shrink-0 text-sm font-semibold text-blue-600">change</span>
+            <span className="shrink-0 text-sm font-semibold text-blue-600">
+              change
+            </span>
           </button>
         </div>
 
@@ -391,8 +467,8 @@ export default function Timer() {
           </p>
           {alreadyTimed && !stopped && startedAt === null && (
             <p className="mt-2 text-sm text-slate-500">
-              Already sent {formatTime(alreadyTimed.timeMs)} for this heat.
-              Timing again replaces it.
+              Sent {formatTime(alreadyTimed.timeMs)} for this heat.
+              {retiming && " Timing again replaces it."}
             </p>
           )}
         </div>
@@ -419,6 +495,25 @@ export default function Timer() {
                 Redo
               </Button>
             </div>
+          ) : alreadyTimed && !retiming ? (
+            /* This heat is done, and says so where the button would be.
+               A green START here invites re-timing a heat whose sheet has
+               already gone to the desk — and reads identically to the heat in
+               front of you, which is the one that matters. */
+            <>
+              <Button
+                size="xl"
+                variant="success"
+                full
+                disabled
+                className="min-h-32 text-4xl"
+              >
+                Submitted
+              </Button>
+              <Button variant="ghost" full onClick={() => setRetiming(true)}>
+                Time it again
+              </Button>
+            </>
           ) : running ? (
             <Button
               size="xl"
@@ -428,6 +523,10 @@ export default function Timer() {
               onClick={() => {
                 const at = Date.now();
                 setStopped({ ms: at - (startedAt ?? at), at });
+                // Queued, not sent: the thumb has more to do and the race
+                // isn't over for everyone. It goes up with the submit.
+                if (where && meetId) enqueueStop(meetId, timerId, where, at);
+                refreshQueue();
               }}
             >
               STOP
@@ -439,8 +538,17 @@ export default function Timer() {
               full
               className="min-h-32 text-4xl"
               onClick={() => {
-                setStartedAt(Date.now());
+                const at = Date.now();
+                setStartedAt(at);
                 setElapsed(0);
+                // Sent on its own, straight away, because this is the one
+                // message whose value is entirely in arriving early: the desk
+                // wants to see five lanes armed and a sixth not *before* the
+                // gun, which is the only moment anything can be done about it.
+                if (where && meetId) {
+                  enqueueStart(meetId, timerId, where, at);
+                  void flushQueue(meetId, timerId).then(refreshQueue);
+                }
               }}
             >
               START

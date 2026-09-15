@@ -161,14 +161,40 @@ const SCHEMA = [
      heat_id TEXT NOT NULL,
      lane INTEGER NOT NULL,
      timer_id TEXT NOT NULL,
+     user_id TEXT,
+     role TEXT,
      time_ms INTEGER NOT NULL,
-     source TEXT NOT NULL,
      recorded_at INTEGER NOT NULL,
      started_at INTEGER,
      stopped_at INTEGER,
      PRIMARY KEY (heat_id, lane, timer_id)
    )`,
   `CREATE INDEX IF NOT EXISTS watches_by_meet ON watches (meet_id)`,
+
+  /**
+   * A timer's stopwatch, while it is running.
+   *
+   * Not a watch: a watch is evidence of a time somebody swam, and this is only
+   * the fact that a thumb has been pressed. It exists so the desk can see
+   * which lanes are armed before a heat goes off, and so a submitted time can
+   * say whether it came off the built-in stopwatch or was typed in from a
+   * handheld one — three lanes reading "started" and a fourth not is a
+   * question worth asking *before* the race rather than after.
+   *
+   * Keyed like a watch, by heat, lane and timer, so the same device pressing
+   * start twice is one row and two devices on a lane are two.
+   */
+  `CREATE TABLE IF NOT EXISTS timer_activity (
+     meet_id TEXT NOT NULL,
+     heat_id TEXT NOT NULL,
+     lane INTEGER NOT NULL,
+     timer_id TEXT NOT NULL,
+     started_at INTEGER,
+     stopped_at INTEGER,
+     updated_at INTEGER NOT NULL,
+     PRIMARY KEY (heat_id, lane, timer_id)
+   )`,
+  `CREATE INDEX IF NOT EXISTS activity_by_meet ON timer_activity (meet_id)`,
 
   /**
    * The decision. One row per lane, replacing what used to be a ruling and an
@@ -202,6 +228,7 @@ let ready = false;
  * check — and it means a fresh database or a new deployment needs no separate
  * migration step to start working.
  */
+
 export async function ensureSchema(db: D1Database): Promise<void> {
   if (ready) return;
   for (const statement of SCHEMA) await db.prepare(statement).run();

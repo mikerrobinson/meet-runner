@@ -1,34 +1,201 @@
-import { useState } from "react";
-import { Link } from "react-router";
+import { useMemo, useRef, useState } from "react";
+import { Link, useFetcher } from "react-router";
 import type { Route } from "./+types/team-detail";
-import { Banner, Card, EmptyState, SectionTitle, Segmented } from "~/components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  EmptyState,
+  Field,
+  SectionTitle,
+  Segmented,
+  TextInput,
+} from "~/components/ui";
+import { TeamMembers } from "~/components/TeamMembers";
+import { AthleteSheet } from "~/components/AthleteSheet";
+import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
+import { teamAccess } from "~/lib/access.server";
 import { publicTeamDetail } from "~/lib/public.server";
-import { meetTypeLabel } from "~/types/meet";
-import type { SyncEnv } from "~/lib/api.server";
+import {
+  createSeason,
+  enrol,
+  getTeam,
+  updateTeam,
+} from "~/lib/teams.server";
+import { putAthlete } from "~/lib/athletes.server";
+import { downloadFile, parseRosterCsv, toCsv } from "~/lib/csv";
+import type { RosterEntry } from "~/lib/csv";
+import { dayBefore, nextSeasonName, seasonForDate } from "~/lib/roster";
+import { useViewPrefs } from "~/state/view-prefs";
+import { meetTypeLabel, todayIso } from "~/types/meet";
 
 export function meta({ data }: Route.MetaArgs) {
   return [{ title: `${data?.team?.name ?? "Team"} · Meet Runner` }];
 }
 
+const TEMPLATE = toCsv([
+  ["First Name", "Last Name", "Gender", "Year", "Birth Date", "Squad"],
+  ["Avery", "Nguyen", "F", "10", "2009-03-14", "Blue"],
+  ["Marcus", "Hill", "M", "12", "2007-11-02", "Gold"],
+]);
+
 /**
- * A team as anyone may see it: its roster season by season, and its meets.
+ * A team: its roster season by season, and its meets.
  *
- * Read-only on purpose. Editing a roster is the coach's job and lives under
- * Team, behind a membership — this is the page you send someone a link to.
+ * One page, whether you coach here or are following a link to look. The
+ * editing appears for whoever the server says may edit, exactly as it does on
+ * a meet — there used to be a second screen at `/team` showing the same
+ * roster, reachable only by the one coach whose team it was, and the two
+ * drifted apart in the way two screens over one thing always do.
+ *
+ * The read half is the public projection, so what a coach sees of their own
+ * roster is what everyone else sees of it, plus the controls.
  */
-export async function loader({ params, context }: Route.LoaderArgs) {
+export async function loader({ params, request, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env as SyncEnv;
-  if (!env.DB) return { team: null };
+  if (!env.DB) return { team: null, access: null, swimCounts: {} };
+
   try {
-    return { team: await publicTeamDetail(env.DB, params.teamId) };
+    const user = await currentUser(request, env);
+    const [team, access] = await Promise.all([
+      publicTeamDetail(env.DB, params.teamId),
+      teamAccess(env.DB, params.teamId, user),
+    ]);
+
+    // Which season the team treats as current is a fact about running the
+    // team, not about reading it, so the public projection leaves it out.
+    // A coach needs it to say which one is current and to move it.
+    const record = access.coach ? await getTeam(env.DB, params.teamId) : null;
+
+    // How many meets each swimmer has a time in. One aggregate rather than
+    // deriving every result on the client just to count them — and only for
+    // somebody who can act on it, since a visitor is reading, not managing.
+    const swims = access.coach
+      ? await env.DB.prepare(
+          `SELECT s.athlete_id AS id, COUNT(DISTINCT w.meet_id) AS n
+           FROM seats s JOIN watches w ON w.heat_id = s.heat_id AND w.lane = s.lane
+           GROUP BY s.athlete_id`,
+        ).all<{ id: string; n: number }>()
+      : null;
+
+    return {
+      team,
+      access,
+      currentSeasonId: record?.currentSeasonId ?? null,
+      swimCounts: Object.fromEntries(
+        (swims?.results ?? []).map((row) => [row.id, row.n]),
+      ),
+    };
   } catch {
-    return { team: null };
+    return { team: null, access: null, currentSeasonId: null, swimCounts: {} };
   }
 }
 
+/**
+ * Everything that changes a team, behind one check.
+ *
+ * The roster, the team's own name and code, and its seasons — all of it asked
+ * of the same request that loaded the page, so the controls and the endpoint
+ * cannot disagree about who may use them. These used to live under Settings,
+ * which picked *which* team implicitly from the signed-in coach's first
+ * membership; here the team is the URL, so a coach of two can reach both.
+ */
+export async function action({ params, request, context }: Route.ActionArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  const db = requireDb(env);
+  const user = await currentUser(request, env);
+
+  const access = await teamAccess(db, params.teamId, user);
+  if (!access.coach) {
+    throw new Response("Only a coach of this team can change that.", {
+      status: 403,
+    });
+  }
+
+  const form = await request.formData();
+  const intent = String(form.get("intent") ?? "roster");
+
+  if (intent === "team") {
+    await updateTeam(db, params.teamId, {
+      name: String(form.get("name") ?? ""),
+      code: String(form.get("code") ?? ""),
+    });
+    return { ok: true };
+  }
+
+  if (intent === "current-season") {
+    await updateTeam(db, params.teamId, {
+      currentSeasonId: String(form.get("seasonId") ?? ""),
+    });
+    return { ok: true };
+  }
+
+  if (intent === "new-season") {
+    const name = String(form.get("name") ?? "").trim() || "New season";
+    const startDate = String(form.get("startDate") ?? "") || todayIso();
+    // The season that was current ends the day before this one starts, so the
+    // two never both claim a date — which is what `seasonForDate` reads.
+    const previousId = String(form.get("previousId") ?? "");
+    if (previousId) {
+      await db
+        .prepare("UPDATE seasons SET end_date = COALESCE(end_date, ?) WHERE id = ?")
+        .bind(dayBefore(startDate), previousId)
+        .run();
+    }
+    const season = await createSeason(db, {
+      teamId: params.teamId,
+      name,
+      startDate,
+    });
+    await updateTeam(db, params.teamId, { currentSeasonId: season.id });
+    return { ok: true };
+  }
+
+  const seasonId = String(form.get("seasonId") ?? "");
+  const entries = JSON.parse(String(form.get("entries") ?? "[]")) as RosterEntry[];
+  const mode = String(form.get("mode") ?? "append");
+
+  // "Replace" clears this season's roster and nobody's history: the athletes
+  // themselves stay, so past meets keep their names and times. Re-importing
+  // used to mint new ids, which left every old entry pointing at somebody who
+  // no longer appeared anywhere.
+  if (mode === "replace") {
+    await db
+      .prepare("DELETE FROM enrollments WHERE team_id = ? AND season_id = ?")
+      .bind(params.teamId, seasonId)
+      .run();
+  }
+
+  for (const entry of entries) {
+    const athlete = await putAthlete(db, entry.athlete);
+    await enrol(db, {
+      teamId: params.teamId,
+      seasonId,
+      athleteId: athlete.id,
+      year: entry.year,
+      squad: entry.squad,
+    });
+  }
+
+  return { ok: true, added: entries.length };
+}
+
 export default function TeamDetail({ loaderData }: Route.ComponentProps) {
-  const { team } = loaderData;
+  const { team, access, currentSeasonId } = loaderData;
+  const swimCounts = new Map(Object.entries(loaderData.swimCounts));
+  const fetcher = useFetcher();
+  const { nameOrder } = useViewPrefs();
+
   const [seasonId, setSeasonId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [addingSeason, setAddingSeason] = useState(false);
+  const [incoming, setIncoming] = useState<RosterEntry[] | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const mayEdit = access?.coach === true;
 
   if (!team) {
     return (
@@ -40,22 +207,73 @@ export default function TeamDetail({ loaderData }: Route.ComponentProps) {
     );
   }
 
+  /**
+   * Which season is on screen.
+   *
+   * Defaults to the one covering today rather than the first in the list — a
+   * coach opening their own team wants this year, and the list is ordered
+   * oldest first. `seasonForDate` falls through to the most recent when no
+   * season claims today, which is the right answer out of season too.
+   */
   const season =
-    team.seasons.find((s) => s.id === seasonId) ?? team.seasons[0] ?? null;
+    team.seasons.find((s) => s.id === seasonId) ??
+    seasonForDate(team.seasons, undefined, todayIso()) ??
+    null;
+
+  const roster = season?.roster ?? [];
+  const active = roster.filter((entry) => entry.active);
+  const inactive = roster.filter((entry) => !entry.active);
+
+  const visible = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return (showArchived ? roster : active)
+      .filter(
+        (entry) =>
+          !query ||
+          `${entry.firstName} ${entry.lastName}`.toLowerCase().includes(query),
+      )
+      .sort((a, b) =>
+        nameOrder === "first"
+          ? a.firstName.localeCompare(b.firstName) ||
+            a.lastName.localeCompare(b.lastName)
+          : a.lastName.localeCompare(b.lastName) ||
+            a.firstName.localeCompare(b.firstName),
+      );
+  }, [roster, active, showArchived, search, nameOrder]);
+
+  const save = (entries: RosterEntry[], mode: "append" | "replace") => {
+    if (!season) return;
+    fetcher.submit(
+      {
+        intent: "roster",
+        seasonId: season.id,
+        mode,
+        entries: JSON.stringify(entries),
+      },
+      { method: "post" },
+    );
+  };
+
+  const handleFile = async (file: File) => {
+    const { entries, warnings: issues } = parseRosterCsv(await file.text());
+    setWarnings(issues);
+    if (entries.length === 0) return;
+    // Nothing to lose yet, so no need to ask what to do about it.
+    if (roster.length === 0) save(entries, "replace");
+    else setIncoming(entries);
+  };
 
   return (
     <div className="space-y-4">
       <Card>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-xl font-bold">{team.name}</h2>
-            <p className="text-sm text-slate-500">
-              {team.code && <span className="font-mono">{team.code}</span>}
-              {team.code && " · "}
-              {team.athletes} athlete{team.athletes === 1 ? "" : "s"} ·{" "}
-              {team.meets.length} meet{team.meets.length === 1 ? "" : "s"}
-            </p>
-          </div>
+        <div className="min-w-0">
+          <h2 className="text-xl font-bold">{team.name}</h2>
+          <p className="text-sm text-slate-500">
+            {team.code && <span className="font-mono">{team.code}</span>}
+            {team.code && " · "}
+            {team.athletes} athlete{team.athletes === 1 ? "" : "s"} ·{" "}
+            {team.meets.length} meet{team.meets.length === 1 ? "" : "s"}
+          </p>
         </div>
 
         {!team.claimed && (
@@ -69,9 +287,31 @@ export default function TeamDetail({ loaderData }: Route.ComponentProps) {
       </Card>
 
       <Card>
-        <SectionTitle>Roster</SectionTitle>
+        <SectionTitle
+          action={
+            mayEdit && season ? (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setAdding(true)}
+              >
+                + Swimmer
+              </Button>
+            ) : undefined
+          }
+        >
+          Roster{mayEdit && ` (${active.length})`}
+          {season && (
+            <span className="ml-2 text-sm font-normal text-slate-500 dark:text-slate-400">
+              {season.name}
+            </span>
+          )}
+        </SectionTitle>
+
         {team.seasons.length === 0 ? (
-          <EmptyState title="No seasons yet">A roster appears once a season is set up.</EmptyState>
+          <EmptyState title="No seasons yet">
+            A roster appears once a season is set up.
+          </EmptyState>
         ) : (
           <>
             {team.seasons.length > 1 && (
@@ -79,52 +319,318 @@ export default function TeamDetail({ loaderData }: Route.ComponentProps) {
                 <Segmented
                   value={season?.id ?? ""}
                   onChange={setSeasonId}
-                  options={team.seasons.map((s) => ({ value: s.id, label: s.name }))}
+                  options={team.seasons.map((s) => ({
+                    value: s.id,
+                    label: s.name,
+                  }))}
                 />
               </div>
             )}
 
-            {!season || season.roster.length === 0 ? (
+            {roster.length === 0 ? (
               <EmptyState title="Nobody on this roster">
-                Swimmers appear once a coach enrols them.
+                {mayEdit
+                  ? "Import a CSV below, or add them one at a time. The roster carries across every meet this season."
+                  : "Swimmers appear once a coach enrols them."}
               </EmptyState>
             ) : (
-              <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-                {season.roster.map((athlete) => (
-                  <li key={athlete.id}>
-                    <Link
-                      to={`/athletes/${athlete.id}`}
-                      className="flex items-center justify-between gap-3 py-2.5"
-                    >
-                      <span className="min-w-0">
-                        <span
-                          className={`block truncate ${
-                            athlete.active ? "font-medium" : "text-slate-400 line-through"
-                          }`}
+              <>
+                {mayEdit && roster.length > 8 && (
+                  <TextInput
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search swimmers"
+                    className="mb-2"
+                  />
+                )}
+
+                <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {visible.map((entry) => {
+                    const swims = swimCounts.get(entry.id) ?? 0;
+                    return (
+                      <li key={entry.id}>
+                        <Link
+                          to={`/athletes/${entry.id}`}
+                          className="flex min-h-14 touch-manipulation items-center justify-between gap-3 py-2.5"
                         >
-                          {athlete.lastName}, {athlete.firstName}
-                        </span>
-                        <span className="block text-xs text-slate-500">
-                          {[athlete.year, athlete.squad].filter(Boolean).join(" · ") ||
-                            "—"}
-                        </span>
-                      </span>
-                      <span aria-hidden className="shrink-0 text-slate-400">
-                        ›
-                      </span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
+                          <span className="min-w-0">
+                            <span
+                              className={`block truncate ${
+                                entry.active
+                                  ? "font-medium"
+                                  : "text-slate-400 line-through"
+                              }`}
+                            >
+                              {nameOrder === "first"
+                                ? `${entry.firstName} ${entry.lastName}`
+                                : `${entry.lastName}, ${entry.firstName}`}
+                            </span>
+                            <span className="block text-xs text-slate-500">
+                              {[
+                                mayEdit ? entry.gender : null,
+                                entry.year,
+                                entry.squad,
+                                swims > 0
+                                  ? `${swims} meet${swims === 1 ? "" : "s"}`
+                                  : null,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ") || "—"}
+                            </span>
+                          </span>
+                          <span aria-hidden className="shrink-0 text-slate-400">
+                            ›
+                          </span>
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+
+                {mayEdit && inactive.length > 0 && (
+                  <Button
+                    className="mt-2"
+                    size="sm"
+                    variant="ghost"
+                    full
+                    onClick={() => setShowArchived((v) => !v)}
+                  >
+                    {showArchived
+                      ? "Hide those off the roster"
+                      : `Show ${inactive.length} off the roster`}
+                  </Button>
+                )}
+              </>
             )}
           </>
         )}
       </Card>
 
+      {mayEdit && season && (
+        <Card>
+          <SectionTitle>Import roster</SectionTitle>
+          <p className="mb-3 text-sm text-slate-600 dark:text-slate-300">
+            CSV with a header row. Columns can be{" "}
+            <strong>First Name, Last Name, Gender, Year</strong> — plus optional{" "}
+            <strong>Birth Date</strong> and <strong>Squad</strong>. A single{" "}
+            <strong>Name</strong> column works too.
+          </p>
+
+          {/* The prompt renders here, above the picker, rather than under the
+              whole card: on a long roster it used to land below the fold and
+              an import looked like it had done nothing. */}
+          {incoming && (
+            <div className="mb-3 space-y-2">
+              <Banner tone="warn">
+                {season.name} already has {roster.length} swimmers. Add the{" "}
+                {incoming.length} in this file, or replace the roster?
+                Replacing only clears this season&rsquo;s roster — the swimmers
+                themselves stay, so past meets keep their names and times.
+              </Banner>
+              <div className="grid grid-cols-3 gap-2">
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    save(incoming, "append");
+                    setIncoming(null);
+                  }}
+                >
+                  Add
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    save(incoming, "replace");
+                    setIncoming(null);
+                  }}
+                >
+                  Replace
+                </Button>
+                <Button onClick={() => setIncoming(null)}>Cancel</Button>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-2">
+            <Button variant="primary" onClick={() => fileInput.current?.click()}>
+              Choose CSV
+            </Button>
+            <Button
+              onClick={() =>
+                downloadFile("roster-template.csv", TEMPLATE, "text/csv")
+              }
+            >
+              Template
+            </Button>
+          </div>
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleFile(file);
+              e.target.value = "";
+            }}
+          />
+
+          {warnings.length > 0 && (
+            <div className="mt-3">
+              <Banner tone="warn">
+                <p className="font-semibold">Import notes</p>
+                <ul className="mt-1 list-disc pl-4">
+                  {warnings.slice(0, 8).map((warning, i) => (
+                    <li key={i}>{warning}</li>
+                  ))}
+                  {warnings.length > 8 && (
+                    <li>…and {warnings.length - 8} more.</li>
+                  )}
+                </ul>
+              </Banner>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {mayEdit && (
+        <Card>
+          <SectionTitle
+            action={
+              <Button size="sm" onClick={() => setAddingSeason((v) => !v)}>
+                {addingSeason ? "Cancel" : "+ Season"}
+              </Button>
+            }
+          >
+            Seasons
+          </SectionTitle>
+
+          <ul className="divide-y divide-slate-200 dark:divide-slate-800">
+            {team.seasons.map((row) => (
+              <li
+                key={row.id}
+                className="flex items-center justify-between gap-3 py-2"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate font-semibold">{row.name}</span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400">
+                    {[row.startDate, row.endDate].filter(Boolean).join(" → ") ||
+                      "no dates — covers everything"}
+                  </span>
+                </span>
+                {row.id === currentSeasonId ? (
+                  <span className="shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-200">
+                    current
+                  </span>
+                ) : (
+                  <fetcher.Form method="post" className="shrink-0">
+                    <input type="hidden" name="intent" value="current-season" />
+                    <input type="hidden" name="seasonId" value={row.id} />
+                    <Button type="submit" size="sm" variant="ghost">
+                      Make current
+                    </Button>
+                  </fetcher.Form>
+                )}
+              </li>
+            ))}
+          </ul>
+
+          {addingSeason && (
+            <fetcher.Form method="post" className="mt-3 space-y-3">
+              <input type="hidden" name="intent" value="new-season" />
+              <input type="hidden" name="previousId" value={season?.id ?? ""} />
+              <Banner tone="info">
+                A new season starts an empty roster. Everyone stays on the old
+                one, so last year&rsquo;s meets keep their names and times.
+              </Banner>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Name">
+                  <TextInput
+                    name="name"
+                    defaultValue={nextSeasonName(season?.name ?? "")}
+                  />
+                </Field>
+                <Field label="Starts">
+                  <TextInput
+                    type="date"
+                    name="startDate"
+                    defaultValue={todayIso()}
+                  />
+                </Field>
+              </div>
+              <Button type="submit" variant="primary" full>
+                Start season
+              </Button>
+            </fetcher.Form>
+          )}
+        </Card>
+      )}
+
+      {mayEdit && <TeamMembers teamId={team.id} />}
+
+      {mayEdit && (
+        <Card>
+          <SectionTitle>Team details</SectionTitle>
+          <fetcher.Form method="post" className="space-y-3">
+            <input type="hidden" name="intent" value="team" />
+            <Field label="Name">
+              <TextInput
+                name="name"
+                defaultValue={team.name}
+                autoCapitalize="words"
+              />
+            </Field>
+            <Field
+              label="Code"
+              hint="Short, as it appears on a heat sheet — CHAP."
+            >
+              <TextInput
+                name="code"
+                defaultValue={team.code}
+                autoCapitalize="characters"
+              />
+            </Field>
+            <Button type="submit" variant="primary" full>
+              Save team
+            </Button>
+          </fetcher.Form>
+        </Card>
+      )}
+
+      {mayEdit && (
+        <Card>
+          <SectionTitle>Export</SectionTitle>
+          <p className="mb-3 text-sm text-slate-600 dark:text-slate-300">
+            The team, its seasons and their rosters, as JSON.
+          </p>
+          <Button
+            full
+            onClick={() =>
+              downloadFile(
+                `${team.code || team.name}-${todayIso()}.json`,
+                JSON.stringify(
+                  {
+                    team: { id: team.id, name: team.name, code: team.code },
+                    seasons: team.seasons,
+                  },
+                  null,
+                  2,
+                ),
+                "application/json",
+              )
+            }
+          >
+            Download team JSON
+          </Button>
+        </Card>
+      )}
+
       <Card>
         <SectionTitle>Meets</SectionTitle>
         {team.meets.length === 0 ? (
-          <EmptyState title="No meets yet">Meets appear here once this team races.</EmptyState>
+          <EmptyState title="No meets yet">
+            Meets appear here once this team races.
+          </EmptyState>
         ) : (
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
             {team.meets.map((meet) => (
@@ -134,7 +640,9 @@ export default function TeamDetail({ loaderData }: Route.ComponentProps) {
                   className="flex items-center justify-between gap-3 py-3"
                 >
                   <span className="min-w-0">
-                    <span className="block truncate font-semibold">{meet.name}</span>
+                    <span className="block truncate font-semibold">
+                      {meet.name}
+                    </span>
                     <span className="block text-xs text-slate-500">
                       {meet.date} · {meetTypeLabel(meet.type)} ·{" "}
                       {meet.times} time{meet.times === 1 ? "" : "s"}
@@ -149,6 +657,17 @@ export default function TeamDetail({ loaderData }: Route.ComponentProps) {
           </ul>
         )}
       </Card>
+
+      {adding && season && (
+        <AthleteSheet
+          title="Add swimmer"
+          onClose={() => setAdding(false)}
+          onSave={(athlete, facts) => {
+            save([{ athlete, ...facts }], "append");
+            setAdding(false);
+          }}
+        />
+      )}
     </div>
   );
 }

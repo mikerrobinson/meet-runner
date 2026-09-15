@@ -19,7 +19,9 @@ import type {
   Result,
   ResultStatus,
   TimeMethod,
+  TimerActivity,
   Watch,
+  WatchRole,
 } from "~/types/meet";
 
 /** The rows these functions read. Anything holding both will do. */
@@ -83,6 +85,147 @@ export function proposedTime(watches: Watch[]): ProposedTime | null {
   };
 }
 
+/**
+ * The mean of some times, truncated to hundredths.
+ *
+ * Truncated, not rounded, for the same reason every other time in this app is:
+ * a time you didn't swim is not a time.
+ */
+function meanOf(times: number[]): number {
+  return truncateToHundredths(
+    times.reduce((sum, ms) => sum + ms, 0) / times.length,
+  );
+}
+
+export interface LaneTime {
+  timeMs: number;
+  method: TimeMethod;
+  /** How many watches the number was worked out from. */
+  watchCount: number;
+  /** Which tier answered, so a screen can say why. */
+  from: WatchRole;
+}
+
+/**
+ * The time for a lane, and the single place that decides which one it is.
+ *
+ * Three tiers, asked in order, because the watches on a lane are not all the
+ * same kind of evidence:
+ *
+ * 1. **The administrator's own reading.** Whoever runs the meet has looked at
+ *    the lane, the watches and whatever the timers are telling them, and said
+ *    what it was. That is a ruling and it stands — it is the paper system's
+ *    "the referee decides", and the reason it is stored as a watch rather than
+ *    a separate field is that it is still a reading of a clock by a person,
+ *    and still worth keeping when somebody wants to know what it overrode.
+ *
+ * 2. **The timers, by the hand-timing rules.** Three watches take the middle
+ *    one, two are averaged, one stands alone. This is the official procedure
+ *    and it is what the third timer is *for*: the median outvotes a slow thumb
+ *    rather than letting it drag an average.
+ *
+ * 3. **The coaches, averaged.** A fallback for a lane the timing table missed
+ *    — a volunteer who didn't turn up, a phone that died. Coaches are timing
+ *    their own swimmers from the side, which is a worse position and an
+ *    interested one, so their times answer only when nothing better did. An
+ *    average rather than a median because there is no reason to expect three
+ *    of them, and the middle of two is the average anyway.
+ *
+ * Tiers are never mixed. Averaging a coach's watch in with the timers' would
+ * let the side of the pool quietly move an official time, and taking the
+ * median across all of them would do the same thing less visibly.
+ */
+export function laneTime(watches: Watch[]): LaneTime | null {
+  const byRole = (role: WatchRole) => watches.filter((w) => w.role === role);
+
+  // The most recent, if an administrator has somehow left two — a later
+  // reading replaces an earlier one rather than being averaged with it.
+  const official = byRole("admin").sort(
+    (a, b) => b.recordedAt - a.recordedAt,
+  )[0];
+  if (official) {
+    return {
+      timeMs: official.timeMs,
+      method: "official",
+      watchCount: 1,
+      from: "admin",
+    };
+  }
+
+  const timers = proposedTime(byRole("timer"));
+  if (timers) {
+    return { ...timers, from: "timer" };
+  }
+
+  const coaches = byRole("coach");
+  if (coaches.length > 0) {
+    return {
+      timeMs: meanOf(coaches.map((w) => w.timeMs)),
+      method: coaches.length === 1 ? "single" : "average",
+      watchCount: coaches.length,
+      from: "coach",
+    };
+  }
+
+  return null;
+}
+
+export type LaneProgress = "none" | "waiting" | "complete";
+
+/**
+ * How far along a lane's timing is, for a desk watching a heat go off.
+ *
+ * Three answers, and the middle one is the reason this exists. A lane with
+ * nothing on it looks identical to a lane whose timers are all still holding
+ * their clocks — and those need opposite responses: one wants somebody sent to
+ * cover it, the other wants leaving alone. `start` is sent on its own the
+ * instant a thumb lands precisely so this can tell them apart.
+ *
+ * "Complete" means every stopwatch known to be running on this lane has since
+ * been submitted. Known from two places: who armed (`activity`) and who has
+ * sent a time. A timer who typed a time without ever starting a watch counts
+ * as in; a timer who armed and hasn't submitted is what holds the lane open.
+ *
+ * Only timers count. A coach's watch and the desk's own reading are not what
+ * the lane is waiting for — the timing table is.
+ */
+export function laneProgress(
+  rows: { watches: Watch[]; activity: TimerActivity[] },
+  heatId: string,
+  lane: number,
+): LaneProgress {
+  const armed = new Set(
+    rows.activity
+      .filter(
+        (a) =>
+          a.heatId === heatId && a.lane === lane && a.startedAt !== undefined,
+      )
+      .map((a) => a.timerId),
+  );
+  const submitted = new Set(
+    rows.watches
+      .filter(
+        (w) => w.heatId === heatId && w.lane === lane && w.role === "timer",
+      )
+      .map((w) => w.timerId),
+  );
+
+  if (armed.size === 0 && submitted.size === 0) return "none";
+  if (submitted.size === 0) return "waiting";
+  for (const timerId of armed) {
+    if (!submitted.has(timerId)) return "waiting";
+  }
+  return "complete";
+}
+
+/**
+ * Whether a stopwatch in this app timed the race, rather than somebody typing
+ * a number in afterwards.
+ */
+export function fromStopwatch(watch: Watch): boolean {
+  return watch.startedAt !== undefined && watch.stoppedAt !== undefined;
+}
+
 export function watchesForLane(
   rows: Pick<TimingRows, "watches">,
   heatId: string,
@@ -113,7 +256,9 @@ export function athleteInLane(
   heat: Heat,
   lane: number,
 ): string | null {
-  return callForLane(rows, heat.id, lane)?.athleteId ?? heat.lanes[lane - 1] ?? null;
+  return (
+    callForLane(rows, heat.id, lane)?.athleteId ?? heat.lanes[lane - 1] ?? null
+  );
 }
 
 /**
@@ -139,7 +284,7 @@ export function resultForLane(
 
   const watches = watchesForLane(rows, heat.id, lane);
   const call = callForLane(rows, heat.id, lane);
-  const derived = proposedTime(watches);
+  const derived = laneTime(watches);
   if (!call && !derived) return null;
 
   const base = {
@@ -209,7 +354,7 @@ export function resultForLane(
     recordedAt: Math.max(...watches.map((w) => w.recordedAt)),
     method: derived.method,
     watchCount: derived.watchCount,
-    manual: watches.every((w) => w.source === "typed"),
+    manual: watches.every((w) => !fromStopwatch(w)),
   };
 }
 
@@ -285,7 +430,9 @@ export function heatTouched(rows: TimingRows, heat: Pick<Heat, "id">): boolean {
 export function heatClosed(rows: TimingRows, heat: Heat): boolean {
   const lanes = activeLanes(rows, heat);
   if (lanes.length === 0) return false;
-  return lanes.every((lane) => callForLane(rows, heat.id, lane)?.final === true);
+  return lanes.every(
+    (lane) => callForLane(rows, heat.id, lane)?.final === true,
+  );
 }
 
 /** An event is closed once all of its heats are. Its results are then official. */
@@ -314,24 +461,6 @@ export function heatProgress(
 
 /* ----------------------------------------------------------------- writing */
 
-export function makeWatch(
-  heat: Heat,
-  lane: number,
-  timerId: string,
-  timeMs: number,
-  source: Watch["source"],
-  now = Date.now(),
-): Watch {
-  return {
-    heatId: heat.id,
-    lane,
-    timerId,
-    timeMs,
-    recordedAt: now,
-    source,
-  };
-}
-
 /**
  * The call to write for a lane, given what's there and what changed.
  *
@@ -339,8 +468,9 @@ export function makeWatch(
  * keeps a time that was typed and typing a time keeps a DQ — the two are
  * separate fields of one decision and neither erases the other.
  *
- * Signing off snapshots what the watches said at that moment, so the record
- * can still answer "what did they actually see?" after a late watch arrives.
+ * Signing off copies the lane's time — whatever `laneTime` says it is, by
+ * whichever tier answered — onto the call, so the record can still answer
+ * "what was accepted?" after a late watch arrives or a watch is discarded.
  */
 export function makeCall(
   rows: TimingRows,
@@ -356,12 +486,10 @@ export function makeCall(
   now = Date.now(),
 ): LaneCall {
   const existing = callForLane(rows, heat.id, lane);
-  const derived = proposedTime(watchesForLane(rows, heat.id, lane));
+  const derived = laneTime(watchesForLane(rows, heat.id, lane));
 
   const timeMs =
-    patch.timeMs === null
-      ? undefined
-      : (patch.timeMs ?? existing?.timeMs);
+    patch.timeMs === null ? undefined : (patch.timeMs ?? existing?.timeMs);
   const athleteId =
     patch.athleteId === null
       ? undefined

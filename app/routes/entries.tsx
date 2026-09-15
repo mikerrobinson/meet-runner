@@ -6,6 +6,7 @@ import { Button, EmptyState, TextInput } from "~/components/ui";
 import { enrollmentIndex } from "~/lib/roster";
 import { whyNotEnter } from "~/lib/events";
 import { useMeet } from "./meet-layout";
+import { useLiveData } from "~/hooks/use-live-data";
 import { usePending, useSend } from "~/state/outbox";
 import { applyPending } from "~/lib/pending";
 import { useViewPrefs } from "~/state/view-prefs";
@@ -89,6 +90,12 @@ export default function Registration() {
   const detail = useMemo(() => applyPending(loaded, pending), [loaded, pending]);
   const { meet, events: meetEvents, entries, athletes } = detail;
   const { nameOrder } = useViewPrefs();
+
+  // Two coaches enter their own swimmers on this grid at the same time, and
+  // they write different rows — so each should see the other's ticks appear
+  // rather than find out at seeding.
+  useLiveData();
+
   const [params] = useSearchParams();
   const [search, setSearch] = useState("");
   const [adding, setAdding] = useState(false);
@@ -245,7 +252,13 @@ export default function Registration() {
         {roster.length === 0 ? (
           <>
             The team roster is empty.{" "}
-            <Link to="/team" className="font-semibold text-blue-600 underline">
+            <Link
+              // Their own team if they coach one of the ones racing, since
+              // that is the roster they can actually add to; otherwise the
+              // host's, which is the one they came to look at.
+              to={`/teams/${access.coachOf[0] ?? meet.hostTeamId ?? meet.teamIds[0] ?? ""}`}
+              className="font-semibold text-blue-600 underline"
+            >
               Add swimmers
             </Link>
             .

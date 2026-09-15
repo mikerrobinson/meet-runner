@@ -109,12 +109,36 @@ export function Field({
   );
 }
 
-const CONTROL_CLASS =
-  "w-full min-h-11 rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white";
+/** Shape and size, which no caller overrides. */
+const CONTROL_SHAPE =
+  "w-full min-h-11 rounded-xl border px-3 text-base placeholder:text-slate-400 focus:outline-none";
 
-export function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  const { className = "", ...rest } = props;
-  return <input className={`${CONTROL_CLASS} ${className}`} {...rest} />;
+/** Colour, which a caller may replace outright. */
+const CONTROL_SKIN =
+  "border-slate-300 bg-white text-slate-900 focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950 dark:text-white";
+
+const CONTROL_CLASS = `${CONTROL_SHAPE} ${CONTROL_SKIN}`;
+
+/**
+ * `tone` replaces the default colour rather than layering over it.
+ *
+ * Appending would not work: two Tailwind utilities setting the same property
+ * are equally specific, so which one wins is the order they happen to sit in
+ * the generated stylesheet, not the order of the class list. A caller that
+ * wanted an amber box got a slate one and no error — so the default simply
+ * isn't emitted when a tone is given.
+ */
+export function TextInput({
+  tone,
+  className = "",
+  ...rest
+}: React.InputHTMLAttributes<HTMLInputElement> & { tone?: string }) {
+  return (
+    <input
+      className={`${CONTROL_SHAPE} ${tone ?? CONTROL_SKIN} ${className}`}
+      {...rest}
+    />
+  );
 }
 
 export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {

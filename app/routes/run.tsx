@@ -14,12 +14,18 @@ import {
   TextInput,
 } from "~/components/ui";
 import { useElapsed, useWakeLock } from "~/hooks/use-stopwatch";
+import { useLiveData } from "~/hooks/use-live-data";
 import { heatsForEvent, reseedHeats, shuffle } from "~/lib/heats";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
 import { mayEditMeet } from "~/lib/access";
 import { meetAccess } from "~/lib/access.server";
 import { meetDetail, replaceHeats } from "~/lib/meets.server";
-import { heatTouched, resultsForHeat, watchesForLane } from "~/lib/timing";
+import {
+  fromStopwatch,
+  heatTouched,
+  resultsForHeat,
+  watchesForLane,
+} from "~/lib/timing";
 import { loadProgress, saveProgress } from "~/lib/storage";
 
 import { formatClock, formatTime, parseTime } from "~/lib/time";
@@ -84,7 +90,9 @@ export async function action({ params, request, context }: Route.ActionArgs) {
   const user = await currentUser(request, env);
   const access = await meetAccess(db, params.meetId, user);
   if (!mayEditMeet(access)) {
-    throw new Response("Whoever is running this meet seeds it.", { status: 403 });
+    throw new Response("Whoever is running this meet seeds it.", {
+      status: 403,
+    });
   }
 
   const { eventId } = (await request.json()) as { eventId: string };
@@ -111,9 +119,39 @@ export default function RunMeet() {
   const { detail: loaded, access } = useMeet();
   const pending = usePending();
   const send = useSend();
-  const detail = useMemo(() => applyPending(loaded, pending), [loaded, pending]);
+  const detail = useMemo(
+    () => applyPending(loaded, pending),
+    [loaded, pending],
+  );
   const { meetId } = useParams();
   const { laneLayout: layout, timerId, nameOrder } = useViewPrefs();
+
+  /**
+   * Who this screen's watches belong to.
+   *
+   * A signed-in coach is the *person*, not the iPad — so the watch they take
+   * on lane 3 is theirs whichever device they pick up, and switching devices
+   * mid-meet doesn't leave two watches on one lane disagreeing. The device id
+   * is the fallback for anyone with no account, which on this screen means
+   * nobody today and is the honest default rather than a guess.
+   */
+  const mine = access.userId ?? timerId;
+
+  /**
+   * What a watch taken on this screen is worth.
+   *
+   * The same screen serves an administrator who also holds a stopwatch and a
+   * coach who only does, and their readings are not weighed the same — so it
+   * follows whoever is looking rather than the screen they are on. The server
+   * decides it again from the session; this keeps the optimistic overlay in
+   * step until it answers.
+   */
+  const myRole = access.admin ? "admin" : access.userId ? "coach" : "timer";
+
+  // Both halves of this screen are watching other people work: the desk for
+  // times arriving from the phones, the deck for a lane reseated at the desk.
+  // One call covers both, since the control view renders inside this one.
+  useLiveData();
   const meet = detail.meet;
   const roster = detail.athletes;
 
@@ -136,6 +174,7 @@ export default function RunMeet() {
   } | null>(null);
   const [view, setView] = useState<"control" | "stopwatch" | null>(null);
   const showing = view ?? (access.admin ? "control" : "stopwatch");
+  console.log(">>>>>>>>>>>>>>", view, access.admin, showing);
 
   const [editingLane, setEditingLane] = useState<number | null>(null);
   const [assigningLane, setAssigningLane] = useState<number | null>(null);
@@ -171,7 +210,8 @@ export default function RunMeet() {
   const resultsByLane = useMemo(() => {
     const map = new Map<number, Result>();
     if (!heat) return map;
-    for (const result of resultsForHeat(detail, heat)) map.set(result.lane, result);
+    for (const result of resultsForHeat(detail, heat))
+      map.set(result.lane, result);
     return map;
   }, [detail, heat]);
 
@@ -188,15 +228,17 @@ export default function RunMeet() {
     const lanes = new Set<number>();
     if (!heat) return lanes;
     for (const watch of detail.watches) {
-      if (watch.heatId === heat.id && watch.timerId === timerId) {
+      if (watch.heatId === heat.id && watch.timerId === mine) {
         lanes.add(watch.lane);
       }
     }
     return lanes;
-  }, [detail, heat, timerId]);
+  }, [detail, heat, mine]);
 
   const occupiedLanes = heat
-    ? heat.lanes.map((id, i) => (id ? i + 1 : null)).filter((n): n is number => n !== null)
+    ? heat.lanes
+        .map((id, i) => (id ? i + 1 : null))
+        .filter((n): n is number => n !== null)
     : [];
   /**
    * Nothing left on this screen that still wants a time *for this run*.
@@ -386,9 +428,10 @@ export default function RunMeet() {
                     meetId: meet.id,
                     heatId: heat.id,
                     lane,
-                    timerId,
+                    timerId: mine,
+                    userId: access.userId ?? undefined,
+                    role: myRole,
                     timeMs: at - clock!.startedAt,
-                    source: "stopwatch",
                     recordedAt: at,
                     startedAt: clock!.startedAt,
                     stoppedAt: at,
@@ -432,7 +475,7 @@ export default function RunMeet() {
                     kind: "clear-watches",
                     meetId: meet.id,
                     heatId: heat.id,
-                    timerId,
+                    timerId: mine,
                   });
                   setClock(null);
                   setConfirmReset(false);
@@ -474,7 +517,7 @@ export default function RunMeet() {
                   kind: "clear-watches",
                   meetId: meet.id,
                   heatId: heat.id,
-                  timerId,
+                  timerId: mine,
                 });
                 // Whatever else is already on these lanes belongs to the
                 // previous swim, not this one.
@@ -491,7 +534,11 @@ export default function RunMeet() {
 
           {!running && (
             <div className="grid grid-cols-3 gap-2">
-              <Button size="sm" onClick={prevHeat} disabled={eventIndex === 0 && heatIndex === 0}>
+              <Button
+                size="sm"
+                onClick={prevHeat}
+                disabled={eventIndex === 0 && heatIndex === 0}
+              >
                 ‹ Back
               </Button>
               <Button
@@ -503,7 +550,16 @@ export default function RunMeet() {
                     ? "This event has times against it — reseeding would move swimmers out from under them."
                     : undefined
                 }
-                onClick={() => reseed.submit({ eventId: event.id }, { method: "post", action: `/meets/${meet.id}/run`, encType: "application/json" })}
+                onClick={() =>
+                  reseed.submit(
+                    { eventId: event.id },
+                    {
+                      method: "post",
+                      action: `/meets/${meet.id}/run`,
+                      encType: "application/json",
+                    },
+                  )
+                }
               >
                 Reseed lanes
               </Button>
@@ -557,16 +613,17 @@ export default function RunMeet() {
             return s ? displayName(s, nameOrder) : `Lane ${editingLane}`;
           })()}
           watches={watchesForLane(detail, heat.id, editingLane)}
-          timerId={timerId}
+          timerId={mine}
           onSaveTime={(timeMs) => {
             send({
               kind: "watch",
               meetId: meet.id,
               heatId: heat.id,
               lane: editingLane,
-              timerId,
+              timerId: mine,
+              userId: access.userId ?? undefined,
+              role: myRole,
               timeMs,
-              source: "typed",
               recordedAt: Date.now(),
             });
             setEditingLane(null);
@@ -757,7 +814,7 @@ function LaneSheet({
                       {formatTime(watch.timeMs)}
                       <span className="ml-2 text-xs text-slate-500">
                         {watch.timerId === timerId ? "you" : "another timer"}
-                        {watch.source === "typed" && " · typed"}
+                        {!fromStopwatch(watch) && " · typed"}
                       </span>
                     </span>
                     <button

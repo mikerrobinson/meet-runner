@@ -13,9 +13,22 @@ import { loadSessionToken, loadSyncToken } from "./storage";
  */
 export function apiUrl(path: string): string {
   if (typeof document === "undefined") return path;
+  return `${appBasePath().replace(/\/$/, "")}${path}`;
+}
+
+/**
+ * Where this app lives, with a trailing slash: `/` in dev and
+ * `/projects/meet-runner/` in production.
+ *
+ * Shared by the API path and the cookie `Path`, so a cookie this device writes
+ * is scoped to exactly the requests that should carry it — and can't be read
+ * by, or leak into, whatever else is hosted on the domain.
+ */
+export function appBasePath(): string {
+  if (typeof document === "undefined") return "/";
   const base = document.querySelector("base")?.getAttribute("href");
-  const prefix = (base ?? import.meta.env.BASE_URL ?? "/").replace(/\/$/, "");
-  return `${prefix}${path}`;
+  const prefix = base ?? import.meta.env.BASE_URL ?? "/";
+  return prefix.endsWith("/") ? prefix : `${prefix}/`;
 }
 
 /** Carries the HTTP status so callers can tell "misconfigured" from "offline". */

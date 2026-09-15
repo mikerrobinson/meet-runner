@@ -141,8 +141,8 @@ export default function AthleteDetail({ loaderData }: Route.ComponentProps) {
   if (!detail) {
     return (
       <EmptyState title="No such swimmer">
-        <Link to="/team" className="font-semibold text-blue-600 underline">
-          Back to the roster
+        <Link to="/teams" className="font-semibold text-blue-600 underline">
+          Back to the teams
         </Link>
       </EmptyState>
     );

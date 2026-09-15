@@ -7,10 +7,12 @@ import {
   EmptyState,
   Field,
   SectionTitle,
+  Segmented,
   TextInput,
 } from "~/components/ui";
 import { request } from "~/lib/http";
 import { useSession } from "~/state/session";
+import { useViewPrefs } from "~/state/view-prefs";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Profile · Meet Runner" }];
@@ -35,6 +37,7 @@ interface Profile {
  */
 export default function ProfileScreen() {
   const session = useSession();
+  const { nameOrder, setNameOrder } = useViewPrefs();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +128,26 @@ export default function ProfileScreen() {
             Save
           </Button>
         </div>
+      </Card>
+
+      {/* A display preference, and deliberately a *device* one. It belongs to
+          whoever is looking rather than to the team — a visiting coach
+          shouldn't change how the host reads its own roster — and putting it
+          on the account instead would make it follow somebody onto the shared
+          iPad in the swim bag. So it sits on this page for want of anywhere
+          better, and says plainly which it is. */}
+      <Card>
+        <SectionTitle>Preferences</SectionTitle>
+        <Field label="Names" hint="How names are written and sorted on this device.">
+          <Segmented
+            value={nameOrder}
+            onChange={(next) => setNameOrder(next as "first" | "last")}
+            options={[
+              { value: "last", label: "Aaronson, Avery" },
+              { value: "first", label: "Avery Aaronson" },
+            ]}
+          />
+        </Field>
       </Card>
 
       <Card>

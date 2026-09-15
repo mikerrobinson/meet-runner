@@ -88,13 +88,14 @@ const watch = (lane: number, timeMs: number, at: number): Watch => ({
   heatId: heats[0].id,
   lane,
   timerId: "t1",
+  role: "timer" as const,
   timeMs,
   recordedAt: at,
-  source: "stopwatch",
 });
 
 const detail: MeetDetail = {
   meet: meetRow,
+  activity: [],
   teams: [home, away],
   events,
   entries: { [free50.id]: ["a1", "a9", "a2"] },
@@ -180,16 +181,17 @@ const detail: MeetDetail = {
     meet: { ...meetRow, id: "m2", name: "vs Central", date: "2027-01-10" },
     heats: secondHeats,
     entries: { [free50.id]: ["a1"] },
+    activity: [],
     calls: [],
     watches: [
       {
         heatId: secondHeats[0].id,
         lane: secondHeats[0].lanes.indexOf("a1") + 1,
         timerId: "t1",
+        role: "timer" as const,
         timeMs: 25_800,
         recordedAt: 5,
-        source: "stopwatch",
-      },
+              },
     ],
   };
 

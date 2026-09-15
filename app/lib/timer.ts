@@ -10,57 +10,55 @@
  * time because the pool wifi dropped, which is what the queue is for.
  */
 
-import { apiUrl, ApiError } from "./http";
+import { apiUrl, ApiError, appBasePath } from "./http";
+import { A_WEEK, readCookie } from "./cookies";
+import { splitTypedName } from "./timer-messages";
+import { local } from "./local";
 import { generateId } from "./id";
 import type { Athlete, Heat, MeetEvent, Watch } from "~/types/meet";
 
-const GRANT_KEY = "meet-runner:timer-grant";
-const LANE_KEY = "meet-runner:timer-lane";
-const QUEUE_KEY = "meet-runner:timer-queue";
-const POSITION_KEY = "meet-runner:timer-position";
-
-/* ------------------------------------------------------------------ grant */
-
-export function loadGrant(): string {
-  if (typeof localStorage === "undefined") return "";
-  return localStorage.getItem(GRANT_KEY) ?? "";
-}
-
-export function saveGrant(token: string): void {
-  if (typeof localStorage === "undefined") return;
-  if (token) localStorage.setItem(GRANT_KEY, token);
-  else localStorage.removeItem(GRANT_KEY);
-}
-
 /**
- * A new grant is a new meet, so the position and the chosen lane go with it.
- * Otherwise a phone used at last week's meet would open this one already
- * eleven heats in.
+ * How far this phone has got, and nothing else.
+ *
+ * Which lane, which event, which heat and which meet all used to be cookies.
+ * They are in the URL now — every timing page is
+ * `/meets/{meetId}/timers/{timerId}/{event}/{heat}/{lane}` — so the address
+ * bar is the only record of where a timer is standing, the back button works,
+ * and a reloaded phone comes back exactly where it was without having
+ * remembered anything.
+ *
+ * What the URL can't say is how far somebody has *been*, which is what stops
+ * them wandering back into a heat whose sheet has already gone to the desk.
+ * One number, scoped by its own path to this meet and this device, so a
+ * different meet starts clean without anything having to notice.
  */
-export function adoptGrant(token: string): void {
-  if (typeof localStorage === "undefined") return;
-  if (loadGrant() !== token) {
-    localStorage.removeItem(POSITION_KEY);
-    localStorage.removeItem(LANE_KEY);
-  }
-  saveGrant(token);
+const FURTHEST_COOKIE = "mr_timer_done";
+
+function furthestPath(meetId: string, timerId: string): string {
+  return (
+    `${appBasePath()}meets/${encodeURIComponent(meetId)}` +
+    `/timers/${encodeURIComponent(timerId)}`
+  );
 }
 
-export function loadLane(): number | null {
-  if (typeof localStorage === "undefined") return null;
-  const stored = Number(localStorage.getItem(LANE_KEY));
-  return Number.isFinite(stored) && stored > 0 ? stored : null;
+/** The furthest heat submitted, as an index into the running order. */
+export function loadFurthest(meetId: string, timerId: string): number {
+  const raw = readCookie(FURTHEST_COOKIE);
+  const value = Number(raw);
+  return raw !== null && Number.isInteger(value) && value >= 0 ? value : -1;
 }
 
-export function saveLane(lane: number): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(LANE_KEY, String(lane));
-}
-
-/** Step back to the lane question — a timer swapping ends of the pool. */
-export function clearLane(): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.removeItem(LANE_KEY);
+export function saveFurthest(
+  meetId: string,
+  timerId: string,
+  index: number,
+): void {
+  if (typeof document === "undefined") return;
+  const secure = location.protocol === "https:" ? "; Secure" : "";
+  document.cookie =
+    `${FURTHEST_COOKIE}=${index}` +
+    `; Path=${furthestPath(meetId, timerId)}; SameSite=Lax` +
+    `; Max-Age=${A_WEEK}${secure}`;
 }
 
 /* ------------------------------------------------------- the running order */
@@ -95,178 +93,47 @@ export function runningOrder(events: MeetEvent[], heats: Heat[]): Stop[] {
   return order;
 }
 
-export interface Position {
-  /** Where they are now, as an index into the running order. */
-  at: number;
-  /** The furthest heat they've submitted a time for. */
-  submitted: number;
-}
-
-export function loadPosition(): Position {
-  if (typeof localStorage === "undefined") return { at: 0, submitted: -1 };
-  try {
-    const stored = JSON.parse(localStorage.getItem(POSITION_KEY) ?? "");
-    return {
-      at: Number(stored?.at) || 0,
-      submitted: Number.isFinite(stored?.submitted) ? stored.submitted : -1,
-    };
-  } catch {
-    return { at: 0, submitted: -1 };
-  }
-}
-
-export function savePosition(position: Position): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(POSITION_KEY, JSON.stringify(position));
-}
-
 /**
- * The earliest heat a timer may go back to.
+ * Throw away the token the build before last kept in localStorage.
  *
- * One heat behind whatever they last submitted, and no further. The reason is
- * the one thing timers can't do on paper either: once a runner has collected
- * the sheet and a result has been reconciled, the facts underneath it must not
- * quietly change. Correcting the time you just took is fair; rewriting an
- * event that's been announced is not.
+ * Grants live in an HttpOnly cookie now, so a copy sitting in storage is a
+ * working credential that nothing reads and any script on the page could —
+ * the exact thing moving to a cookie was meant to stop. Phones that timed a
+ * meet on the old build still have one until they are told otherwise, and it
+ * can go once none do.
  */
-export function earliestAllowed(position: Position): number {
-  return Math.max(0, position.submitted - 1);
+export function forgetLegacyGrant(): void {
+  local.remove("meet-runner:timer-grant");
 }
 
 /* ------------------------------------------------------------------ queue */
 
 /**
- * A person a timer typed in, and the team they said it was.
+ * The queue moved out, into cookies — see `timer-queue.ts`.
  *
- * The team travels as an id rather than a name because the server turns it
- * into a roster entry, and it will only do that for a team actually racing
- * this meet — a name would have to be matched back to one, which is exactly
- * the guessing the old string label forced.
+ * It used to live in localStorage here, which every other device in this app
+ * can rely on and a timer's phone cannot: the browser a camera app opens may
+ * be a private window or a webview with site storage switched off. What is
+ * left in this file is the snapshot and the running order, which are read
+ * from the server on every poll and so need keeping nowhere.
  */
-export interface QueuedAthlete extends Athlete {
-  teamId?: string;
-}
-
-/**
- * Who a timer says is in their lane, sent on its own.
- *
- * Separate from the watch because it happens at a different moment: names get
- * sorted out behind the blocks, minutes before anyone touches a stopwatch.
- * Riding it on the time meant nobody else — not the other timers on that lane,
- * not the admin desk — knew about a correction until the race was over, which
- * is exactly too late to be useful.
- */
-export interface Seat {
-  heatId: string;
-  lane: number;
-  athleteId: string;
-}
-
-export interface QueuedWrite {
-  watches: Watch[];
-  athletes: QueuedAthlete[];
-  seats: Seat[];
-}
-
-const EMPTY_QUEUE: QueuedWrite = { watches: [], athletes: [], seats: [] };
-
-function readQueue(): QueuedWrite {
-  if (typeof localStorage === "undefined") return { ...EMPTY_QUEUE };
-  try {
-    const stored = JSON.parse(localStorage.getItem(QUEUE_KEY) ?? "");
-    return {
-      watches: Array.isArray(stored?.watches) ? stored.watches : [],
-      athletes: Array.isArray(stored?.athletes) ? stored.athletes : [],
-      seats: Array.isArray(stored?.seats) ? stored.seats : [],
-    };
-  } catch {
-    return { ...EMPTY_QUEUE };
-  }
-}
-
-function writeQueue(queue: QueuedWrite): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
-}
-
-export function queueSize(): number {
-  const queue = readQueue();
-  return queue.watches.length + queue.athletes.length + queue.seats.length;
-}
-
-/**
- * Add to the outbox, replacing anything for the same watch.
- *
- * Keyed by heat, lane and timer, so a timer who corrects a time before it sends
- * queues one time rather than two contradictory ones.
- */
-export function enqueue(write: Partial<QueuedWrite>): void {
-  const queue = readQueue();
-  for (const watch of write.watches ?? []) {
-    const at = queue.watches.findIndex(
-      (existing) =>
-        existing.heatId === watch.heatId &&
-        existing.lane === watch.lane &&
-        existing.timerId === watch.timerId,
-    );
-    if (at >= 0) queue.watches[at] = watch;
-    else queue.watches.push(watch);
-  }
-  for (const athlete of write.athletes ?? []) {
-    if (!queue.athletes.some((existing) => existing.id === athlete.id)) {
-      queue.athletes.push(athlete);
-    }
-  }
-  // One seat per lane: changing your mind twice before the start is one
-  // answer, not two.
-  for (const seat of write.seats ?? []) {
-    const at = queue.seats.findIndex(
-      (existing) => existing.heatId === seat.heatId && existing.lane === seat.lane,
-    );
-    if (at >= 0) queue.seats[at] = seat;
-    else queue.seats.push(seat);
-  }
-  writeQueue(queue);
-}
-
-/**
- * Try to send everything waiting.
- *
- * The queue is only cleared once the server has actually taken it. A failure
- * leaves it exactly as it was, so the next attempt — a tap, the next
- * submission, or coming back into signal — sends the same times again. Watches
- * are keyed by heat, lane and timer, so sending twice is not two times.
- */
-export async function flush(): Promise<{ sent: number; error?: string }> {
-  const queue = readQueue();
-  const waiting =
-    queue.watches.length + queue.athletes.length + queue.seats.length;
-  if (waiting === 0) return { sent: 0 };
-
-  try {
-    await timerPost("/api/timer/watch", queue);
-    writeQueue({ ...EMPTY_QUEUE });
-    return { sent: waiting };
-  } catch (error) {
-    return {
-      sent: 0,
-      error: error instanceof Error ? error.message : "Couldn't send",
-    };
-  }
-}
 
 /* ------------------------------------------------------------------ wire */
 
-/** The grant is the whole credential; there's no session behind it. */
+/**
+ * The grant is the whole credential, and the browser carries it.
+ *
+ * Nothing is attached here: the cookie `/t/:token` set rides every same-origin
+ * request by itself. There is no token in this file to attach, which is the
+ * point — a credential no script can read is one no script can leak.
+ */
 async function timerFetch(path: string, init?: RequestInit): Promise<unknown> {
-  const grant = loadGrant();
   let response: Response;
   try {
     response = await fetch(apiUrl(path), {
       ...init,
       headers: {
         "content-type": "application/json",
-        ...(grant ? { authorization: `Bearer ${grant}` } : {}),
         ...init?.headers,
       },
     });
@@ -327,23 +194,50 @@ export function fetchSnapshot(timerId: string): Promise<Snapshot> {
 }
 
 /**
- * A swimmer a timer typed in, minted on the device.
+ * The earliest heat a timer may go back to.
  *
- * The id is generated here rather than asked of the server so that adding
- * someone works with no signal at all — the person and the time they were
- * given then travel together in the queue.
+ * One behind whatever they last submitted, and no further. The reason is the
+ * one thing timers can't do on paper either: once a runner has collected the
+ * sheet and a result has been reconciled, the facts underneath it must not
+ * quietly change. Correcting the time you just took is fair; rewriting an
+ * event that has been announced is not.
+ *
+ * Takes the furthest heat reached rather than a position, now that where a
+ * timer *is* comes from the URL and only where they have *been* is remembered.
+ */
+export function earliestAllowed(furthest: number): number {
+  return Math.max(0, furthest - 1);
+}
+
+/**
+ * A person a timer typed in.
+ *
+ * Carries the team the timer tapped, because a visiting swimmer belongs to a
+ * real roster and guessing which one is how a season ends up with two Sofias.
+ */
+export interface QueuedAthlete extends Athlete {
+  teamId?: string;
+}
+
+/**
+ * A swimmer a timer typed in, for the screen to show immediately.
+ *
+ * The id minted here is local and temporary. The `seat` message carries the
+ * *name*, and the server mints the id that lasts — it is the only side that
+ * can tell a genuinely new person from one it already has, which a phone
+ * holding a partial roster cannot. The next snapshot replaces this one, so
+ * nothing is allowed to key off it.
  */
 export function newVisitingAthlete(
   name: string,
   teamId: string,
   gender: Athlete["gender"],
 ): QueuedAthlete {
-  const trimmed = name.trim().replace(/\s+/g, " ");
-  const cut = trimmed.lastIndexOf(" ");
+  // The same split the server will apply to the name in the `seat` message,
+  // so the lane doesn't show one thing now and another after the next poll.
   return {
     id: generateId(),
-    firstName: cut > 0 ? trimmed.slice(0, cut) : trimmed,
-    lastName: cut > 0 ? trimmed.slice(cut + 1) : "",
+    ...splitTypedName(name),
     gender,
     teamId: teamId || undefined,
   };

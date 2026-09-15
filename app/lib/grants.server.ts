@@ -114,6 +114,117 @@ export async function issueGrant(
   return { token, expiresAt };
 }
 
+/* ----------------------------------------------------------------- cookie */
+
+export const GRANT_COOKIE = "mr_timer";
+
+/**
+ * The grant on a request.
+ *
+ * A cookie, and only a cookie. The token arrives once, in the URL of a scanned
+ * QR code, and `/t/:token` trades it for this before anything renders — so
+ * from then on the browser carries the credential on every request without
+ * any script being involved. That is what makes timing work on a phone the
+ * app has never met: no storage to be blocked, nothing to hydrate, and no
+ * state that a private window can refuse to keep.
+ */
+export function grantToken(request: Request): string | null {
+  const jar = request.headers.get("cookie");
+  if (!jar) return null;
+  for (const part of jar.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === GRANT_COOKIE && rest.length) {
+      return decodeURIComponent(rest.join("="));
+    }
+  }
+  return null;
+}
+
+/**
+ * How the grant cookie is written and cleared.
+ *
+ * `HttpOnly` because nothing on the page has any use for the token — the
+ * whole point is that the browser sends it and no script ever holds it, which
+ * also means a scripted page cannot leak it. Scoped to the app's own path
+ * rather than the host, because a bearer credential taped to a table should
+ * travel no further than the thing it opens.
+ *
+ * The lifetime is the grant's own: the cookie dies the moment the token it
+ * carries stops working, so a phone is never holding a credential that
+ * outlives what it was for.
+ */
+export function grantCookie(
+  token: string | null,
+  request: Request,
+  options: { path: string; expiresAt?: number; now?: number },
+): string {
+  const now = options.now ?? Date.now();
+  const https = new URL(request.url).protocol === "https:";
+  const maxAge =
+    token && options.expiresAt
+      ? Math.max(0, Math.floor((options.expiresAt - now) / 1000))
+      : 0;
+
+  return [
+    `${GRANT_COOKIE}=${token ? encodeURIComponent(token) : ""}`,
+    `Path=${options.path}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    ...(https ? ["Secure"] : []),
+    `Max-Age=${maxAge}`,
+  ].join("; ");
+}
+
+/* -------------------------------------------------------------- device id */
+
+export const DEVICE_COOKIE = "mr_timer_id";
+
+/**
+ * Who this phone is when it takes a time.
+ *
+ * Minted at the moment the code is scanned, so it is in the URL from the very
+ * first screen — every timing page is `/meets/{meetId}/timers/{timerId}/…`,
+ * and the device's identity is part of its address rather than something the
+ * page has to remember and attach.
+ *
+ * Re-used when the phone already has one. A volunteer who scans again after
+ * lunch, or whose tab reloaded, must come back as the *same* timer: watches
+ * are keyed by it, so a device that forgets files a second watch on a lane it
+ * already timed, and since several watches on a lane are averaged, that moves
+ * the time the desk reads.
+ *
+ * Not `HttpOnly` — the coach's own deck stopwatch reads the same cookie for
+ * the same purpose, and it identifies a device rather than authorising one.
+ * The grant is the credential, and that one no script can touch.
+ */
+export function deviceId(request: Request): string {
+  const jar = request.headers.get("cookie") ?? "";
+  for (const part of jar.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === DEVICE_COOKIE && rest.length) {
+      const existing = decodeURIComponent(rest.join("=")).trim();
+      // URL-safe, because it is about to become part of one.
+      if (/^[A-Za-z0-9_-]{1,40}$/.test(existing)) return existing;
+    }
+  }
+  return `d-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function deviceCookie(
+  id: string,
+  request: Request,
+  path: string,
+): string {
+  const https = new URL(request.url).protocol === "https:";
+  return [
+    `${DEVICE_COOKIE}=${encodeURIComponent(id)}`,
+    `Path=${path}`,
+    "SameSite=Lax",
+    ...(https ? ["Secure"] : []),
+    `Max-Age=${60 * 60 * 24 * 365}`,
+  ].join("; ");
+}
+
 export interface Grant {
   meetId: string;
   teamId: string;

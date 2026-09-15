@@ -1,6 +1,5 @@
 import { Link, useSearchParams } from "react-router";
 import type { Route } from "./+types/athletes";
-import { BrowseNav } from "~/components/BrowseNav";
 import { Card, EmptyState, SectionTitle, TextInput } from "~/components/ui";
 import { listPublicAthletes } from "~/lib/public.server";
 import type { SyncEnv } from "~/lib/api.server";
@@ -40,7 +39,6 @@ export default function Athletes({ loaderData }: Route.ComponentProps) {
 
   return (
     <div className="space-y-4">
-      <BrowseNav here="athletes" />
 
       <Card>
         <SectionTitle>Athletes ({athletes.length})</SectionTitle>

@@ -11,6 +11,7 @@ import {
   TextInput,
 } from "~/components/ui";
 import { TimerAccess } from "~/components/TimerAccess";
+import { MeetTeams } from "~/components/MeetTeams";
 import { downloadFile, resultsToCsv } from "~/lib/csv";
 import { eventClosed, recordedCount } from "~/lib/timing";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
@@ -73,6 +74,24 @@ export async function action({ params, request, context }: Route.ActionArgs) {
       course: isMeetCourse(course) ? course : "SCY",
       location: String(form.get("location") ?? "").trim(),
       laneCount: isLaneCount(lanes) ? lanes : 6,
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Who's racing.
+   *
+   * The whole list every time, because that is what `updateMeet` writes: it
+   * replaces `meet_teams` rather than diffing it, so a patch describing only
+   * the change would need a second place that knew how to apply one.
+   */
+  if (intent === "teams") {
+    const teamIds = form.getAll("teamId").map(String).filter(Boolean);
+    const host = String(form.get("hostTeamId") ?? "");
+    await updateMeet(db, params.meetId, {
+      teamIds,
+      // A host that isn't racing isn't the host, whatever the form said.
+      hostTeamId: teamIds.includes(host) ? host : "",
     });
     return { ok: true };
   }
@@ -186,6 +205,12 @@ export default function MeetInfo() {
           reader sees the lineup; whoever runs the meet sees the lineup and can
           change it. */}
       {editing && <DetailsEditor />}
+
+      {/* Above the lineup on purpose: who is racing decides whose roster the
+          entries grid can draw from, so it is the first thing to get right
+          and the first thing to notice is wrong. */}
+      <MeetTeamsCard />
+
       <EventList editing={editing} />
 
       {mayEdit && <TimerAccess meet={meet} />}
@@ -247,6 +272,37 @@ export default function MeetInfo() {
 }
 
 /** Name, date, type, course, lanes, location — one form, one write. */
+/**
+ * Who's racing, wired to the action.
+ *
+ * The picker hands back the complete resulting list and this submits it. A
+ * `fetcher` rather than a navigation so adding an opponent doesn't scroll the
+ * page back to the top mid-setup, and so the card can say it's working
+ * without the whole screen going into a loading state.
+ */
+function MeetTeamsCard() {
+  const { detail, access } = useMeet();
+  const fetcher = useFetcher();
+
+  return (
+    <MeetTeams
+      detail={detail}
+      canEdit={mayEditMeet(access)}
+      coachOf={access.coachOf}
+      saving={fetcher.state !== "idle"}
+      onChange={({ teamIds, hostTeamId }) => {
+        const form = new FormData();
+        form.set("intent", "teams");
+        form.set("hostTeamId", hostTeamId);
+        // Repeated rather than joined: `getAll` on the other side needs no
+        // separator nobody can put in a team id.
+        for (const id of teamIds) form.append("teamId", id);
+        fetcher.submit(form, { method: "post" });
+      }}
+    />
+  );
+}
+
 function DetailsEditor() {
   const { detail } = useMeet();
   const { meet } = detail;

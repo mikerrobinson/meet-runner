@@ -55,17 +55,15 @@ eq(runningOrder(events, []), [], "events without heats produce no stops");
 
 // The rule timers actually live under: you may fix the time you just took,
 // and you may not reach back into an event that's already been reconciled.
-eq(earliestAllowed({ at: 0, submitted: -1 }), 0, "before anything is submitted, only heat one");
-eq(earliestAllowed({ at: 1, submitted: 0 }), 0, "having submitted heat one, you may return to it");
-eq(earliestAllowed({ at: 5, submitted: 4 }), 3, "one heat behind the last submission");
-eq(earliestAllowed({ at: 9, submitted: 8 }), 7, "and no further, however far along the meet is");
-// Browsing ahead to look at what's coming must not strand you: the floor
-// follows what you've *submitted*, never where you've wandered.
-eq(
-  earliestAllowed({ at: 20, submitted: 2 }),
-  1,
-  "looking ahead doesn't move the floor",
-);
+eq(earliestAllowed(-1), 0, "before anything is submitted, only heat one");
+eq(earliestAllowed(0), 0, "having submitted heat one, you may return to it");
+eq(earliestAllowed(4), 3, "one heat behind the last submission");
+eq(earliestAllowed(8), 7, "and no further, however far along the meet is");
+// Browsing ahead to look at what's coming must not strand you. Where a timer
+// is now lives in the URL and this function never sees it — which is the
+// property, stated by the signature rather than by a test: the floor can only
+// follow what has been submitted.
+eq(earliestAllowed(2), 1, "looking ahead doesn't move the floor");
 
 /* -------------------------------------------------------- names typed in */
 

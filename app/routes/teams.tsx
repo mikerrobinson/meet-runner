@@ -1,6 +1,5 @@
 import { Link } from "react-router";
 import type { Route } from "./+types/teams";
-import { BrowseNav } from "~/components/BrowseNav";
 import { Card, EmptyState, SectionTitle } from "~/components/ui";
 import { listPublicTeams } from "~/lib/public.server";
 import { useSession } from "~/state/session";
@@ -42,7 +41,6 @@ export default function Teams({ loaderData }: Route.ComponentProps) {
 
   return (
     <div className="space-y-4">
-      <BrowseNav here="teams" />
 
       {ours.length > 0 && (
         <Card>

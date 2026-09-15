@@ -1,4 +1,9 @@
-import { type RouteConfig, index, route, layout } from "@react-router/dev/routes";
+import {
+  type RouteConfig,
+  index,
+  route,
+  layout,
+} from "@react-router/dev/routes";
 
 export default [
   // Signing in and finding a team sit outside the shell: there's no team to
@@ -6,20 +11,28 @@ export default [
   route("sign-in", "routes/sign-in.tsx"),
   route("join", "routes/join.tsx"),
 
-  // The timer's whole world: a scanned link, and the stopwatch it opens.
-  // Outside the shell — no team header, no tab bar, nothing to wander into.
+  /**
+   * The timer's whole world: a scanned link, a lane, and the stopwatch.
+   *
+   * Outside the shell — no team header, no tab bar, nothing to wander into.
+   *
+   * Addressed the same way the endpoint behind them is, because where a timer
+   * is standing is not device state: it is which page they are on. Changing
+   * heats is a link, going back a heat is the back button, and a phone that
+   * reloads comes back exactly where it was without having remembered
+   * anything. It is also what a volunteer can be read down the pool — "you're
+   * on event seven, heat one, lane three" — when something has gone wrong.
+   */
   route("t/:token", "routes/timer-claim.tsx"),
-  route("timer", "routes/timer.tsx"),
+  route("meets/:meetId/timers/:timerId", "routes/timer-lanes.tsx"),
+  route("meets/:meetId/timers/:timerId/:event/:heat/:lane", "routes/timer.tsx"),
 
   layout("routes/shell.tsx", [
     index("routes/home.tsx"),
 
-    // The coach's own roster, editable, behind a membership.
-    route("team", "routes/team.tsx"),
-
-    // Browsing: every team and everyone, read from the server rather than the
-    // store — the store only ever holds your team, and these are the pages
-    // that exist to show the ones that aren't yours.
+    // Every team and everyone. One page per team, whether you coach there or
+    // are following a link to look — the editing appears for whoever the
+    // server says may edit, so there is no second copy of a roster to drift.
     route("teams", "routes/teams.tsx"),
     route("teams/:teamId", "routes/team-detail.tsx"),
     route("athletes", "routes/athletes.tsx"),
@@ -42,7 +55,6 @@ export default [
       route("run", "routes/run.tsx"),
     ]),
 
-    route("settings", "routes/settings.tsx"),
   ]),
 
   // Reading. Open, because a meet is a public event — the heat sheet is handed
@@ -75,7 +87,13 @@ export default [
   route("api/invites", "routes/api.invites.ts"),
 
   // Timers. A meet-scoped grant, not an account.
+  // One lane, one timer. The phone posts here and the browser brings whatever
+  // that lane still owes along with it, as cookies scoped to this very path.
+  route(
+    "api/meets/:meetId/timers/:timerId/:event/:heat/:lane",
+    "routes/api.timer.lane.ts",
+  ),
+
   route("api/timer/grant", "routes/api.timer.grant.ts"),
   route("api/timer/meet", "routes/api.timer.meet.ts"),
-  route("api/timer/watch", "routes/api.timer.watch.ts"),
 ] satisfies RouteConfig;

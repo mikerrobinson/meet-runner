@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
-import { Banner, Button, Card, SectionTitle, TextInput } from "./ui";
-import { request } from "~/lib/http";
-import type { PublicTeam } from "~/lib/public";
-import type { Meet } from "~/types/meet";
+import { useMemo, useState } from "react";
+import { Banner, Button, Card, SectionTitle } from "./ui";
+import { TeamPicker } from "./TeamPicker";
+import { enrollmentIndex } from "~/lib/roster";
+import type { MeetDetail } from "~/types/meet";
 
 /**
  * Who's racing.
@@ -13,98 +13,86 @@ import type { Meet } from "~/types/meet";
  * a real roster, and "Horizon", "horizon" and "Horzion" can't become three
  * different opponents.
  *
- * Adding one offers what the server already knows before offering to make
- * something new, because the common case by a distance is racing a team that
- * is already in there.
+ * The names come from the loader rather than a fetch of their own. `detail`
+ * already carries the racing teams — it has to, because the entries grid draws
+ * its rows from their rosters — and a second opinion about which teams those
+ * are is exactly the kind of disagreement this rewrite existed to remove.
  */
 export function MeetTeams({
-  meet,
-  homeTeamId,
+  detail,
+  canEdit,
+  coachOf,
+  saving,
   onChange,
 }: {
-  meet: Meet;
-  /** This device's own team. Always racing, and never removable. */
-  homeTeamId: string;
-  onChange: (patch: { teamIds: string[]; hostTeamId?: string }) => void;
+  detail: MeetDetail;
+  /** Whether to draw the editing controls at all. The server re-checks. */
+  canEdit: boolean;
+  /** Racing teams this person coaches — labelled, so their own is obvious. */
+  coachOf: string[];
+  saving: boolean;
+  /** The complete resulting list, which is what `updateMeet` writes. */
+  onChange: (next: { teamIds: string[]; hostTeamId: string }) => void;
 }) {
-  const [known, setKnown] = useState<PublicTeam[] | null>(null);
   const [adding, setAdding] = useState(false);
-  const [filter, setFilter] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    request<{ teams: PublicTeam[] }>("/api/teams")
-      .then((body) => setKnown(body.teams))
-      .catch(() => setKnown([]));
-  }, []);
+  const { meet, teams } = detail;
+  const hostTeamId = meet.hostTeamId ?? "";
 
-  useEffect(load, [load]);
+  /**
+   * How many swimmers each team has entered.
+   *
+   * Removing a team doesn't remove its entries — the rows stay, pointing at
+   * athletes no racing team enrols, which is the "counts towards things and
+   * renders nowhere" failure. Nothing here deletes them either; it just
+   * refuses to let it happen silently.
+   */
+  const enteredBy = useMemo(() => {
+    const enrolled = enrollmentIndex(detail.enrollments);
+    const entered = new Set(Object.values(detail.entries).flat());
+    const counts = new Map<string, number>();
+    for (const athleteId of entered) {
+      const teamId = enrolled.get(athleteId)?.teamId;
+      if (teamId) counts.set(teamId, (counts.get(teamId) ?? 0) + 1);
+    }
+    return counts;
+  }, [detail.enrollments, detail.entries]);
 
-  const nameOf = (id: string) =>
-    known?.find((team) => team.id === id)?.name ??
-    (id === homeTeamId ? "This team" : "Another team");
+  const teamIds = teams.map((team) => team.id);
 
-  const attach = (teamId: string) => {
-    if (meet.teamIds.includes(teamId)) return;
-    onChange({ teamIds: [...meet.teamIds, teamId] });
+  const add = (teamId: string) => {
+    if (teamIds.includes(teamId)) return;
+    onChange({
+      teamIds: [...teamIds, teamId],
+      // The first team on a meet is very likely the pool it's swum in.
+      hostTeamId: hostTeamId || teamId,
+    });
     setAdding(false);
-    setFilter("");
   };
 
-  const detach = (teamId: string) => {
+  const remove = (teamId: string) => {
     onChange({
-      teamIds: meet.teamIds.filter((id) => id !== teamId),
-      // A host that's no longer racing isn't the host.
-      hostTeamId: meet.hostTeamId === teamId ? undefined : meet.hostTeamId,
+      teamIds: teamIds.filter((id) => id !== teamId),
+      // A team that isn't racing isn't the host.
+      hostTeamId: hostTeamId === teamId ? "" : hostTeamId,
+    });
+    setConfirming(null);
+  };
+
+  const setHost = (teamId: string) => {
+    onChange({
+      teamIds,
+      hostTeamId: hostTeamId === teamId ? "" : teamId,
     });
   };
-
-  const create = async () => {
-    const name = filter.trim();
-    if (!name) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const body = await request<{ team: PublicTeam }>("/api/teams", {
-        method: "POST",
-        body: JSON.stringify({ name }),
-      });
-      setKnown((current) =>
-        current && !current.some((t) => t.id === body.team.id)
-          ? [...current, body.team]
-          : current,
-      );
-      attach(body.team.id);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Couldn't add that team. You may need to sign in.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const needle = filter.trim().toLowerCase();
-  const candidates = (known ?? []).filter(
-    (team) =>
-      !meet.teamIds.includes(team.id) &&
-      (!needle ||
-        team.name.toLowerCase().includes(needle) ||
-        team.code.toLowerCase().includes(needle)),
-  );
-  const exactMatch = (known ?? []).some(
-    (team) => team.name.toLowerCase() === needle,
-  );
 
   return (
     <Card>
       <SectionTitle
         action={
-          !adding ? (
-            <Button size="sm" onClick={() => setAdding(true)}>
+          canEdit && !adding ? (
+            <Button size="sm" onClick={() => setAdding(true)} disabled={saving}>
               + Team
             </Button>
           ) : undefined
@@ -113,101 +101,105 @@ export function MeetTeams({
         Teams racing
       </SectionTitle>
 
-      {error && (
-        <div className="mb-3">
-          <Banner tone="error">{error}</Banner>
-        </div>
-      )}
-
-      <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-        {meet.teamIds.map((teamId) => (
-          <li key={teamId} className="flex items-center gap-3 py-2.5">
-            <span className="min-w-0 flex-1">
-              <span className="block truncate font-medium">{nameOf(teamId)}</span>
-              <button
-                type="button"
-                onClick={() =>
-                  onChange({
-                    teamIds: meet.teamIds,
-                    hostTeamId: meet.hostTeamId === teamId ? undefined : teamId,
-                  })
-                }
-                className="text-xs font-semibold text-blue-600"
-              >
-                {meet.hostTeamId === teamId ? "Host pool ✓" : "Set as host"}
-              </button>
-            </span>
-            {teamId !== homeTeamId && (
-              <Button size="sm" variant="ghost" onClick={() => detach(teamId)}>
-                Remove
-              </Button>
-            )}
-          </li>
-        ))}
-      </ul>
-
-      {meet.teamIds.length === 0 && (
+      {teams.length === 0 ? (
         <p className="py-2 text-sm text-slate-500">
-          Nobody yet. A meet needs at least one team.
+          Nobody yet.{" "}
+          {canEdit
+            ? "A meet needs at least one team before anybody can be entered."
+            : "Whoever runs this meet hasn't said who's racing."}
         </p>
+      ) : (
+        <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+          {teams.map((team) => {
+            const entered = enteredBy.get(team.id) ?? 0;
+            const host = hostTeamId === team.id;
+            return (
+              <li key={team.id} className="py-2.5">
+                <div className="flex items-center gap-3">
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">
+                      {team.name}
+                      {team.code && (
+                        <span className="ml-2 text-xs font-normal text-slate-500">
+                          {team.code}
+                        </span>
+                      )}
+                      {coachOf.includes(team.id) && (
+                        <span className="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-200">
+                          yours
+                        </span>
+                      )}
+                    </span>
+                    {canEdit ? (
+                      <button
+                        type="button"
+                        disabled={saving}
+                        onClick={() => setHost(team.id)}
+                        className="text-xs font-semibold text-blue-600 disabled:opacity-50"
+                      >
+                        {host ? "Host pool ✓" : "Set as host"}
+                      </button>
+                    ) : (
+                      host && (
+                        <span className="text-xs text-slate-500">Host pool</span>
+                      )
+                    )}
+                    {entered > 0 && (
+                      <span className="ml-2 text-xs text-slate-500">
+                        {entered} entered
+                      </span>
+                    )}
+                  </span>
+
+                  {canEdit && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={saving}
+                      onClick={() =>
+                        entered > 0 ? setConfirming(team.id) : remove(team.id)
+                      }
+                    >
+                      Remove
+                    </Button>
+                  )}
+                </div>
+
+                {/* Asked rather than prevented: sometimes the wrong school
+                    really was added and its entries are the mistake too. */}
+                {confirming === team.id && (
+                  <div className="mt-2 space-y-2">
+                    <Banner tone="warn">
+                      {team.name} has {entered} swimmer
+                      {entered === 1 ? "" : "s"} entered. Removing the team
+                      leaves those entries in the meet with nobody to show them
+                      against — scratch them first if they shouldn&rsquo;t
+                      count.
+                    </Banner>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button onClick={() => setConfirming(null)}>Keep</Button>
+                      <Button
+                        variant="danger"
+                        onClick={() => remove(team.id)}
+                      >
+                        Remove anyway
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       )}
 
       {adding && (
-        <div className="mt-3 space-y-2 border-t border-slate-200 pt-3 dark:border-slate-800">
-          <TextInput
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Search, or type a new team's name…"
-            autoCapitalize="words"
-            autoFocus
+        <div className="mt-3 border-t border-slate-200 pt-3 dark:border-slate-800">
+          <TeamPicker
+            exclude={teamIds}
+            onPick={(team) => add(team.id)}
+            onCancel={() => setAdding(false)}
           />
-
-          {known === null ? (
-            <p className="text-sm text-slate-500">Loading teams…</p>
-          ) : (
-            <ul className="max-h-56 overflow-y-auto">
-              {candidates.map((team) => (
-                <li key={team.id}>
-                  <button
-                    type="button"
-                    onClick={() => attach(team.id)}
-                    className="flex w-full items-center justify-between gap-2 border-b border-slate-100 py-2 text-left dark:border-slate-900"
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate font-medium">{team.name}</span>
-                      <span className="block text-xs text-slate-500">
-                        {team.athletes} athlete{team.athletes === 1 ? "" : "s"}
-                        {!team.claimed && " · unclaimed"}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              variant="primary"
-              disabled={!filter.trim() || busy || exactMatch}
-              onClick={() => void create()}
-            >
-              {exactMatch ? "Already listed" : `Create “${filter.trim() || "…"}”`}
-            </Button>
-            <Button
-              onClick={() => {
-                setAdding(false);
-                setFilter("");
-                setError(null);
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
-          <p className="text-xs text-slate-500">
-            A team you create is unclaimed until a coach from that school signs
-            in and asks for it.
-          </p>
         </div>
       )}
     </Card>

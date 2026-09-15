@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { local } from "~/lib/local";
 import {
   SIGNED_OUT,
   readSession,
@@ -31,8 +32,7 @@ import { loadSessionToken } from "~/lib/storage";
 const CACHE_KEY = "meet-runner:session-cache";
 
 function readCache(): Session | null {
-  if (typeof localStorage === "undefined") return null;
-  const raw = localStorage.getItem(CACHE_KEY);
+  const raw = local.get(CACHE_KEY);
   if (!raw) return null;
   try {
     return JSON.parse(raw) as Session;
@@ -42,9 +42,8 @@ function readCache(): Session | null {
 }
 
 function writeCache(session: Session | null): void {
-  if (typeof localStorage === "undefined") return;
-  if (session?.user) localStorage.setItem(CACHE_KEY, JSON.stringify(session));
-  else localStorage.removeItem(CACHE_KEY);
+  if (session?.user) local.set(CACHE_KEY, JSON.stringify(session));
+  else local.remove(CACHE_KEY);
 }
 
 interface SessionState extends Session {

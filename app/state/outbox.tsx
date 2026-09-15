@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -44,9 +45,16 @@ export function OutboxProvider({ children }: { children: ReactNode }) {
   useEffect(() => startOutbox(), []);
 
   // When the last write lands, take the server's word for everything.
+  //
+  // The *transition* to empty, not the state of being empty — which is what a
+  // page with nothing queued is from its first render, so keying on the state
+  // alone meant every load spent a second round-trip re-fetching what it had
+  // just been served.
   const empty = state.pending.length === 0;
+  const wasEmpty = useRef(empty);
   useEffect(() => {
-    if (empty) revalidator.revalidate();
+    if (empty && !wasEmpty.current) revalidator.revalidate();
+    wasEmpty.current = empty;
     // Revalidating is the effect; the revalidator identity is not a trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [empty]);

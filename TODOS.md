@@ -10,24 +10,26 @@ Nothing here is committed to — it's a parking lot. Add your own freely.
 Rewritten 2026-09-13, after the rebuild onto a server-authoritative model. The
 old list below this section is still a parking lot; this part isn't.
 
-### 1. Live updates while a meet is running
+### 1. ~~Live updates while a meet is running~~ — polling built
 
-The one real gap. Screens read from loaders, and a loader only re-runs when
-something on *this* device navigates or finishes a write — so the control desk
-does not see a time arriving from a phone until somebody touches something. On
-a deck that is the difference between watching times land and refreshing.
+`useLiveData()` in `app/hooks/use-live-data.ts` revalidates the run, entries
+and results screens every 3s while the tab is visible, the previous read has
+come back, and this device owes the outbox nothing. Verified on a real meet:
+a watch written straight into D1 appeared on the deck screen five seconds
+later with nothing touching the page.
 
-Two options, in order of cost:
+What's still open is the push version — **a Durable Object per meet**, one
+object holding a meet's rows and fanning changes out over a socket. The write
+endpoints are already small and single-row, which is the shape a DO wants.
+Worth it when a meet has enough phones on it that 3s of polling per device
+stops being free; not before.
 
-- **Poll the meet route.** A `useRevalidator` on an interval while the run and
-  entries screens are visible. Perhaps twenty lines. Was ~2s before, which is
-  about the ceiling of what polling can sensibly do.
-- **Push, via a Durable Object per meet.** The honest answer, and now a much
-  smaller job than it was: one object holding a meet's rows and fanning changes
-  out over a socket. The write endpoints are already small and single-row,
-  which is the shape a DO wants.
-
-Do the first now; the second when it's worth it.
+One thing to watch on a deck first: the deck stopwatch treats a lane as
+stopped if *any* time arrives on it after START (`run.tsx`, `allStopped`), so a
+coach timing two of six lanes isn't left waiting on the four the phones cover.
+That branch could never fire mid-race before, because the loader didn't
+refresh. Now it can. It is what the code intends — but it has never actually
+happened during a race, so watch the first heat it does.
 
 ### 2. The stopwatch screen has had the least use
 
@@ -54,12 +56,19 @@ which lanes still need taking here. Tapping them works.
 defined in `types/meet.ts` and computed by nothing. The biggest genuinely
 missing feature, and the entries/results shape is ready for it.
 
-### 5. Settle the site navigation
+### ~~5. Settle the site navigation~~ — done
 
-Bottom bar is still Team / Meets / Browse / Settings, which predates meets
-becoming the home. The suggestion on the table was Meets / Teams / Athletes
-with Settings moving into the account menu, since that menu already covers
-profile and sign-out.
+The bar is **Teams / Meets / Athletes**. `/team` and `/settings` are both gone:
+the first duplicated `/teams/:id`, and the second was team administration that
+belonged there plus one display preference that belonged on Profile. The
+"Browse" tab and the Teams/Meets/Athletes button bar above those lists went too
+— with three tabs they were the same control twice.
+
+Worth knowing: `rememberPlace()` in `state/session.tsx` is still never called,
+so `user.lastTeamId` is never written. Nothing depends on it now that team
+screens take the team from the URL — the shell header still falls back to the
+first active membership for its title, which is cosmetic. Either wire it up or
+drop it.
 
 ### 6. An athlete's own screen
 
@@ -67,6 +76,80 @@ The permission is built and enforced (`athletesMayEnter` + `mayEnter`); the
 screen is missing. A swimmer wants their own short list — the races in the next
 meet, which ones they're in, and the limits counting down as they pick — not
 the coach's grid. This is the use case the app was originally built for.
+
+### ~~Defining who's racing~~ — restored
+
+`MeetTeams` survived the rebuild but nothing imported it, so a meet's teams
+could only ever be the ones `createMeet` inferred from the creator's
+memberships — invisible and unchangeable afterwards. The server half was
+intact the whole time (`meet_teams`, `updateMeet`'s `teamIds`/`hostTeamId`,
+`POST /api/teams`); only the UI was missing.
+
+Now: a "Teams racing" card on the meet's own page, and the same picker in the
+new-meet sheet with the creator's own team already on it. `TeamPicker` is
+shared by both, so the two places can't answer the question differently.
+
+Left deliberately alone: removing a team whose swimmers are entered asks first
+and then allows it, rather than cascading. The entries stay, pointing at
+athletes no racing team enrols — which is the honest outcome, since sometimes
+the wrong school really was added and its entries are the mistake too. If that
+proves to be the wrong call on a deck, the fix is scratching them with the
+team, not refusing the removal.
+
+### ~~Timer link stuck on "Getting ready…"~~ — gone with the cookie
+
+The claim screen kept the scanned token in localStorage from an effect, so the
+whole timing path needed script to run *and* the browser to agree to store
+things — neither being a safe bet about a stranger's phone opening a link from
+a camera app. `/t/:token` is now a loader with no component: it sets an
+HttpOnly cookie and redirects. Verified with `curl` alone, no JS in the loop.
+
+One loose end: `forgetLegacyGrant()` deletes the old localStorage token on any
+phone that timed a meet on the previous build. It can go once none have, as can
+the legacy read in `loadTimerId`.
+
+Followed through the rest of the way: lane, position, meet and the device's
+timer id are cookies too, and every remaining `localStorage` call goes through
+`local.ts` and can no longer throw. Verified by making the whole storage API
+throw at boot — the timer screen used to die with "Something went wrong ·
+blocked", and now runs a heat start to finish, keeping its identity so it
+replaces its own watch rather than filing a second one.
+
+Then the queue followed. A timer's outbox is now cookies named for the action
+and pathed to the lane, posting to
+`/api/meets/:id/timers/:timerId/:event/:heat/:lane` with no body at all — see
+the README. Coaches and admins keep the localStorage outbox; the two paths face
+different problems and are allowed to differ.
+
+The screens followed the endpoints: `/meets/:id/timers/:timerId` is the lane
+picker and `/meets/:id/timers/:timerId/:event/:heat/:lane` is the stopwatch, so
+heat changes are navigation and the lane/heat/event/meet cookies are gone.
+
+Still open on that path:
+
+- ~~**`timer_activity` is written and read by nothing else.**~~ It rides on
+  `MeetDetail` now, and `laneProgress()` turns it into the colour of the desk's
+  time box: grey for a lane nobody is covering, amber while watches are
+  running, green once every one that armed has come in. That colour is the
+  whole reason `start` is sent on its own.
+- **The overflow state has never fired in anger.** The size check and the red
+  header are written and unit-reasoned but not exercised; forcing it would mean
+  filling a cookie jar on a real device.
+- **`/api/timer/meet` is still the one read.** It could carry the activity rows
+  so a timer sees that the lane next to them hasn't started either.
+
+### `call.timeMs` is vestigial
+
+Every typed time is a watch now, so nothing writes a time onto a call. Rows an
+older build made still have one, and `resultForLane` still honours it — which is
+right, because those are real decisions somebody made. Once production has none
+left, the field and its branch can go, and `TimeMethod`'s `"official"` with it.
+
+Check with:
+
+```sql
+SELECT COUNT(*) FROM calls WHERE time_ms IS NOT NULL;
+```
 
 ## Features
 

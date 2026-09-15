@@ -56,9 +56,9 @@ eq(five[0].lanes, [null, "s2", "s1", null, null], "5-lane short heat seeds 3 the
         heatId: seeded[1].id,
         lane: 3,
         timerId: "t1",
+        role: "timer" as const,
         timeMs: 27_140,
         recordedAt: 1,
-        source: "stopwatch" as const,
       },
     ],
   };
@@ -81,9 +81,9 @@ eq(five[0].lanes, [null, "s2", "s1", null, null], "5-lane short heat seeds 3 the
         heatId: "other",
         lane: 3,
         timerId: "t1",
+        role: "timer" as const,
         timeMs: 27_140,
         recordedAt: 1,
-        source: "stopwatch" as const,
       },
     ],
   };

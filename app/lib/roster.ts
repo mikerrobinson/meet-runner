@@ -18,11 +18,16 @@ import type { Enrollment, Season } from "~/types/meet";
  * current season, then to the most recent one, rather than returning nothing
  * and leaving the caller to guess.
  */
-export function seasonForDate(
-  seasons: Season[],
+export function seasonForDate<
+  T extends Pick<Season, "id" | "startDate" | "endDate">,
+>(
+  // Generic over the row rather than taking a bare `Season`, so a caller
+  // holding seasons with a roster hanging off them gets one of those back
+  // instead of a narrowed copy with the roster lost.
+  seasons: T[],
   currentSeasonId: string | undefined,
   isoDate: string,
-): Season | undefined {
+): T | undefined {
   const covering = seasons.find(
     (s) =>
       (!s.startDate || s.startDate <= isoDate) &&

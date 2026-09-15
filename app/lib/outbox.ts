@@ -22,7 +22,8 @@
 import { apiUrl } from "./http";
 import { generateId } from "./id";
 import { loadSessionToken } from "./storage";
-import type { ResultStatus } from "~/types/meet";
+import { local } from "./local";
+import type { ResultStatus, WatchRole } from "~/types/meet";
 
 /**
  * One thing somebody did.
@@ -41,9 +42,21 @@ export type Write =
       meetId: string;
       heatId: string;
       lane: number;
+      /** Whose watch: a device id, or the user id of whoever is signed in. */
       timerId: string;
+      /**
+       * The account behind it. Sent so the optimistic overlay can label the
+       * chip the way the server will; the server sets the stored value from
+       * the session either way, so this is never taken on trust.
+       */
+      userId?: string;
+      /**
+       * What the sender is to this meet. Sent so the optimistic overlay ranks
+       * the watch the way the server will; the server records its own answer
+       * either way, so this is never taken on trust.
+       */
+      role: WatchRole;
       timeMs: number;
-      source: "stopwatch" | "typed";
       recordedAt: number;
       startedAt?: number;
       stoppedAt?: number;
@@ -82,9 +95,8 @@ const KEY = "meet-runner:outbox";
 /* ----------------------------------------------------------------- storage */
 
 function read(): Queued[] {
-  if (typeof localStorage === "undefined") return [];
   try {
-    const raw = JSON.parse(localStorage.getItem(KEY) ?? "[]");
+    const raw = JSON.parse(local.get(KEY) ?? "[]");
     return Array.isArray(raw) ? (raw as Queued[]) : [];
   } catch {
     return [];
@@ -92,9 +104,8 @@ function read(): Queued[] {
 }
 
 function write(queue: Queued[]): void {
-  if (typeof localStorage === "undefined") return;
-  if (queue.length === 0) localStorage.removeItem(KEY);
-  else localStorage.setItem(KEY, JSON.stringify(queue));
+  if (queue.length === 0) local.remove(KEY);
+  else local.set(KEY, JSON.stringify(queue));
 }
 
 /* --------------------------------------------------------------- the queue */

@@ -1,5 +1,8 @@
 import { done, eq } from "./harness.ts";
 import {
+  fromStopwatch,
+  laneProgress,
+  laneTime,
   activeLanes,
   athleteInLane,
   callForLane,
@@ -34,9 +37,9 @@ function watch(
     heatId,
     lane,
     timerId,
+    role: "timer",
     timeMs,
     recordedAt: 1_000,
-    source: "stopwatch",
     ...extra,
   };
 }
@@ -259,6 +262,248 @@ eq(
   eq(result.manual, true, "and no stopwatch behind it");
   eq(heatClosed(rows, h), true, "which closes the heat");
   eq(callForLane(rows, "h4", 1)?.final, true, "the call is on the lane");
+}
+
+/* ------------------------------------ how far along a lane's timing is */
+
+{
+  const H = "hp";
+  const armed = (timerId: string, lane = 1) => ({
+    heatId: H,
+    lane,
+    timerId,
+    startedAt: 1_000,
+    updatedAt: 1_000,
+  });
+
+  eq(
+    laneProgress({ watches: [], activity: [] }, H, 1),
+    "none",
+    "a lane nobody has touched is waiting for somebody to cover it",
+  );
+
+  // The distinction the colour exists for: this looks identical to the line
+  // above if you only read the number, and wants the opposite response.
+  eq(
+    laneProgress({ watches: [], activity: [armed("d-1")] }, H, 1),
+    "waiting",
+    "a watch running on it is not nothing — it is in hand",
+  );
+
+  eq(
+    laneProgress(
+      { watches: [watch(H, 1, "d-1", 27_140)], activity: [armed("d-1"), armed("d-2")] },
+      H,
+      1,
+    ),
+    "waiting",
+    "two armed and one in is still waiting on the second",
+  );
+
+  eq(
+    laneProgress(
+      {
+        watches: [watch(H, 1, "d-1", 27_140), watch(H, 1, "d-2", 27_160)],
+        activity: [armed("d-1"), armed("d-2")],
+      },
+      H,
+      1,
+    ),
+    "complete",
+    "every watch that started has been sent",
+  );
+
+  // A timer who typed a time without ever starting a watch still counts as in.
+  eq(
+    laneProgress({ watches: [watch(H, 1, "d-9", 27_140)], activity: [] }, H, 1),
+    "complete",
+    "a time with no watch behind it is still a time that arrived",
+  );
+
+  // The timing table is what the lane waits for. A coach timing from the side
+  // is not, and neither is the desk's own reading.
+  eq(
+    laneProgress(
+      {
+        watches: [watch(H, 1, "u-c", 27_500, { role: "coach" })],
+        activity: [armed("d-1")],
+      },
+      H,
+      1,
+    ),
+    "waiting",
+    "a coach's watch doesn't complete a lane the timers haven't",
+  );
+
+  eq(
+    laneProgress({ watches: [watch(H, 2, "d-1", 27_140)], activity: [] }, H, 1),
+    "none",
+    "and another lane's watches are no business of this one",
+  );
+}
+
+/* ------------------------------------------------ which time is the time */
+
+{
+  const h = heat("hp", [null, null, null, "swimmer"]);
+  const lane = 4;
+  const timers = [
+    watch("hp", lane, "d-1", 27_140),
+    watch("hp", lane, "d-2", 27_160),
+    watch("hp", lane, "d-3", 31_000),
+  ];
+  const coaches = [
+    watch("hp", lane, "u-a", 27_500, { role: "coach", userId: "u-a" }),
+    watch("hp", lane, "u-b", 27_700, { role: "coach", userId: "u-b" }),
+  ];
+  const official = watch("hp", lane, "u-ref", 26_990, {
+    role: "admin",
+    userId: "u-ref",
+  });
+
+  eq(laneTime([]), null, "a lane nobody timed has no time");
+
+  /* --- the timers, by the hand-timing rules --- */
+  eq(
+    laneTime(timers),
+    { timeMs: 27_160, method: "median", watchCount: 3, from: "timer" },
+    "three timers take the middle one — the slow thumb is outvoted, not averaged",
+  );
+  eq(
+    laneTime(timers.slice(0, 2)),
+    { timeMs: 27_150, method: "average", watchCount: 2, from: "timer" },
+    "two are averaged",
+  );
+  eq(
+    laneTime([watch("hp", lane, "d-1", 27_145)]),
+    { timeMs: 27_145, method: "single", watchCount: 1, from: "timer" },
+    "one stands alone",
+  );
+
+  /* --- coaches only answer when the timing table didn't --- */
+  eq(
+    laneTime(coaches),
+    { timeMs: 27_600, method: "average", watchCount: 2, from: "coach" },
+    "coaches are averaged when there are no timers",
+  );
+  eq(
+    laneTime([...timers, ...coaches])?.timeMs,
+    27_160,
+    "and are ignored entirely when there are — the side of the pool cannot move an official time",
+  );
+  eq(
+    laneTime([...timers, ...coaches])?.watchCount,
+    3,
+    "so the count is the timers', not everybody's",
+  );
+
+  /* --- the administrator rules --- */
+  eq(
+    laneTime([...timers, ...coaches, official]),
+    { timeMs: 26_990, method: "official", watchCount: 1, from: "admin" },
+    "whoever runs the meet decides, whatever the rest say",
+  );
+
+  // Truncated, never rounded, wherever an average is taken.
+  eq(
+    laneTime([
+      watch("hp", lane, "u-a", 27_140, { role: "coach" }),
+      watch("hp", lane, "u-b", 27_150, { role: "coach" }),
+    ])?.timeMs,
+    27_140,
+    "a coaches' average truncates like every other time",
+  );
+}
+
+/* ------------------------------------- a time is a time, whoever read it */
+
+{
+  // A coach on the multi-lane stopwatch, a volunteer's phone, and an
+  // administrator typing at the desk. Three readings of one race, stored the
+  // same way and weighed the same way — the desk's number is evidence now,
+  // not a ruling that silently outranked the other two.
+  const lane = 4;
+  const rows = {
+    watches: [
+      // A volunteer's phone: a stopwatch ran, so it left both timestamps.
+      watch("h1", lane, "d-phone", 27_160, {
+        startedAt: 1_000,
+        stoppedAt: 28_160,
+      }),
+      // A coach on the multi-lane stopwatch — same thing, with an account.
+      watch("h1", lane, "u-coach", 27_140, {
+        userId: "u-coach",
+        startedAt: 1_000,
+        stoppedAt: 28_140,
+      }),
+      // The desk, typing a number in off a handheld. No clock ran here.
+      watch("h1", lane, "u-admin", 31_000, { userId: "u-admin" }),
+    ],
+    calls: [] as LaneCall[],
+  };
+  const h = heat("h1", [null, null, null, "swimmer"]);
+
+  eq(
+    resultForLane(rows, h, lane)?.timeMs,
+    27_160,
+    "three readings take the middle one, whoever held the clock",
+  );
+  eq(
+    resultForLane(rows, h, lane)?.method,
+    "median",
+    "and it is a median like any other",
+  );
+  eq(
+    resultForLane(rows, h, lane)?.watchCount,
+    3,
+    "all three are counted as evidence",
+  );
+
+  // The desk's power over a time is dropping the reading it doesn't believe,
+  // which leaves what it did believe on the record.
+  const dropped = {
+    watches: rows.watches.filter((w) => w.timerId !== "u-admin"),
+    calls: rows.calls,
+  };
+  eq(
+    resultForLane(dropped, h, lane)?.timeMs,
+    27_150,
+    "discarding one leaves the other two to be averaged",
+  );
+
+  /* How a time arrived is the timestamps, not a field repeating them. */
+  eq(
+    rows.watches.map(fromStopwatch),
+    [true, true, false],
+    "a watch came off a stopwatch exactly when it carries both timestamps",
+  );
+  eq(
+    resultForLane(rows, h, lane)?.manual,
+    false,
+    "a result with any stopwatch behind it is not hand-entered",
+  );
+  eq(
+    resultForLane(
+      { watches: [rows.watches[2]], calls: [] },
+      h,
+      lane,
+    )?.manual,
+    true,
+    "one typed in on its own is",
+  );
+
+  // Who took it survives the round trip, which is what lets a screen say
+  // "typed in at the desk" rather than a device id nobody recognises.
+  eq(
+    rows.watches.filter((w) => w.userId !== undefined).length,
+    2,
+    "watches from signed-in people carry the account",
+  );
+  eq(
+    rows.watches.find((w) => w.timerId === "d-phone")?.userId,
+    undefined,
+    "and a phone behind a lane carries none",
+  );
 }
 
 done();

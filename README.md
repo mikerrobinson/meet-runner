@@ -55,20 +55,104 @@ one thing. There is no second opinion riding on a watch, no vote between claims,
 and no server-side rule reconciling the two. On paper, the name the timer writes
 *is* the fact.
 
-**A watch is evidence and is never overwritten.** One row per timer per lane.
-Several on a lane produce a *proposed* time by the hand-timing rules: one stands
-alone, two are averaged, three or more take the middle — which is the point of a
-third watch, since it outvotes a slow thumb rather than dragging the average
-toward it. Times truncate to hundredths, never round up: a time you didn't swim
-is not a time.
+**A watch is evidence and is never overwritten.** One row per submitter per
+lane. Times truncate to hundredths, never round up: a time you didn't swim is
+not a time.
+
+**`laneTime()` is the one place that decides which time a lane has.** Watches
+on a lane are not all the same kind of evidence, so it asks three tiers in
+order and never mixes them:
+
+1. **The administrator's own reading.** Whoever runs the meet has looked at the
+   lane and said what it was. That is a ruling and it stands.
+2. **The timers, by the hand-timing rules.** Three take the middle one, two are
+   averaged, one stands alone — which is the point of a third watch, since the
+   median outvotes a slow thumb rather than letting it drag an average.
+3. **The coaches, averaged.** A fallback for a lane the timing table missed.
+   Coaches time their own swimmers from the side, which is a worse position and
+   an interested one, so they answer only when nothing better did.
+
+Mixing them is the thing to avoid: averaging a coach's watch in with the timers'
+would let the side of the pool quietly move an official time, and a median
+across all of them would do the same less visibly. The control desk shows which
+tier answered, and strikes through the chips that were outranked — everything is
+kept, and what counted is visible. **Signing off copies exactly that number onto
+the call**, so the accepted time is the one that was on screen.
+
+**Every lane's time is a text box, always.** The desk's job on each row is the
+same — read the time, change it if it's wrong — and an Edit button made the
+second of those a mode to enter first. The box holds `laneTime`'s answer; typing
+over it files the administrator's own watch, which then wins, so the number
+comes straight back. Clearing it withdraws that watch and the lane falls back to
+the timers, which is the way out of a time typed by mistake. An unchanged box
+writes nothing, because tabbing through a heat to read times must not file
+twenty rulings.
+
+**A stopwatch that is still running draws its own chip**, ticking on a one-second
+beat, next to the times that have already arrived. The desk can see the race it
+is watching, so the number is not the point — what it answers is which lanes are
+genuinely being timed, and, once a heat is long over, which timer is still
+holding a clock they forgot to stop. That last one is invisible otherwise: the
+lane simply never completes and nobody knows why.
+
+It needs the one absolute time in the app. Everywhere else a phone's clock is
+trusted only to order that phone's own actions, because a time is a difference
+between two readings of one clock and is right however wrong the clock is. A
+running stopwatch measures a phone's start against the *desk's* now, so
+`/api/meets/…/timers/…` translates the phone's timestamps onto the server's on
+the way in: the message says when the thumb landed and arrives at a known
+moment, and `start` is flushed instantly, so the difference is the phone's error
+plus a network hop. A phone ninety seconds fast lands within one.
+
+**The box's colour is the lane's timing, which its number cannot say.** Grey and
+dashed is nobody covering the lane; amber is watches running or some in; green is
+the timing table done. The middle one is why it exists: a lane with nothing on it
+and a lane whose timers are all still holding their clocks show the same empty
+box and want opposite responses — send somebody, or leave it alone. `start` is
+sent on its own the instant a thumb lands precisely so `laneProgress()` can tell
+them apart, which is what `timer_activity` is for.
+
+**A time is a time however it reached the meet.** Off a volunteer's phone, off a
+coach's multi-lane stopwatch, typed in from a handheld, typed in at the desk —
+all of it is a watch, stored the same way and weighed the same way. `timer_id`
+is whoever submitted it: a device id for a volunteer with no account, a *user*
+id for anybody signed in, so a coach keeps one watch per lane whichever iPad
+they pick up. `user_id` is set alongside it for a signed-in person, which is
+what tells a person from a phone and what a screen joins on to show a name. The
+server fills both from the session rather than believing the client — evidence
+with the wrong name on it is worse than none.
+
+**`role` is recorded, not re-derived.** A watch says what its submitter was to
+this meet *at the moment they took it* — timer, coach or administrator. It can't
+come off the watch alone, and it must not be looked up later: a coach made an
+administrator in March would otherwise turn the watch they held in January into
+the official's own reading. Same principle as a sign-off snapshotting the
+watches — a record of a decision has to say what was true when it was made.
+
+**How a time arrived is `started_at` and `stopped_at`, not a field about them.**
+Both present means a stopwatch in this app ran the race; neither means somebody
+typed a number in. There was a `source` column saying "stopwatch" or "typed",
+and every caller set it to exactly what those two already said — a field that
+restates another is a field that can contradict it, and one of them did: the
+timing endpoint briefly marked properly-timed lanes as typed, because `start`
+arrives in its own request and had been cleared by the time `submit` landed.
+`fromStopwatch()` reads it off the timestamps instead.
+
+The desk's own reading used to be written onto the *call*, where it silently
+outranked every watch on the lane. Two problems with that: the same act of
+reading a clock was stored two different ways depending on who did it, and an
+override left nothing to say what it overrode. The desk's power over a time is
+now discarding the reading it doesn't believe — which leaves the ones it did on
+the record. Dropping somebody else's watch needs `mayDecide`; dropping your own
+never did and still doesn't.
 
 **A call is the decision, and there is exactly one per lane.** Status, the
 official's own reading of the clock, and whether it's signed off — three fields
 of one decision, folded onto whatever is already there. Marking a DQ keeps a
 typed time; typing a time keeps a DQ.
 
-- `time_ms` absent means "whatever the watches say". Set, it is the official's
-  own reading and outranks them.
+- `time_ms` absent means "whatever the watches say". Set, it outranks them —
+  but nothing writes one any more; it survives for rows an older build made.
 - **A signed-off lane reads what the watches said at the moment it was signed
   off**, not what they say now. This is what makes a late watch harmless: a
   phone that was offline all afternoon can push whenever it reconnects and
@@ -76,10 +160,97 @@ typed time; typing a time keeps a DQ.
   reopened deliberately — and taking the sign-off back drops straight through to
   the live watches, which is exactly when you'd want the late one to count.
 
+A timer sends four things, and only one of them is a result. `seat` says who is
+in the lane, `start` and `stop` say the built-in stopwatch was used and when —
+which is how the desk sees five lanes armed and a sixth not, *before* the gun —
+and `submit` is the time. `start`/`stop` land in `timer_activity`, which is
+neither evidence nor decision but telemetry; the watch reads it to know whether
+a time came off the phone or was typed in from a handheld, so the phone never
+has to assert that. It is read from the table rather than from the request,
+because `start` goes up on its own and is long since cleared by the time
+`submit` follows.
+
 **Nothing about a clock is stored in the meet.** A stopwatch is a fact about the
 device holding it; three timers behind one lane each start their own on the
 strobe. Where a device has got to in the running order is device state too. Both
 live in `storage.ts` / component state and never reach the server.
+
+**Device state that must survive is a cookie; the rest is guarded
+localStorage.** Not a preference — every browser has the storage API and not
+every browser lets you use it, and a timer's phone is a stranger's phone opened
+from a camera app. So the small, bounded facts that timing depends on — the
+grant, which lane, where in the running order, and *who this device is* — are
+cookies, about a hundred bytes in total. Everything else goes through
+`local.ts`, the only module that names `localStorage`, where a refusal reads as
+"nothing stored" rather than throwing out of whichever line happened to ask.
+Those lines were in the root providers, so a phone that refused storage didn't
+lose a preference, it lost the whole screen.
+
+The device's timer id is the one whose loss corrupts rather than inconveniences:
+watches are keyed by it, so a device that forgets it files a *second* watch on a
+lane it already timed and the proposed time moves. It falls back cookie →
+legacy localStorage → a value held in the module, so it is stable for as long as
+the tab is open even when nothing can be persisted at all.
+
+**Where a timer is standing is the URL, not the device.** Every timing page is
+`/meets/{meetId}/timers/{timerId}/{event}/{heat}/{lane}` — the same shape as the
+endpoint it posts to. So changing heats is a link, going back a heat is the back
+button, a reloaded phone comes back exactly where it was having remembered
+nothing, and a volunteer can be read their position down the pool when something
+has gone wrong. The lane, the heat, the event and the meet were four cookies
+before this; they are the address now.
+
+The device's id is minted by the server when the code is scanned, so it is in
+that address from the first screen — and re-used when the phone already has one,
+because a volunteer scanning again after lunch must come back as the *same*
+timer. Watches are keyed by it, and several on a lane are averaged, so a device
+that forgets doesn't just duplicate a time, it moves the one the desk reads.
+
+The one thing left on the device is how far this timer has *been*: the URL says
+where they are, not the furthest they have got, and going back into a heat whose
+sheet has already reached the desk is what that stops. One number, in a cookie
+pathed to this meet and this device, so a different meet starts clean without
+anything having to notice.
+
+**A timer's outbox is cookies; everybody else's is localStorage.** They face
+different problems. A coach signs in on their own iPad and can be expected to
+have working storage and plenty to sync. A timer's phone belongs to a parent who
+volunteered ten minutes ago, opened from a camera app into whatever browser it
+chose — and has one lane's worth of data. So timing queues in cookies, which
+such a browser still keeps, and the two paths are allowed to differ.
+
+Each message is a cookie **named for the action** and **pathed to the lane**:
+
+```
+submit=1789413369235,30000
+Path=/…/api/meets/{meetId}/timers/{timerId}/{event}/{heat}/{lane}
+```
+
+which makes three things free. *Addressing*: nothing in the value repeats what
+the path says. *De-duplication*: a cookie is identified by name, domain and
+path, so submitting twice on one lane overwrites — the browser keys it exactly
+as the server writes it. *Delivery*: the browser attaches whatever a lane still
+owes to the next request to that lane's URL, so `flushQueue` walks a list of
+addresses rather than a list of payloads, and the server clears what it consumed
+on the way out.
+
+It also makes retrying free. If a write succeeds and the *response* is lost, the
+cookies survive, the phone tries again, and the second attempt writes what the
+first one did — every row is keyed by heat, lane and timer. So the client never
+has to work out whether it already sent something.
+
+The catch, and the reason there is still one readable cookie: **`document.cookie`
+only returns cookies matching the current page's path**, so the payloads are
+invisible to the screen that has to replay them. One index cookie at the app
+path names which lanes are outstanding — `event/heat/lane`, nothing more — and
+that is the only part the client ever reads back.
+
+Overflow is the one way this loses a time, since a browser handed a cookie over
+~4KB drops it silently rather than throwing. So the size is checked before the
+write, and a failure turns the header red and says so. The real ceiling is the
+per-domain cookie *count* — around 150 — which four actions a lane reaches
+before the byte limit does, and long after a timer with thirty unsent lanes
+should have been noticed on the deck.
 
 Everything else is derived and never stored: the proposed time, which lanes
 swam, and whether a heat or an event is closed. A heat is closed once every lane
@@ -118,6 +289,23 @@ write three different rows; two coaches entering their own swimmers write
 different rows. Concurrency is a property of the keys, not something the app
 reconciles afterwards.
 
+**One page per thing, with the editing on it.** A team is `/teams/:id` whether
+you coach there or are following a link to look, and the controls appear for
+whoever the server says may use them — the same arrangement a meet has. There
+used to be a second screen at `/team` showing the one roster a device could
+edit, and it drifted from the public one in the way two screens over a single
+thing always do: different sort, different fields, different idea of which
+season you meant.
+
+Everything about running a team is there too — its name and code, its seasons,
+who may join it, the export. That was a Settings tab, which had to guess *which*
+team it meant: it took the signed-in coach's first active membership, so a coach
+of two schools could configure one of them and had no way to reach the other. On
+the team's own page the team is the URL, and the question doesn't arise. What was
+left of Settings afterwards was a single display preference, which now sits on
+Profile under **Preferences** — labelled as this device's, because that is what
+it deliberately is.
+
 **Permissions are computed in the loader, beside the rows they guard.** A screen
 gets its data and its `MeetAccess` from the same request, so the button and the
 endpoint cannot disagree about who may press it. The predicates in `access.ts`
@@ -136,10 +324,33 @@ put a time against whoever used to be there. `applyPending()` folds the queue
 over loader data as a pure function, so a tap shows instantly and keeps working
 with no signal without there being a second copy of the meet to drift.
 
+**Naming an opponent searches before it creates.** A meet references teams by
+id, so two rows for one school is the failure the whole model exists to
+prevent — and the only way it happens is somebody typing a name that already
+exists. So one box answers "who are we swimming?": what's typed searches the
+known teams first, ranked so a name *starting* with it beats one merely
+containing it, and creating is offered only once nothing matched — demoted to
+a quiet link whenever something did. `POST /api/teams` hands back the existing
+team on a name clash rather than minting a second, so the server agrees.
+`team-search.ts` holds the ordering, pure and tested, because the ordering is
+what decides whether somebody finds the row or gives up and makes another.
+
+**Screens under a running meet re-read on a timer.** A loader only re-runs
+when *this* device navigates or finishes a write, which is fine everywhere
+except on a deck, where three phones are writing times to lanes the control
+desk is showing. `useLiveData()` revalidates every 3s — but only while the tab
+is visible, only when the previous read has come back, and only when this
+device owes the outbox nothing, since the outbox already revalidates the moment
+it drains. Revalidation is its own router state, so none of it reaches the
+status chip: times appear, and nothing announces that they did. The push
+version is a Durable Object per meet, and is not built.
+
 > **A failure that can't be fixed by waiting is not retried.** Only network
 > errors, 408, 429 and 5xx back off; a 400 or 403 is dropped and reported. An
 > earlier engine retried everything, so one write the server would never accept
 > sat in front of the whole queue forever behind a chip reading "Retrying…".
+
+The timer's own credential travels one way only, and it is not this one.
 
 **The session travels in two carriers.** A `fetch` from our own code sends an
 `Authorization: Bearer` header — that's the outbox, the timer's phone, and any
@@ -161,21 +372,24 @@ rule, it goes in the pure half — `access.ts` beside `access.server.ts`,
 
 ## Screens
 
-The bottom bar changes with where you are: **Team / Meets / Browse / Settings**
-at the top level; open a meet and it becomes that meet's modes with a way back
+The bottom bar changes with where you are: **Teams / Meets / Athletes** at the
+top level; open a meet and it becomes that meet's modes with a way back
 out, so Run stays one thumb tap away while a heat is in the water. The header is
 title · view options · status · profile.
 
 | | |
 | --- | --- |
-| `/team` | The roster for the current season: CSV import, add by hand, tap through to a swimmer |
-| `/meets` | The schedule, and creating one |
+
+| `/meets` | The schedule, and creating one — including who's racing |
 | `/meets/:id` | Details, the running order, the timing QR code, export, delete |
 | `/meets/:id/entries` | The registration grid — roster down the side, races across the top |
 | `/meets/:id/run` | **Control** (the desk) and **Stopwatch** (the deck), switchable for an admin |
 | `/meets/:id/results` | Ranked by event across all heats |
-| `/teams`, `/athletes`, `/users/:id` | Browsing — open to anyone, no account |
-| `/timer` | The volunteer's stopwatch, reached by QR code, no account |
+| `/teams`, `/teams/:id` | Every team; one team's roster, seasons, meets — and for a coach of it: CSV import, add by hand, renaming, seasons, invites, export |
+| `/profile` | The account: name, ways to sign in, signing out, and this device's display preferences |
+| `/athletes`, `/users/:id` | Browsing — open to anyone, no account |
+| `/meets/:id/timers/:timerId` | The volunteer picks a lane, reached by QR code, no account |
+| `/meets/:id/timers/:timerId/:event/:heat/:lane` | Their stopwatch, addressed like the endpoint behind it |
 
 **The control desk** shows every watch on a lane as its own chip, because a
 single slow thumb is obvious side by side and invisible once averaged — and
@@ -192,6 +406,16 @@ credential — that is deliberate, and the blast radius is kept small three ways
 grant is scoped to one meet, it can only write times, seats and new swimmers,
 and it stops working the day after the meet. Issuing a new code retires the old
 one, which is also how you revoke.
+
+**The scanned token becomes a cookie, on the server, during the redirect.**
+`/t/:token` has no component: it checks the grant, sets an `HttpOnly` cookie
+scoped to the app's path with the grant's own lifetime, and 302s to `/timer`.
+So timing needs no script to start and nothing on the device to persist — which
+matters because the phone is a stranger's, opened from a camera app into
+whichever browser it felt like using. It also means no code anywhere holds the
+token, so nothing on the page can leak it. It used to be kept in localStorage
+from an effect, which made the whole timing path depend on script running *and*
+on the browser agreeing to store things.
 
 **Diving** is display-only. It holds its place in the running order so divers see
 it on the grid, and carries no times.
@@ -216,7 +440,8 @@ UI and API mirror each other, with one query and one projection behind both.
 | `GET`/`POST`/`DELETE /api/meets/:id/admins` | Who runs a meet |
 | `POST /api/athletes/:id/link` | Say which account a swimmer is. Coaches only |
 | `/api/auth/*`, `/api/memberships`, `/api/invites` | Accounts and membership |
-| `/api/timer/grant`, `/timer/meet`, `/timer/watch` | The QR-code timing path |
+| `/api/timer/grant`, `/timer/meet` | The QR-code timing path |
+| `POST /api/meets/:id/timers/:timerId/:event/:heat/:lane` | One lane, one timer — body-less; the cookies are the payload |
 
 ### Who may do what
 

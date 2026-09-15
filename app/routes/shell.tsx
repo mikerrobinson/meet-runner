@@ -13,10 +13,9 @@ import { useViewPrefs } from "~/state/view-prefs";
 import { useOutbox } from "~/state/outbox";
 import { currentUser, type SyncEnv } from "~/lib/api.server";
 import { membershipsFor } from "~/lib/auth.server";
-import { getTeam, listSeasons } from "~/lib/teams.server";
-import { seasonForDate } from "~/lib/roster";
+import { getTeam } from "~/lib/teams.server";
 import { ensureSchema } from "~/lib/schema.server";
-import { LANE_LAYOUTS, meetSubtitle, todayIso, type LaneLayout } from "~/types/meet";
+import { LANE_LAYOUTS, meetSubtitle, type LaneLayout } from "~/types/meet";
 import type { loader as meetLoader } from "./meet-layout";
 
 /**
@@ -30,34 +29,19 @@ import type { loader as meetLoader } from "./meet-layout";
  */
 export async function loader({ request, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env as SyncEnv;
-  if (!env.DB) return { team: null, rosterCount: 0, seasonName: "" };
+  if (!env.DB) return { team: null };
 
   const user = await currentUser(request, env);
-  if (!user) return { team: null, rosterCount: 0, seasonName: "" };
+  if (!user) return { team: null };
 
   await ensureSchema(env.DB);
   const memberships = await membershipsFor(env.DB, user.id);
   const active = memberships.filter((m) => m.status === "active");
   const teamId =
     active.find((m) => m.teamId === user.lastTeamId)?.teamId ?? active[0]?.teamId;
-  if (!teamId) return { team: null, rosterCount: 0, seasonName: "" };
+  if (!teamId) return { team: null };
 
-  const team = await getTeam(env.DB, teamId);
-  const seasons = await listSeasons(env.DB, teamId);
-  const season = seasonForDate(seasons, team?.currentSeasonId, todayIso());
-  const count = season
-    ? await env.DB.prepare(
-        "SELECT COUNT(*) AS n FROM enrollments WHERE team_id = ? AND season_id = ? AND status = 'active'",
-      )
-        .bind(teamId, season.id)
-        .first<{ n: number }>()
-    : null;
-
-  return {
-    team,
-    rosterCount: count?.n ?? 0,
-    seasonName: season?.name ?? "",
-  };
+  return { team: await getTeam(env.DB, teamId) };
 }
 
 interface Tab {
@@ -69,12 +53,9 @@ interface Tab {
 
 /** Where you are when you're not inside a meet. */
 const TOP_TABS: Tab[] = [
-  { to: "/team", label: "Team", icon: "👥" },
+  { to: "/teams", label: "Teams", icon: "👥" },
   { to: "/meets", label: "Meets", icon: "🏊" },
-  // Everyone else's teams and swimmers, read from the server. Separate from
-  // "Team", which is the one roster this device can actually edit.
-  { to: "/teams", label: "Browse", icon: "🔎" },
-  { to: "/settings", label: "Settings", icon: "⚙️" },
+  { to: "/athletes", label: "Athletes", icon: "🏅" },
 ];
 
 /**
@@ -289,9 +270,7 @@ export default function Shell({ loaderData }: Route.ComponentProps) {
     ? undefined
     : openMeet
       ? meetSubtitle(openMeet)
-      : team && location.pathname.startsWith("/team")
-        ? `${loaderData.rosterCount} swimmers · ${loaderData.seasonName}`
-        : undefined;
+      : undefined;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">

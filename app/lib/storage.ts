@@ -4,6 +4,8 @@
  * synced or exported.
  */
 
+import { A_YEAR, readCookie, writeCookie } from "./cookies";
+import { local } from "./local";
 import {
   LANE_LAYOUTS,
   type LaneLayout,
@@ -16,6 +18,16 @@ const TOKEN_KEY = "meet-runner:sync-token";
 const SESSION_KEY = "meet-runner:session";
 const LANE_LAYOUT_KEY = "meet-runner:lane-layout";
 const TIMER_ID_KEY = "meet-runner:timer-id";
+/**
+ * Who this device is when it takes a time, in a cookie.
+ *
+ * The one piece of device state whose loss corrupts data rather than costing
+ * a tap: watches are keyed by it, so a device that forgets its id and mints a
+ * new one files a second watch on a lane it already timed, and the proposed
+ * time moves. Cookies hold where localStorage is refused, which on a timer's
+ * borrowed phone is often enough to matter.
+ */
+const TIMER_ID_COOKIE = "mr_timer_id";
 const PROGRESS_PREFIX = "meet-runner:progress:";
 
 /**
@@ -25,25 +37,21 @@ const PROGRESS_PREFIX = "meet-runner:progress:";
  * the change itself would trigger one last push to say so.
  */
 export function loadAutoSync(): boolean {
-  if (typeof localStorage === "undefined") return true;
-  return localStorage.getItem(AUTO_SYNC_KEY) !== "off";
+  return local.get(AUTO_SYNC_KEY) !== "off";
 }
 
 export function saveAutoSync(enabled: boolean): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(AUTO_SYNC_KEY, enabled ? "on" : "off");
+  local.set(AUTO_SYNC_KEY, enabled ? "on" : "off");
 }
 
 /** The sync token lives outside the meet doc so it never lands in an export. */
 export function loadSyncToken(): string {
-  if (typeof localStorage === "undefined") return "";
-  return localStorage.getItem(TOKEN_KEY) ?? "";
+  return local.get(TOKEN_KEY) ?? "";
 }
 
 export function saveSyncToken(token: string): void {
-  if (typeof localStorage === "undefined") return;
-  if (token) localStorage.setItem(TOKEN_KEY, token);
-  else localStorage.removeItem(TOKEN_KEY);
+  if (token) local.set(TOKEN_KEY, token);
+  else local.remove(TOKEN_KEY);
 }
 
 /**
@@ -59,14 +67,12 @@ export function saveSyncToken(token: string): void {
  * wifi, is the failure this exists to avoid.
  */
 export function loadSessionToken(): string {
-  if (typeof localStorage === "undefined") return "";
-  return localStorage.getItem(SESSION_KEY) ?? "";
+  return local.get(SESSION_KEY) ?? "";
 }
 
 export function saveSessionToken(token: string): void {
-  if (typeof localStorage === "undefined") return;
-  if (token) localStorage.setItem(SESSION_KEY, token);
-  else localStorage.removeItem(SESSION_KEY);
+  if (token) local.set(SESSION_KEY, token);
+  else local.remove(SESSION_KEY);
 }
 
 /**
@@ -76,14 +82,12 @@ export function saveSessionToken(token: string): void {
  * instead of being set again on every one.
  */
 export function loadLaneLayout(): LaneLayout {
-  if (typeof localStorage === "undefined") return "grid";
-  const stored = localStorage.getItem(LANE_LAYOUT_KEY) as LaneLayout | null;
+  const stored = local.get(LANE_LAYOUT_KEY) as LaneLayout | null;
   return stored && LANE_LAYOUTS.includes(stored) ? stored : "grid";
 }
 
 export function saveLaneLayout(layout: LaneLayout): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(LANE_LAYOUT_KEY, layout);
+  local.set(LANE_LAYOUT_KEY, layout);
 }
 
 const NAME_ORDER_KEY = "meet-runner:name-order";
@@ -98,13 +102,11 @@ const NAME_ORDER_KEY = "meet-runner:name-order";
  * looking, not to the thing being looked at.
  */
 export function loadNameOrder(): NameOrder {
-  if (typeof localStorage === "undefined") return "last";
-  return localStorage.getItem(NAME_ORDER_KEY) === "first" ? "first" : "last";
+  return local.get(NAME_ORDER_KEY) === "first" ? "first" : "last";
 }
 
 export function saveNameOrder(order: NameOrder): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(NAME_ORDER_KEY, order);
+  local.set(NAME_ORDER_KEY, order);
 }
 
 /**
@@ -116,13 +118,35 @@ export function saveNameOrder(order: NameOrder): void {
  * times on the same lane. Becomes a user id once there are accounts.
  */
 export function loadTimerId(): string {
-  if (typeof localStorage === "undefined") return "device";
-  const stored = localStorage.getItem(TIMER_ID_KEY);
-  if (stored) return stored;
-  const minted = `d-${Math.random().toString(36).slice(2, 10)}`;
-  localStorage.setItem(TIMER_ID_KEY, minted);
-  return minted;
+  if (typeof document === "undefined") return "device";
+  // Whatever this page already decided. Two calls on one page must never
+  // disagree, whatever the browser will or won't keep for us — that is the
+  // difference between one watch on a lane and two.
+  if (session) return session;
+
+  // The cookie first, then the key phones that timed on the build before this
+  // one still hold. Carrying the old id across rather than minting a fresh one
+  // is what stops such a device filing a second watch on a lane it has already
+  // timed — and the id it keeps is written to the cookie below, so this is the
+  // last time it needs asking.
+  const stored = readCookie(TIMER_ID_COOKIE) ?? local.get(TIMER_ID_KEY);
+
+  session = stored || `d-${Math.random().toString(36).slice(2, 10)}`;
+  writeCookie(TIMER_ID_COOKIE, session, A_YEAR);
+  return session;
 }
+
+/**
+ * This page's answer, held in the module.
+ *
+ * The identity has to be stable for as long as the tab is open even when
+ * nothing at all can be persisted — a browser that keeps neither cookies nor
+ * localStorage would otherwise mint a fresh id on every call, and every watch
+ * this device sent would look like it came from a different timer. Several
+ * watches on one lane are averaged, so that doesn't just duplicate a time, it
+ * changes the one the desk reads.
+ */
+let session: string | null = null;
 
 /**
  * Where this device has got to in a meet's running order.
@@ -138,9 +162,8 @@ export function loadTimerId(): string {
  * is ever opened again.
  */
 export function loadProgress(meetId: string): Progress {
-  if (typeof localStorage === "undefined") return { eventIndex: 0, heatIndex: 0 };
   try {
-    const stored = JSON.parse(localStorage.getItem(PROGRESS_PREFIX + meetId) ?? "");
+    const stored = JSON.parse(local.get(PROGRESS_PREFIX + meetId) ?? "");
     return {
       eventIndex: Number(stored?.eventIndex) || 0,
       heatIndex: Number(stored?.heatIndex) || 0,
@@ -151,6 +174,5 @@ export function loadProgress(meetId: string): Progress {
 }
 
 export function saveProgress(meetId: string, progress: Progress): void {
-  if (typeof localStorage === "undefined") return;
-  localStorage.setItem(PROGRESS_PREFIX + meetId, JSON.stringify(progress));
+  local.set(PROGRESS_PREFIX + meetId, JSON.stringify(progress));
 }
