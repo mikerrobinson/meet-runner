@@ -144,7 +144,7 @@ export async function action({ params, request, context }: Route.ActionArgs) {
 
 export default function MeetInfo() {
   const { detail, access } = useMeet();
-  const { meet, events, entries, heats } = detail;
+  const { meet, events, entries, seeds } = detail;
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const mayEdit = mayEditMeet(access);
@@ -154,7 +154,7 @@ export default function MeetInfo() {
   const stats = [
     { label: "Events", value: events.length },
     { label: "Entries", value: entryCount },
-    { label: "Heats", value: heats.length },
+    { label: "Swims", value: seeds.length },
     { label: "Times", value: times },
   ];
 

@@ -69,9 +69,9 @@ export default [
   // these per thing somebody did, so two people working at once never touch
   // the same row.
   route("api/meets/:meetId/entries", "routes/api.meet.entries.ts"),
-  route("api/meets/:meetId/seats", "routes/api.meet.seats.ts"),
+  route("api/meets/:meetId/seeds", "routes/api.meet.seeds.ts"),
   route("api/meets/:meetId/watches", "routes/api.meet.watches.ts"),
-  route("api/meets/:meetId/calls", "routes/api.meet.calls.ts"),
+  route("api/meets/:meetId/results", "routes/api.meet.results.ts"),
   route("api/athletes", "routes/api.public.athletes.ts"),
   route("api/athletes/:athleteId", "routes/api.public.athlete.ts"),
   route("api/users/:userId", "routes/api.public.user.ts"),

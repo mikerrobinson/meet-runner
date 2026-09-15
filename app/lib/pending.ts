@@ -19,18 +19,9 @@ export function applyPending(detail: MeetDetail, queue: Queued[]): MeetDetail {
   if (mine.length === 0) return detail;
 
   let entries = detail.entries;
-  let heats = detail.heats;
+  let seeds = detail.seeds;
   let watches = detail.watches;
-  let calls = detail.calls;
-
-  const editHeat = (heatId: string, edit: (lanes: (string | null)[]) => void) => {
-    heats = heats.map((heat) => {
-      if (heat.id !== heatId) return heat;
-      const lanes = [...heat.lanes];
-      edit(lanes);
-      return { ...heat, lanes };
-    });
-  };
+  let results = detail.results;
 
   for (const { write } of mine) {
     switch (write.kind) {
@@ -45,55 +36,66 @@ export function applyPending(detail: MeetDetail, queue: Queued[]): MeetDetail {
         break;
       }
 
-      case "seat": {
-        const heat = heats.find((h) => h.id === write.heatId);
-        if (!heat) break;
-        // Nobody swims an event twice, so vacate whatever lane they held —
-        // the same rule `setSeat` applies on the server.
-        for (const other of heats.filter((h) => h.eventId === heat.eventId)) {
-          editHeat(other.id, (lanes) => {
-            for (let i = 0; i < lanes.length; i++) {
-              if (lanes[i] === write.athleteId) lanes[i] = null;
-            }
-          });
-        }
-        editHeat(write.heatId, (lanes) => {
-          lanes[write.lane - 1] = write.athleteId;
-        });
+      case "seed": {
+        // Nobody swims an event twice, so vacate whatever other lane they
+        // held — the same rule `setSeed` applies on the server.
+        seeds = seeds.filter(
+          (s) =>
+            !(
+              s.eventId === write.eventId &&
+              s.athleteId === write.athleteId &&
+              !(s.heat === write.heat && s.lane === write.lane)
+            ),
+        );
+        const at = seeds.findIndex(
+          (s) =>
+            s.eventId === write.eventId &&
+            s.heat === write.heat &&
+            s.lane === write.lane,
+        );
+        const next = {
+          id: at >= 0 ? seeds[at].id : write.seedId,
+          meetId: write.meetId,
+          eventId: write.eventId,
+          heat: write.heat,
+          lane: write.lane,
+          athleteId: write.athleteId,
+        };
+        seeds = at >= 0 ? seeds.map((s, i) => (i === at ? next : s)) : [...seeds, next];
+
         // Swimming a race is being in it.
-        const current = entries[heat.eventId] ?? [];
+        const current = entries[write.eventId] ?? [];
         if (!current.includes(write.athleteId)) {
-          entries = { ...entries, [heat.eventId]: [...current, write.athleteId] };
+          entries = { ...entries, [write.eventId]: [...current, write.athleteId] };
         }
         break;
       }
 
-      case "unseat":
-        editHeat(write.heatId, (lanes) => {
-          lanes[write.lane - 1] = null;
-        });
+      case "unseed":
+        seeds = seeds.filter((s) => s.id !== write.seedId);
+        watches = watches.filter((w) => w.seedId !== write.seedId);
+        results = results.filter((r) => r.seedId !== write.seedId);
         break;
 
       case "watch": {
+        const existing = watches.find(
+          (w) => w.seedId === write.seedId && w.timerId === write.timerId,
+        );
         const next: Watch = {
-          heatId: write.heatId,
-          lane: write.lane,
+          seedId: write.seedId,
           timerId: write.timerId,
           userId: write.userId,
           role: write.role,
-          timeMs: write.timeMs,
+          // A start that follows a time must not blank it — the same
+          // `COALESCE` the server writes.
+          timeMs: write.timeMs ?? existing?.timeMs,
           recordedAt: write.recordedAt,
-          startedAt: write.startedAt,
-          stoppedAt: write.stoppedAt,
+          startedAt: write.startedAt ?? existing?.startedAt,
+          stoppedAt: write.stoppedAt ?? existing?.stoppedAt,
         };
         watches = [
           ...watches.filter(
-            (w) =>
-              !(
-                w.heatId === next.heatId &&
-                w.lane === next.lane &&
-                w.timerId === next.timerId
-              ),
+            (w) => !(w.seedId === next.seedId && w.timerId === next.timerId),
           ),
           next,
         ];
@@ -102,54 +104,33 @@ export function applyPending(detail: MeetDetail, queue: Queued[]): MeetDetail {
 
       case "drop-watch":
         watches = watches.filter(
-          (w) =>
-            !(
-              w.heatId === write.heatId &&
-              w.lane === write.lane &&
-              w.timerId === write.timerId
-            ),
+          (w) => !(w.seedId === write.seedId && w.timerId === write.timerId),
         );
         break;
 
-      case "clear-watches":
-        watches = watches.filter(
-          (w) => !(w.heatId === write.heatId && w.timerId === write.timerId),
-        );
-        break;
-
-      case "call": {
-        const existing = calls.find(
-          (c) => c.heatId === write.heatId && c.lane === write.lane,
-        );
-        calls = [
-          ...calls.filter(
-            (c) => !(c.heatId === write.heatId && c.lane === write.lane),
-          ),
+      case "result": {
+        const seed = seeds.find((s) => s.id === write.seedId);
+        if (!seed) break;
+        results = [
+          ...results.filter((r) => r.seedId !== write.seedId),
           {
-            heatId: write.heatId,
-            lane: write.lane,
-            status: write.status ?? existing?.status ?? "OK",
-            timeMs:
-              write.timeMs === null ? undefined : (write.timeMs ?? existing?.timeMs),
-            athleteId:
-              write.athleteId === null
-                ? undefined
-                : (write.athleteId ?? existing?.athleteId),
-            final: write.final ?? existing?.final ?? false,
+            seedId: write.seedId,
+            meetId: write.meetId,
+            eventId: seed.eventId,
+            athleteId: seed.athleteId,
+            status: write.status,
+            timeMs: write.timeMs,
             decidedAt: Date.now(),
-            fromWatches: existing?.fromWatches,
           },
         ];
         break;
       }
 
-      case "uncall":
-        calls = calls.filter(
-          (c) => !(c.heatId === write.heatId && c.lane === write.lane),
-        );
+      case "unresult":
+        results = results.filter((r) => r.seedId !== write.seedId);
         break;
     }
   }
 
-  return { ...detail, entries, heats, watches, calls };
+  return { ...detail, entries, seeds, watches, results };
 }

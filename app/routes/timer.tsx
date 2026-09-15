@@ -196,7 +196,7 @@ export default function Timer({ params }: Route.ComponentProps) {
   /* ----------------------------------------------------------------- state */
 
   const order = useMemo(
-    () => (snapshot ? runningOrder(snapshot.events, snapshot.heats) : []),
+    () => (snapshot ? runningOrder(snapshot.events, snapshot.seeds) : []),
     [snapshot],
   );
   /**
@@ -207,7 +207,7 @@ export default function Timer({ params }: Route.ComponentProps) {
    * something readable rather than a blank screen.
    */
   const stopIndex = order.findIndex(
-    (s) => s.event.position === eventNo - 1 && s.heat.index === heatNo - 1,
+    (s) => s.event.position === eventNo - 1 && s.heat === heatNo,
   );
   const stop = stopIndex >= 0 ? order[stopIndex] : undefined;
 
@@ -236,19 +236,23 @@ export default function Timer({ params }: Route.ComponentProps) {
    */
   const where: LaneRef | null =
     stop && lane
-      ? { event: stop.event.position + 1, heat: stop.heat.index + 1, lane }
+      ? { event: stop.event.position + 1, heat: stop.heat, lane }
       : null;
-  const laneKey = stop && lane ? `${stop.heat.id}:${lane}` : "";
-  const seatedId = stop && lane ? stop.heat.lanes[lane - 1] : null;
-  const swimmerId = overrides[laneKey] ?? seatedId ?? null;
+
+  /** The swim in this lane, if anybody has said who is in it. */
+  const seed = stop?.seeds.find((s) => s.lane === lane);
+  const laneKey = stop && lane ? `${stop.event.id}/${stop.heat}/${lane}` : "";
+  const swimmerId = overrides[laneKey] ?? seed?.athleteId ?? null;
   const swimmer = swimmerId ? byId.get(swimmerId) : undefined;
 
+  // This phone's own time for this swim, once the server has it. A watch with
+  // no time on it is this phone's stopwatch running, not a time sent.
   const alreadyTimed = useMemo(() => {
-    if (!snapshot || !stop || !lane) return undefined;
+    if (!snapshot || !seed) return undefined;
     return snapshot.mine.find(
-      (watch) => watch.heatId === stop.heat.id && watch.lane === lane,
+      (watch) => watch.seedId === seed.id && watch.timeMs !== undefined,
     );
-  }, [snapshot, stop, lane]);
+  }, [snapshot, seed]);
 
   /* --------------------------------------------------------------- actions */
 
@@ -467,7 +471,7 @@ export default function Timer({ params }: Route.ComponentProps) {
           </p>
           {alreadyTimed && !stopped && startedAt === null && (
             <p className="mt-2 text-sm text-slate-500">
-              Sent {formatTime(alreadyTimed.timeMs)} for this heat.
+              Sent {formatTime(alreadyTimed.timeMs!)} for this heat.
               {retiming && " Timing again replaces it."}
             </p>
           )}

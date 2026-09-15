@@ -20,9 +20,11 @@
  * depend on which route is asking.
  */
 
-import { allResults, eventClosed } from "./timing";
+import { eventClosed, swimTime, type SwimTime } from "./timing";
 import { eventName, isDiving } from "~/types/meet";
 import type {
+  Seed,
+  TimeMethod,
   Athlete,
   Gender,
   Meet,
@@ -143,8 +145,8 @@ export interface PublicPlacing {
   heat: number;
   timeMs: number;
   status: Result["status"];
-  /** How the official time was arrived at — "median of three", and so on. */
-  method: Result["method"];
+  /** How the time was arrived at — "median of three", and so on. */
+  method: TimeMethod;
   watchCount: number;
   /**
    * Signed off by whoever is running the meet. Until then these numbers are
@@ -186,12 +188,22 @@ export function meetResults(
   teamOf: (athleteId: string) => TeamRef | null,
 ): PublicEventResults[] {
   const byId = new Map(detail.athletes.map((a) => [a.id, a] as const));
-  const heatNumber = new Map(detail.heats.map((h) => [h.id, h.index + 1] as const));
-  const results = allResults(detail);
+
+  /**
+   * Every swim that has a time, signed off or not.
+   *
+   * A seed with nothing against it is somebody who was in a lane and whose
+   * time never arrived — a hole rather than a result, and not something to
+   * publish a blank line for.
+   */
+  const swims = detail.seeds
+    .map((seed) => ({ seed, time: swimTime(detail, seed.id) }))
+    .filter((row): row is { seed: Seed; time: SwimTime } => row.time !== null);
 
   return detail.events.map((event) => {
-    const forEvent = results
-      .filter((result) => result.eventId === event.id)
+    const forEvent = swims
+      .filter(({ seed }) => seed.eventId === event.id)
+      .map(({ seed, time }) => ({ ...time, seed, athleteId: seed.athleteId }))
       .sort((a, b) => {
         // Anything without a clean time sorts last, whatever the clock said.
         if (a.status !== b.status) {
@@ -202,19 +214,19 @@ export function meetResults(
       });
 
     let place = 0;
-    const placings: PublicPlacing[] = forEvent.map((result) => {
-      const athlete = byId.get(result.athleteId);
+    const placings: PublicPlacing[] = forEvent.map((row) => {
+      const athlete = byId.get(row.athleteId);
       return {
-        place: result.status === "OK" ? ++place : null,
+        place: row.status === "OK" ? ++place : null,
         athlete: athlete ? publicAthlete(athlete) : null,
-        team: teamOf(result.athleteId),
-        lane: result.lane,
-        heat: heatNumber.get(result.heatId) ?? 1,
-        timeMs: result.timeMs,
-        status: result.status,
-        method: result.method,
-        watchCount: result.watchCount,
-        final: result.final === true,
+        team: teamOf(row.athleteId),
+        lane: row.seed.lane,
+        heat: row.seed.heat,
+        timeMs: row.timeMs,
+        status: row.status,
+        method: row.method,
+        watchCount: row.watchCount,
+        final: row.official,
       };
     });
 
@@ -270,19 +282,21 @@ export function athleteSwims(
   for (const detail of meets) {
     const meet = detail.meet;
     const events = new Map(detail.events.map((e) => [e.id, e] as const));
-    const all = allResults(detail);
-    for (const result of all) {
-      if (result.athleteId !== athleteId) continue;
-      const event = events.get(result.eventId);
+    const all = detail.seeds
+      .map((seed) => ({ seed, time: swimTime(detail, seed.id) }))
+      .filter((row): row is { seed: Seed; time: SwimTime } => row.time !== null);
+
+    for (const { seed, time } of all) {
+      if (seed.athleteId !== athleteId) continue;
+      const event = events.get(seed.eventId);
       if (!event || isDiving(event)) continue;
 
       // Place is scored across the whole event, not within a heat.
       const ranked = all
-        .filter((r) => r.eventId === event.id && r.status === "OK")
-        .sort((a, b) => a.timeMs - b.timeMs);
-      const at = ranked.findIndex(
-        (r) => r.heatId === result.heatId && r.lane === result.lane,
-      );
+        .filter((r) => r.seed.eventId === event.id && r.time.status === "OK")
+        .sort((a, b) => a.time.timeMs - b.time.timeMs);
+      const at = ranked.findIndex((r) => r.seed.id === seed.id);
+      const result = { ...time, lane: seed.lane };
 
       swims.push({
         place: at >= 0 ? at + 1 : null,

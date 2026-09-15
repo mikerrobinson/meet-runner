@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Sheet, TextInput } from "./ui";
-import { allResults } from "~/lib/timing";
+import { seedsForEvent, swimTime } from "~/lib/timing";
 import {
   byAthlete,
   displayName,
@@ -8,7 +8,6 @@ import {
   isEligible,
   athleteName,
   type Enrollment,
-  type Heat,
   type MeetDetail,
   type NameOrder,
   type Athlete,
@@ -32,6 +31,7 @@ export function LaneAssignSheet({
   roster,
   enrollments,
   nameOrder,
+  eventId,
   heat,
   lane,
   onAssign,
@@ -43,31 +43,31 @@ export function LaneAssignSheet({
   /** Their year and squad this season, keyed by athlete id. */
   enrollments: Map<string, Enrollment>;
   nameOrder: NameOrder;
-  heat: Heat;
+  /** The lane being filled, as the meet numbers it. */
+  eventId: string;
+  heat: number;
   lane: number;
   onAssign: (athleteId: string) => void;
   onClose: () => void;
 }) {
   const [search, setSearch] = useState("");
 
-  const event = detail.events.find((e) => e.id === heat.eventId);
+  const event = detail.events.find((e) => e.id === eventId);
 
   const candidates = useMemo<Candidate[]>(() => {
-    const heatsInEvent = detail.heats
-      .filter((h) => h.eventId === heat.eventId)
-      .sort((a, b) => a.index - b.index);
-
+    // Where everybody in this event already sits, so the picker can say
+    // "already in heat 2, lane 4" rather than silently moving them.
     const seats = new Map<string, { heatNumber: number; lane: number }>();
-    for (const h of heatsInEvent) {
-      h.lanes.forEach((id, i) => {
-        if (id) seats.set(id, { heatNumber: h.index + 1, lane: i + 1 });
-      });
+    for (const seed of seedsForEvent(detail, eventId)) {
+      seats.set(seed.athleteId, { heatNumber: seed.heat, lane: seed.lane });
     }
 
+    // Anyone whose swim in this event already has a time. Moving them would
+    // move the time with them.
     const swum = new Set(
-      allResults(detail)
-        .filter((r) => r.eventId === heat.eventId)
-        .map((r) => r.athleteId),
+      seedsForEvent(detail, eventId)
+        .filter((seed) => swimTime(detail, seed.id) !== null)
+        .map((seed) => seed.athleteId),
     );
 
     const query = search.trim().toLowerCase();
@@ -88,7 +88,7 @@ export function LaneAssignSheet({
         if (aFree !== bFree) return aFree - bFree;
         return byAthlete(nameOrder)(a.athlete, b.athlete);
       });
-  }, [roster, nameOrder, detail, heat.eventId, event, search]);
+  }, [roster, nameOrder, detail, eventId, event, search]);
 
   return (
     <Sheet open title={`Lane ${lane} · who's swimming?`} onClose={onClose}>

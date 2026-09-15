@@ -35,45 +35,59 @@ import type { ResultStatus, WatchRole } from "~/types/meet";
  */
 export type Write =
   | { kind: "entry"; meetId: string; eventId: string; athleteId: string; entering: boolean }
-  | { kind: "seat"; meetId: string; heatId: string; lane: number; athleteId: string }
-  | { kind: "unseat"; meetId: string; heatId: string; lane: number }
+  /**
+   * Put somebody in a lane, by where the lane is rather than by a row id.
+   *
+   * Addressed as event/heat/lane because that is what the person doing it can
+   * see — and because the seed may not exist yet, which is the whole point: a
+   * timer naming somebody behind the blocks is creating the swim.
+   */
+  | {
+      kind: "seed";
+      meetId: string;
+      eventId: string;
+      heat: number;
+      lane: number;
+      athleteId: string;
+      /** What the server will call it, so the overlay agrees about the id. */
+      seedId: string;
+    }
+  | { kind: "unseed"; meetId: string; seedId: string }
   | {
       kind: "watch";
       meetId: string;
-      heatId: string;
-      lane: number;
+      seedId: string;
       /** Whose watch: a device id, or the user id of whoever is signed in. */
       timerId: string;
       /**
-       * The account behind it. Sent so the optimistic overlay can label the
-       * chip the way the server will; the server sets the stored value from
-       * the session either way, so this is never taken on trust.
+       * The account behind it, and what they are to this meet. Both are sent
+       * so the optimistic overlay ranks the watch the way the server will;
+       * the server records its own answer either way, so neither is taken on
+       * trust.
        */
       userId?: string;
-      /**
-       * What the sender is to this meet. Sent so the optimistic overlay ranks
-       * the watch the way the server will; the server records its own answer
-       * either way, so this is never taken on trust.
-       */
       role: WatchRole;
-      timeMs: number;
+      /** Absent for a stopwatch that has started and not been submitted. */
+      timeMs?: number;
       recordedAt: number;
       startedAt?: number;
       stoppedAt?: number;
     }
-  | { kind: "clear-watches"; meetId: string; heatId: string; timerId: string }
-  | { kind: "drop-watch"; meetId: string; heatId: string; lane: number; timerId: string }
+  | { kind: "drop-watch"; meetId: string; seedId: string; timerId: string }
+  /**
+   * Sign a swim off, or take the sign-off back.
+   *
+   * There is no half-way: a result exists or it doesn't, and the status is
+   * chosen as part of accepting it rather than recorded separately beforehand.
+   */
   | {
-      kind: "call";
+      kind: "result";
       meetId: string;
-      heatId: string;
-      lane: number;
-      status?: ResultStatus;
-      timeMs?: number | null;
-      athleteId?: string | null;
-      final?: boolean;
+      seedId: string;
+      status: ResultStatus;
+      timeMs: number;
     }
-  | { kind: "uncall"; meetId: string; heatId: string; lane: number };
+  | { kind: "unresult"; meetId: string; seedId: string }
 
 export interface Queued {
   id: string;
@@ -158,27 +172,27 @@ function supersedes(next: Write, old: Write): boolean {
         old.eventId === next.eventId &&
         old.athleteId === next.athleteId
       );
-    case "seat":
-    case "unseat":
+    case "seed":
+    case "unseed":
+      // Two answers about the same lane are one answer. A seed write names
+      // the lane; an unseed names the row, so both are compared on the id the
+      // caller minted for it.
       return (
-        (old.kind === "seat" || old.kind === "unseat") &&
-        old.heatId === next.heatId &&
-        old.lane === next.lane
+        (old.kind === "seed" || old.kind === "unseed") &&
+        old.seedId === next.seedId
       );
     case "watch":
     case "drop-watch":
       return (
         (old.kind === "watch" || old.kind === "drop-watch") &&
-        old.heatId === next.heatId &&
-        old.lane === next.lane &&
+        old.seedId === next.seedId &&
         old.timerId === next.timerId
       );
-    case "call":
-    case "uncall":
+    case "result":
+    case "unresult":
       return (
-        (old.kind === "call" || old.kind === "uncall") &&
-        old.heatId === next.heatId &&
-        old.lane === next.lane
+        (old.kind === "result" || old.kind === "unresult") &&
+        old.seedId === next.seedId
       );
     default:
       return false;
@@ -203,17 +217,17 @@ function endpointFor(item: Write): Endpoint {
         method: item.entering ? "POST" : "DELETE",
         body: { eventId: item.eventId, athleteId: item.athleteId },
       };
-    case "seat":
+    case "seed":
       return {
-        url: `${base}/seats`,
+        url: `${base}/seeds`,
         method: "POST",
-        body: { heatId: item.heatId, lane: item.lane, athleteId: item.athleteId },
+        body: item,
       };
-    case "unseat":
+    case "unseed":
       return {
-        url: `${base}/seats`,
+        url: `${base}/seeds`,
         method: "DELETE",
-        body: { heatId: item.heatId, lane: item.lane },
+        body: { seedId: item.seedId },
       };
     case "watch":
       return { url: `${base}/watches`, method: "POST", body: item };
@@ -221,21 +235,15 @@ function endpointFor(item: Write): Endpoint {
       return {
         url: `${base}/watches`,
         method: "DELETE",
-        body: { heatId: item.heatId, lane: item.lane, timerId: item.timerId },
+        body: { seedId: item.seedId, timerId: item.timerId },
       };
-    case "clear-watches":
+    case "result":
+      return { url: `${base}/results`, method: "POST", body: item };
+    case "unresult":
       return {
-        url: `${base}/watches`,
+        url: `${base}/results`,
         method: "DELETE",
-        body: { heatId: item.heatId, timerId: item.timerId },
-      };
-    case "call":
-      return { url: `${base}/calls`, method: "POST", body: item };
-    case "uncall":
-      return {
-        url: `${base}/calls`,
-        method: "DELETE",
-        body: { heatId: item.heatId, lane: item.lane },
+        body: { seedId: item.seedId },
       };
   }
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
 import type { Route } from "./+types/run";
+import type { SwimTime } from "~/lib/timing";
 import type { Progress } from "~/types/meet";
 import { LaneAssignSheet } from "~/components/LaneAssignSheet";
 import { LaneTile } from "~/components/LaneTile";
@@ -15,16 +16,18 @@ import {
 } from "~/components/ui";
 import { useElapsed, useWakeLock } from "~/hooks/use-stopwatch";
 import { useLiveData } from "~/hooks/use-live-data";
-import { heatsForEvent, reseedHeats, shuffle } from "~/lib/heats";
+import { reseedEvent, shuffle } from "~/lib/heats";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
 import { mayEditMeet } from "~/lib/access";
 import { meetAccess } from "~/lib/access.server";
-import { meetDetail, replaceHeats } from "~/lib/meets.server";
+import { meetDetail, replaceSeeds } from "~/lib/meets.server";
 import {
+  eventTouched,
   fromStopwatch,
-  heatTouched,
-  resultsForHeat,
-  watchesForLane,
+  heatsOf,
+  seedsForHeat,
+  swimTime,
+  watchesOn,
 } from "~/lib/timing";
 import { loadProgress, saveProgress } from "~/lib/storage";
 
@@ -32,6 +35,7 @@ import { formatClock, formatTime, parseTime } from "~/lib/time";
 import { enrollmentIndex } from "~/lib/roster";
 import { mayDecide } from "~/lib/access";
 import { applyPending } from "~/lib/pending";
+import { generateId } from "~/lib/id";
 import { useFetcher } from "react-router";
 import { usePending, useSend } from "~/state/outbox";
 import { useMeet } from "./meet-layout";
@@ -44,11 +48,10 @@ import {
   findAthlete,
   isDiving,
   orderedLanes,
-  type Heat,
   type MeetDetail,
   type MeetEvent,
   type NameOrder,
-  type Result,
+  type Seed,
   type Athlete,
   type Watch,
 } from "~/types/meet";
@@ -100,7 +103,7 @@ export async function action({ params, request, context }: Route.ActionArgs) {
   if (!detail) throw new Response("No such meet", { status: 404 });
 
   const entrants = shuffle(detail.entries[eventId] ?? []);
-  const rebuilt = reseedHeats(
+  const rebuilt = reseedEvent(
     detail,
     params.meetId,
     eventId,
@@ -111,7 +114,7 @@ export async function action({ params, request, context }: Route.ActionArgs) {
   // for the same reason, so this is the backstop.
   if (!rebuilt) return { ok: false };
 
-  await replaceHeats(db, params.meetId, eventId, rebuilt);
+  await replaceSeeds(db, params.meetId, eventId, rebuilt);
   return { ok: true };
 }
 
@@ -167,7 +170,8 @@ export default function RunMeet() {
    */
   const reseed = useFetcher();
   const [clock, setClock] = useState<{
-    heatId: string;
+    eventId: string;
+    heat: number;
     startedAt: number;
     /** Lanes that already had a time when this run started. */
     alreadyTimed: number[];
@@ -197,57 +201,71 @@ export default function RunMeet() {
   );
   const event = detail.events[eventIndex];
   const heats = useMemo(
-    () => (event ? heatsForEvent(detail.heats, event.id) : []),
-    [detail.heats, event],
+    () => (event ? heatsOf(detail, event.id) : []),
+    [detail, event],
   );
   const heatIndex = Math.min(progress.heatIndex, Math.max(0, heats.length - 1));
-  const heat: Heat | undefined = heats[heatIndex];
+  const heat: number | undefined = heats[heatIndex];
 
-  const running = heat != null && clock?.heatId === heat.id;
+  /** The swims in the heat on screen. A lane with nobody in it isn't one. */
+  const seeds = useMemo(
+    () => (event && heat !== undefined ? seedsForHeat(detail, event.id, heat) : []),
+    [detail, event, heat],
+  );
+  const seedByLane = useMemo(
+    () => new Map(seeds.map((s) => [s.lane, s] as const)),
+    [seeds],
+  );
 
-  // Derived, not stored: each lane's official time comes from the watches on
-  // it, so several timers can be recording at once without colliding.
-  const resultsByLane = useMemo(() => {
-    const map = new Map<number, Result>();
-    if (!heat) return map;
-    for (const result of resultsForHeat(detail, heat))
-      map.set(result.lane, result);
+  const running =
+    heat !== undefined &&
+    clock?.heat === heat &&
+    clock?.eventId === event?.id;
+
+  // Derived, not stored: each lane's time comes from the watches on it, so
+  // several timers can be recording at once without colliding.
+  const timeByLane = useMemo(() => {
+    const map = new Map<number, NonNullable<ReturnType<typeof swimTime>>>();
+    for (const seed of seeds) {
+      const time = swimTime(detail, seed.id);
+      if (time) map.set(seed.lane, time);
+    }
     return map;
-  }, [detail, heat]);
+  }, [detail, seeds]);
 
   /**
    * The lanes *this device* has stopped.
    *
    * The heat is complete when the person holding this stopwatch has taken
    * every lane in front of them — not when times turn up from the timing
-   * phones. Reading the shared results instead meant a lane a phone submitted
+   * phones. Reading the shared times instead meant a lane a phone submitted
    * mid-race counted as stopped here, and the clock could vanish from under a
    * coach while swimmers were still in the water.
    */
   const stoppedByMe = useMemo(() => {
     const lanes = new Set<number>();
-    if (!heat) return lanes;
-    for (const watch of detail.watches) {
-      if (watch.heatId === heat.id && watch.timerId === mine) {
-        lanes.add(watch.lane);
+    for (const seed of seeds) {
+      if (
+        watchesOn(detail, seed.id).some(
+          (w) => w.timerId === mine && w.timeMs !== undefined,
+        )
+      ) {
+        lanes.add(seed.lane);
       }
     }
     return lanes;
-  }, [detail, heat, mine]);
+  }, [detail, seeds, mine]);
 
-  const occupiedLanes = heat
-    ? heat.lanes
-        .map((id, i) => (id ? i + 1 : null))
-        .filter((n): n is number => n !== null)
-    : [];
+  const occupiedLanes = seeds.map((s) => s.lane);
+
   /**
    * Nothing left on this screen that still wants a time *for this run*.
    *
    * Either this device took the lane, or a time arrived on it from somebody
    * else since the clock started. All three parts were learned by running it:
    * counting only this device's watches left a coach who times two lanes
-   * waiting forever on the four the phones cover; counting every result let a
-   * phone end the heat while swimmers were in the water; and counting results
+   * waiting forever on the four the phones cover; counting every time let a
+   * phone end the heat while swimmers were in the water; and counting times
    * that predate the start made pressing START on a re-swim declare the heat
    * over on the spot.
    */
@@ -256,14 +274,13 @@ export default function RunMeet() {
     occupiedLanes.every(
       (lane) =>
         stoppedByMe.has(lane) ||
-        (resultsByLane.has(lane) &&
-          !(clock?.alreadyTimed ?? []).includes(lane)),
+        (timeByLane.has(lane) && !(clock?.alreadyTimed ?? []).includes(lane)),
     );
 
-  // Lanes already swum can't be reseeded out from under their times.
-  const eventTouched = useMemo(
-    () => heats.some((h) => heatTouched(detail, h)),
-    [detail, heats],
+  // Swims already recorded can't be reseeded out from under their times.
+  const touched = useMemo(
+    () => (event ? eventTouched(detail, event.id) : false),
+    [detail, event],
   );
 
   /**
@@ -409,25 +426,26 @@ export default function RunMeet() {
               layout === "grid" ? "grid-cols-2" : "grid-cols-1"
             }`}
           >
-            {orderedLanes(heat.lanes.length, layout).map((lane) => (
+            {orderedLanes(meet.laneCount, layout).map((lane) => (
               <LaneTile
                 key={lane}
                 lane={lane}
-                athlete={findAthlete(roster, heat.lanes[lane - 1])}
-                result={resultsByLane.get(lane)}
+                athlete={findAthlete(roster, seedByLane.get(lane)?.athleteId ?? null)}
+                time={timeByLane.get(lane)}
                 stoppedHere={stoppedByMe.has(lane)}
                 running={running}
                 clockRunning={clockRunning}
                 layout={layout}
-                laneCount={heat.lanes.length}
+                laneCount={meet.laneCount}
                 nameOrder={nameOrder}
                 onStop={() => {
+                  const seed = seedByLane.get(lane);
+                  if (!seed) return;
                   const at = Date.now();
                   send({
                     kind: "watch",
                     meetId: meet.id,
-                    heatId: heat.id,
-                    lane,
+                    seedId: seed.id,
                     timerId: mine,
                     userId: access.userId ?? undefined,
                     role: myRole,
@@ -471,12 +489,14 @@ export default function RunMeet() {
                   // This device's own watches, and nobody else's. A timer at
                   // the far end of the pool doesn't lose their afternoon
                   // because somebody reset a heat here.
-                  send({
-                    kind: "clear-watches",
-                    meetId: meet.id,
-                    heatId: heat.id,
-                    timerId: mine,
-                  });
+                  for (const seed of seeds) {
+                    send({
+                      kind: "drop-watch",
+                      meetId: meet.id,
+                      seedId: seed.id,
+                      timerId: mine,
+                    });
+                  }
                   setClock(null);
                   setConfirmReset(false);
                 }}
@@ -513,18 +533,21 @@ export default function RunMeet() {
               onClick={() => {
                 // A false start's watches aren't times of the race about to
                 // be swum, so this device drops its own before starting.
-                send({
-                  kind: "clear-watches",
-                  meetId: meet.id,
-                  heatId: heat.id,
-                  timerId: mine,
-                });
+                for (const seed of seeds) {
+                  send({
+                    kind: "drop-watch",
+                    meetId: meet.id,
+                    seedId: seed.id,
+                    timerId: mine,
+                  });
+                }
                 // Whatever else is already on these lanes belongs to the
                 // previous swim, not this one.
                 setClock({
-                  heatId: heat.id,
+                  eventId: event.id,
+                  heat: heat!,
                   startedAt: Date.now(),
-                  alreadyTimed: [...resultsByLane.keys()],
+                  alreadyTimed: [...timeByLane.keys()],
                 });
               }}
             >
@@ -544,9 +567,9 @@ export default function RunMeet() {
               <Button
                 size="sm"
                 variant="ghost"
-                disabled={eventTouched}
+                disabled={touched}
                 title={
-                  eventTouched
+                  touched
                     ? "This event has times against it — reseeding would move swimmers out from under them."
                     : undefined
                 }
@@ -569,10 +592,10 @@ export default function RunMeet() {
             </div>
           )}
 
-          {!running && resultsByLane.size > 0 && (
+          {!running && timeByLane.size > 0 && (
             <Banner tone="info">
-              This heat already has {resultsByLane.size} time
-              {resultsByLane.size === 1 ? "" : "s"}
+              This heat already has {timeByLane.size} time
+              {timeByLane.size === 1 ? "" : "s"}
               {stoppedByMe.size > 0
                 ? `, ${stoppedByMe.size} of them taken here. Starting again clears those and leaves the rest.`
                 : ", none of them taken here. Starting again leaves them alone."}
@@ -584,6 +607,7 @@ export default function RunMeet() {
       {heat && assigningLane !== null && (
         <LaneAssignSheet
           detail={detail}
+          eventId={event.id}
           roster={roster}
           enrollments={enrollmentIndex(detail.enrollments)}
           nameOrder={nameOrder}
@@ -591,63 +615,63 @@ export default function RunMeet() {
           lane={assigningLane}
           onAssign={(athleteId) =>
             send({
-              kind: "seat",
+              kind: "seed",
               meetId: meet.id,
-              heatId: heat.id,
+              eventId: event.id,
+              heat: heat!,
               lane: assigningLane,
               athleteId,
+              seedId: generateId(),
             })
           }
           onClose={() => setAssigningLane(null)}
         />
       )}
 
-      {heat && editingLane !== null && (
-        <LaneSheet
-          heat={heat}
-          lane={editingLane}
-          onClose={() => setEditingLane(null)}
-          result={resultsByLane.get(editingLane)}
-          swimmerLabel={(() => {
-            const s = findAthlete(roster, heat.lanes[editingLane - 1]);
-            return s ? displayName(s, nameOrder) : `Lane ${editingLane}`;
-          })()}
-          watches={watchesForLane(detail, heat.id, editingLane)}
-          timerId={mine}
-          onSaveTime={(timeMs) => {
-            send({
-              kind: "watch",
-              meetId: meet.id,
-              heatId: heat.id,
-              lane: editingLane,
-              timerId: mine,
-              userId: access.userId ?? undefined,
-              role: myRole,
-              timeMs,
-              recordedAt: Date.now(),
-            });
-            setEditingLane(null);
-          }}
-          onRemoveWatch={(who) =>
-            send({
-              kind: "drop-watch",
-              meetId: meet.id,
-              heatId: heat.id,
-              lane: editingLane,
-              timerId: who,
-            })
-          }
-          onRemoveFromLane={() => {
-            send({
-              kind: "unseat",
-              meetId: meet.id,
-              heatId: heat.id,
-              lane: editingLane,
-            });
-            setEditingLane(null);
-          }}
-        />
-      )}
+      {editingLane !== null && (() => {
+        const seed = seedByLane.get(editingLane);
+        if (!seed) return null;
+        const athlete = findAthlete(roster, seed.athleteId);
+        return (
+          <LaneSheet
+            lane={editingLane}
+            onClose={() => setEditingLane(null)}
+            time={timeByLane.get(editingLane)}
+            swimmerLabel={
+              athlete ? displayName(athlete, nameOrder) : `Lane ${editingLane}`
+            }
+            watches={watchesOn(detail, seed.id).filter(
+              (w) => w.timeMs !== undefined,
+            )}
+            timerId={mine}
+            onSaveTime={(timeMs) => {
+              send({
+                kind: "watch",
+                meetId: meet.id,
+                seedId: seed.id,
+                timerId: mine,
+                userId: access.userId ?? undefined,
+                role: myRole,
+                timeMs,
+                recordedAt: Date.now(),
+              });
+              setEditingLane(null);
+            }}
+            onRemoveWatch={(who) =>
+              send({
+                kind: "drop-watch",
+                meetId: meet.id,
+                seedId: seed.id,
+                timerId: who,
+              })
+            }
+            onRemoveFromLane={() => {
+              send({ kind: "unseed", meetId: meet.id, seedId: seed.id });
+              setEditingLane(null);
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -713,10 +737,9 @@ function DivingPanel({
  * Without this a single mistake would cost the whole heat.
  */
 function LaneSheet({
-  heat,
   lane,
   swimmerLabel,
-  result,
+  time,
   watches,
   timerId,
   onClose,
@@ -724,10 +747,9 @@ function LaneSheet({
   onRemoveWatch,
   onRemoveFromLane,
 }: {
-  heat: Heat;
   lane: number;
   swimmerLabel: string;
-  result?: Result;
+  time?: SwimTime;
   /** Every watch on this lane, so a coach can see what the time is made of. */
   watches: Watch[];
   timerId: string;
@@ -739,8 +761,7 @@ function LaneSheet({
   // Prefilled with this device's own watch, since typing a time replaces that
   // one — never somebody else's.
   const own = watches.find((w) => w.timerId === timerId);
-  const [value, setValue] = useState(own ? formatTime(own.timeMs) : "");
-  const empty = heat.lanes[lane - 1] === null;
+  const [value, setValue] = useState(own ? formatTime(own.timeMs!) : "");
 
   // Parsed on every keystroke so the sheet can show what will actually be
   // saved — "101.45" becoming 1:01.45 should never be a surprise.
@@ -749,9 +770,7 @@ function LaneSheet({
 
   return (
     <Sheet open title={`Lane ${lane} · ${swimmerLabel}`} onClose={onClose}>
-      {empty ? (
-        <p className="text-slate-500">This lane is empty for this heat.</p>
-      ) : (
+      {(
         <div className="space-y-3">
           <Field
             label="Time"
@@ -796,11 +815,11 @@ function LaneSheet({
               <p className="mb-1 text-xs font-bold text-slate-600 dark:text-slate-300">
                 {watches.length} watch{watches.length === 1 ? "" : "es"} on this
                 lane
-                {result && result.method !== "official" && (
+                {time && !time.official && (
                   <span className="font-normal">
                     {" "}
-                    · official {formatTime(result.timeMs)} (
-                    {METHOD_LABEL[result.method]})
+                    · official {formatTime(time.timeMs)} (
+                    {METHOD_LABEL[time.method]})
                   </span>
                 )}
               </p>
@@ -811,7 +830,7 @@ function LaneSheet({
                     className="flex items-center justify-between gap-2 py-1"
                   >
                     <span className="text-sm tabular-nums">
-                      {formatTime(watch.timeMs)}
+                      {formatTime(watch.timeMs!)}
                       <span className="ml-2 text-xs text-slate-500">
                         {watch.timerId === timerId ? "you" : "another timer"}
                         {!fromStopwatch(watch) && " · typed"}
@@ -819,7 +838,7 @@ function LaneSheet({
                     </span>
                     <button
                       type="button"
-                      aria-label={`Discard the ${formatTime(watch.timeMs)} watch`}
+                      aria-label={`Discard the ${formatTime(watch.timeMs!)} watch`}
                       onClick={() => onRemoveWatch(watch.timerId)}
                       className="h-8 w-8 shrink-0 touch-manipulation rounded-lg text-sm text-red-600"
                     >
@@ -834,7 +853,7 @@ function LaneSheet({
               a decision — it belongs at the control desk, where the person
               making it can see every watch on the lane. The deck's job is
               evidence: take a time, fix your own, say who's in the lane. */}
-          {!result && (
+          {!time?.official && (
             /* Undo for a wrong pick. Only offered while the lane has no time
                on it — otherwise clear the time first. */
             <Button variant="ghost" full onClick={onRemoveFromLane}>

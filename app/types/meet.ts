@@ -392,30 +392,30 @@ export interface Entry {
   athleteId: string;
 }
 
-/** A heat of one event. Its lanes are `Seat` rows, assembled on read. */
-export interface Heat {
+/**
+ * One planned swim: somebody, in a lane, in a heat of an event.
+ *
+ * The unit everything about running a meet hangs off. Seeding an event makes
+ * one of these per entered swimmer; a timer naming the person behind the
+ * blocks makes one too, because a lane nobody expected is still a swim. Times
+ * belong to it and the official result is about it.
+ *
+ * There is no `heats` table. A heat is which heat — a small integer, 1-based,
+ * and usually 1 — so "the heats of this event" is the distinct heats across
+ * its seeds, and a heat cannot exist with nothing in it. A row with an id of
+ * its own is what lets a time survive somebody being moved between lanes.
+ */
+export interface Seed {
   id: string;
   meetId: string;
   eventId: string;
-  /** 0-based position within the event. */
-  index: number;
-  /** One slot per lane, index 0 = lane 1. `null` = empty lane. */
-  lanes: (string | null)[];
-}
-
-/**
- * One lane of one heat, and who is in it.
- *
- * The single answer to "who is in lane 4". The coach seeding an event, an
- * administrator correcting the desk and a timer fixing a name behind the
- * blocks all write this same row, and the last one wins — because it is one
- * person deciding one thing. There is no second opinion riding on a watch.
- */
-export interface Seat {
-  heatId: string;
-  /** 1-based lane number. */
+  /** Which heat of the event, 1-based. Usually 1. */
+  heat: number;
+  /** Which lane, 1-based. */
   lane: number;
   athleteId: string;
+  /** What they are expected to swim, when anybody knows. Nothing reads it yet. */
+  seedTimeMs?: number;
 }
 
 export type ResultStatus = "OK" | "DQ" | "NS";
@@ -434,172 +434,101 @@ export type ResultStatus = "OK" | "DQ" | "NS";
  */
 export type WatchRole = "timer" | "coach" | "admin";
 
-/**
- * A stopwatch that has been armed on a lane, and perhaps stopped.
- *
- * Not a watch: a watch is evidence of a time somebody swam, and this is only
- * the fact that a thumb has been pressed. It exists so the desk can tell a
- * lane nobody is covering from one whose timers are simply still holding their
- * clocks — a question worth asking *before* the race rather than after.
- */
-export interface TimerActivity {
-  heatId: string;
-  lane: number;
-  timerId: string;
-  /**
-   * When the watch was started and stopped, **on the server's clock**.
-   *
-   * Translated from the phone's own on the way in, because this is the one
-   * place an absolute time is compared across devices: the desk draws a
-   * running stopwatch from it, which means measuring a phone's start against
-   * the desk's now. Everywhere else a phone's clock is only trusted to order
-   * that phone's own actions.
-   */
-  startedAt?: number;
-  stoppedAt?: number;
-  updatedAt: number;
-}
-
 export interface Watch {
-  heatId: string;
-  /** 1-based lane. The watch times a lane; who was in it comes from the seat. */
-  lane: number;
+  /** The swim it measures. */
+  seedId: string;
   /**
-   * Whoever took it, and the key one watch per lane is filed under.
+   * Whoever took it, and the key one watch per swim is filed under.
    *
    * A device id for a volunteer behind a lane, who has no account and is
    * identified only by the phone they scanned with. A *user* id for anybody
    * signed in — a coach on the multi-lane stopwatch, an administrator typing
-   * a time at the desk — so that person keeps one watch per lane whichever
+   * a time at the desk — so that person keeps one watch per swim whichever
    * device they happen to pick up.
    */
   timerId: string;
   /**
+   * The account behind it, when there was one. Absent for a QR-code timer.
+   * The server sets it from the session rather than believing the client.
+   */
+  userId?: string;
+  /**
    * What the submitter was to this meet when they took it.
    *
-   * Not derivable from the watch, and not re-derivable later: a coach who is
-   * made an administrator in March must not retroactively turn the watch they
-   * held in January into the official's own reading. Recorded at the moment
-   * of submission for the same reason a sign-off snapshots the watches — a
-   * record of a decision has to say what was true when it was made.
-   *
-   * `timer` is a volunteer behind a lane with no account. `coach` is a coach
-   * of a racing team. `admin` is whoever runs the meet, whose reading stands
-   * over the rest.
+   * Recorded rather than looked up later: a coach made an administrator in
+   * March must not retroactively turn the watch they held in January into the
+   * official's own reading.
    */
   role: WatchRole;
   /**
-   * The account behind it, when there was one.
+   * The time, once there is one.
    *
-   * Set for coaches and administrators, absent for a QR-code timer. Its
-   * presence is what tells a person from a phone, and it is what a screen
-   * joins on to show a name instead of `d-4f2a91b3`. The server sets it from
-   * the session rather than believing the client, because a watch that
-   * claimed to be somebody else's would be evidence with the wrong name on it.
+   * Absent means a stopwatch is running and nothing has been submitted yet —
+   * which is how the desk tells a lane nobody is covering from one whose
+   * timers are still holding their clocks. There is no separate table of
+   * armed stopwatches, because a watch with a start and no time says it.
+   *
+   * Nothing that works out a swim's time may see one of these; they are
+   * filtered out in `timedWatches`, which every such reader goes through.
    */
-  userId?: string;
-  /** Elapsed time in milliseconds, measured on the timer's own device. */
-  timeMs: number;
+  timeMs?: number;
   recordedAt: number;
   /**
-   * When the watch was started and stopped, on the submitter's own clock.
+   * When the watch was started and stopped, on the server's clock.
    *
    * Both present means a stopwatch in this app ran the race; neither means the
-   * time was typed in — off a handheld, off the board, or from the desk. There
-   * is no separate "source" field saying which, because it could only ever
-   * repeat what these two already say, and a field that restates another is a
-   * field that can contradict it.
+   * time was typed in. There is no "source" field saying which, because it
+   * could only repeat what these two already say.
    *
-   * Absolute timestamps from a phone whose clock may be minutes out, so they
-   * order one device's own actions and nothing else. The time itself is
-   * `timeMs`, a difference between two readings of one clock, which is the
-   * only thing about that clock worth trusting.
+   * Translated from the phone's own clock on the way in, because the desk
+   * draws a running stopwatch from `startedAt` and that means comparing it
+   * against the desk's now.
    */
   startedAt?: number;
   stoppedAt?: number;
 }
 
 /**
- * The decision about a lane: what the time was, and whether it stands.
+ * The official outcome of one swim, and the only thing here an administrator
+ * writes.
  *
- * Watches are evidence — several per lane, resolved by the hand-timing rules.
- * This is the one row that says what the meet reads. An administrator either
- * accepts what the watches worked out or corrects it, and `final` is the
- * separate act of signing it off.
+ * It exists because somebody signed the lane off. That is the whole of its
+ * meaning: no `final` flag, because a row that is not signed off is a row that
+ * is not there, and no snapshot of what the watches said, because the number
+ * that was accepted is written straight in. A late watch cannot move it, a
+ * discarded watch cannot move it, and taking it back is deleting it.
  *
- * `timeMs` absent means "whatever the watches say". Set, it is the official's
- * own reading and outranks them — which is why taking back a sign-off returns
- * to that reading rather than to the raw watches: `final` flips, `timeMs`
- * stays.
- *
- * Storing the decision rather than deriving everything is what makes a late
- * watch harmless. A timer's phone that was offline all afternoon can push
- * whenever it reconnects; a lane that has been signed off doesn't move.
- */
-export interface LaneCall {
-  heatId: string;
-  lane: number;
-  /** Set only when the call corrects who swam. Otherwise read the seat. */
-  athleteId?: string;
-  status: ResultStatus;
-  /** The official's own reading. Absent means "what the watches say". */
-  timeMs?: number;
-  /** Signed off. Until then the lane is a proposal. */
-  final: boolean;
-  decidedBy?: string;
-  decidedAt: number;
-  /**
-   * What the watches said at the moment it was signed off, so the record can
-   * answer "what did they actually see?" once a late watch has arrived.
-   */
-  fromWatches?: { timeMs: number; watchCount: number; method: TimeMethod };
-}
-
-export type TimeMethod = "single" | "average" | "median" | "official";
-
-/**
- * The official time for a lane, worked out from the watches and the call.
- *
- * Derived, never stored. Every screen computes the same answer from the same
- * rows, so there is nothing to keep in step.
+ * `athleteId` and `eventId` are copied from the seed so results can be listed,
+ * ranked and exported without reassembling the meet — the same reason `meetId`
+ * is denormalised everywhere else.
  */
 export interface Result {
+  seedId: string;
   meetId: string;
   eventId: string;
-  heatId: string;
   athleteId: string;
-  lane: number;
-  timeMs: number;
   status: ResultStatus;
-  recordedAt: number;
-  /** How the time was arrived at, for anyone asking why it says what it says. */
-  method: TimeMethod;
-  /** How many watches stood behind it. */
-  watchCount: number;
-  /** True when no stopwatch was involved at all. */
-  manual?: boolean;
-  /** Set once an administrator has signed the lane off. */
-  final?: boolean;
+  /** Zero for a no-show or a disqualification with nothing on the clock. */
+  timeMs: number;
+  decidedBy?: string;
+  decidedAt: number;
 }
 
-/**
- * Everything one meet's screens need, in one shape.
- *
- * A loader fetches this; the pure functions in `timing.ts` and `events.ts`
- * read it. It is an assembled view, not a stored document — which is the
- * difference that matters.
- */
+/** How a proposed time was arrived at, for anyone asking why it says that. */
+export type TimeMethod = "single" | "average" | "median" | "official";
+
 export interface MeetDetail {
   meet: Meet;
   teams: Team[];
   events: MeetEvent[];
   /** eventId -> athleteIds registered in it. */
   entries: Record<string, string[]>;
-  heats: Heat[];
+  /** Every planned swim: who is in which lane of which heat. */
+  seeds: Seed[];
+  /** Every measurement, including stopwatches that are still running. */
   watches: Watch[];
-  calls: LaneCall[];
-  /** Which stopwatches are armed, so the desk can see a lane being covered. */
-  activity: TimerActivity[];
+  /** Every swim an administrator has signed off. */
+  results: Result[];
   /** Everyone these rows refer to, so no screen has to fetch people itself. */
   athletes: Athlete[];
   /**

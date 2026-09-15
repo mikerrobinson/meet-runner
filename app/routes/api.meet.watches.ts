@@ -9,7 +9,7 @@ import {
   type SyncEnv,
 } from "~/lib/api.server";
 import { mayDecide, mayRecordTime, meetAccess } from "~/lib/access.server";
-import { clearOwnWatches, deleteWatch, putWatch } from "~/lib/meets.server";
+import { deleteWatch, putWatch } from "~/lib/meets.server";
 
 /**
  * Times off a stopwatch.
@@ -44,15 +44,14 @@ export async function action({ params, request, context }: Route.ActionArgs) {
     }
 
     const body = await readJson<{
-      heatId?: string;
-      lane?: number;
+      seedId?: string;
       timerId?: string;
       timeMs?: number;
       recordedAt?: number;
       startedAt?: number;
       stoppedAt?: number;
     }>(request);
-    if (!body.heatId) throw new SyncError("Which watch?", 400);
+    if (!body.seedId) throw new SyncError("Which swim?", 400);
 
     // Signed in, so the watch is theirs and says so. The body's `timerId` is
     // only reached by a caller with no account.
@@ -60,17 +59,8 @@ export async function action({ params, request, context }: Route.ActionArgs) {
     if (!submitter) throw new SyncError("Which watch?", 400);
 
     if (request.method === "DELETE") {
-      // Dropping a watch names one explicitly, because the desk drops other
-      // people's — that is the whole point of the control. Clearing a whole
-      // heat is only ever your own.
-      if (body.lane === undefined) {
-        await clearOwnWatches(db, body.heatId, submitter);
-        return json({ ok: true });
-      }
-
       // Throwing away somebody else's evidence is a decision, not a
-      // correction, so it needs the desk. Your own you may always drop — a
-      // false start, a fat-fingered tap, a heat started again.
+      // correction, so it needs the desk. Your own you may always drop.
       const whose = body.timerId ?? submitter;
       if (whose !== submitter && !mayDecide(access)) {
         throw new SyncError(
@@ -78,29 +68,24 @@ export async function action({ params, request, context }: Route.ActionArgs) {
           403,
         );
       }
-      await deleteWatch(db, body.heatId, Number(body.lane), whose);
+      await deleteWatch(db, body.seedId, whose);
       return json({ ok: true });
     }
     if (request.method !== "POST") throw new SyncError("Use POST or DELETE", 405);
 
-    const lane = Number(body.lane);
     const timeMs = Number(body.timeMs);
-    if (!Number.isFinite(lane) || lane < 1) throw new SyncError("Which lane?", 400);
-    if (!Number.isFinite(timeMs) || timeMs <= 0) {
-      throw new SyncError("That isn't a time.", 400);
-    }
+    const hasTime = Number.isFinite(timeMs) && timeMs > 0;
+    // A watch with neither a time nor a start is nothing at all. With a start
+    // and no time it is a stopwatch that is running, which is a fact worth
+    // keeping — it is how the desk sees a lane being covered.
+    if (!hasTime && !body.startedAt) throw new SyncError("That isn't a time.", 400);
 
     await putWatch(db, params.meetId, {
-      heatId: body.heatId,
-      lane,
+      seedId: body.seedId,
       timerId: submitter,
       userId: user?.id,
-      // What they are to this meet, right now, recorded so the reading can
-      // never be re-weighed by a later change of role. Whoever runs the meet
-      // rules on a time; a coach of a racing team is timing their own swimmer
-      // from the side, which is a worse position and an interested one.
       role: access.admin ? "admin" : user ? "coach" : "timer",
-      timeMs: Math.round(timeMs),
+      timeMs: hasTime ? Math.round(timeMs) : undefined,
       recordedAt: Number(body.recordedAt) || Date.now(),
       startedAt: Number(body.startedAt) || undefined,
       stoppedAt: Number(body.stoppedAt) || undefined,

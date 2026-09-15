@@ -1,6 +1,11 @@
 import { generateId } from "./id";
 import { formatTime } from "./time";
-import { allResults } from "./timing";
+import {
+  fromStopwatch,
+  swimTime,
+  watchesOn,
+  type SwimTime,
+} from "./timing";
 import {
   eventName,
   athleteName,
@@ -8,6 +13,7 @@ import {
   type Enrollment,
   type Gender,
   type MeetDetail,
+  type Seed,
 } from "~/types/meet";
 
 /**
@@ -281,7 +287,6 @@ export function resultsToCsv(
   enrollments: Map<string, Enrollment> = new Map(),
 ): string {
   const byId = new Map(detail.athletes.map((a) => [a.id, a] as const));
-  const heats = new Map(detail.heats.map((h) => [h.id, h] as const));
 
   const rows: Array<Array<string | number>> = [
     [
@@ -301,43 +306,47 @@ export function resultsToCsv(
     ],
   ];
 
-  const results = allResults(detail);
+  // Every swim that has a time. A seed with nothing against it is somebody
+  // whose time never arrived, which is a hole rather than a row to export.
+  const swims = detail.seeds
+    .map((seed) => ({ seed, time: swimTime(detail, seed.id) }))
+    .filter((row): row is { seed: Seed; time: SwimTime } => row.time !== null);
 
   detail.events.forEach((event, eventIndex) => {
-    const eventResults = results.filter((r) => r.eventId === event.id);
+    const forEvent = swims.filter(({ seed }) => seed.eventId === event.id);
 
     // Place is scored across the whole event, not within a heat.
-    const ranked = eventResults
-      .filter((r) => r.status === "OK")
-      .sort((a, b) => a.timeMs - b.timeMs);
     const place = new Map(
-      ranked.map((r, i) => [`${r.heatId}:${r.lane}`, i + 1] as const),
+      forEvent
+        .filter(({ time }) => time.status === "OK")
+        .sort((a, b) => a.time.timeMs - b.time.timeMs)
+        .map((row, i) => [row.seed.id, i + 1] as const),
     );
 
-    const ordered = [...eventResults].sort((a, b) => {
-      const heatDiff =
-        (heats.get(a.heatId)?.index ?? 0) - (heats.get(b.heatId)?.index ?? 0);
-      if (heatDiff !== 0) return heatDiff;
-      return a.timeMs - b.timeMs;
-    });
+    // Listed as swum: heat by heat, fastest first within each.
+    const ordered = [...forEvent].sort(
+      (a, b) => a.seed.heat - b.seed.heat || a.time.timeMs - b.time.timeMs,
+    );
 
-    for (const result of ordered) {
-      const athlete = byId.get(result.athleteId);
-      const enrolled = enrollments.get(result.athleteId);
+    for (const { seed, time } of ordered) {
+      const athlete = byId.get(seed.athleteId);
+      const enrolled = enrollments.get(seed.athleteId);
       rows.push([
         eventIndex + 1,
         eventName(event),
-        (heats.get(result.heatId)?.index ?? 0) + 1,
-        result.lane,
+        seed.heat,
+        seed.lane,
         athlete ? athleteName(athlete) : "(unknown)",
         athlete?.gender ?? "",
         enrolled?.year ?? "",
         enrolled?.squad ?? "",
-        result.status === "OK" ? formatTime(result.timeMs) : result.status,
-        result.status === "OK" ? result.timeMs : "",
-        result.status,
-        place.get(`${result.heatId}:${result.lane}`) ?? "",
-        result.manual ? "manual" : "stopwatch",
+        time.status === "OK" ? formatTime(time.timeMs) : time.status,
+        time.status === "OK" ? time.timeMs : "",
+        time.status,
+        place.get(seed.id) ?? "",
+        // Whether a stopwatch in this app ran the race, or the number was
+        // typed in from a handheld or the board.
+        watchesOn(detail, seed.id).some(fromStopwatch) ? "stopwatch" : "manual",
       ]);
     }
   });

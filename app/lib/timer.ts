@@ -15,7 +15,7 @@ import { A_WEEK, readCookie } from "./cookies";
 import { splitTypedName } from "./timer-messages";
 import { local } from "./local";
 import { generateId } from "./id";
-import type { Athlete, Heat, MeetEvent, Watch } from "~/types/meet";
+import type { Athlete, MeetEvent, Seed, Watch } from "~/types/meet";
 
 /**
  * How far this phone has got, and nothing else.
@@ -66,7 +66,10 @@ export function saveFurthest(
 /** One heat, flattened into the order the meet is actually swum in. */
 export interface Stop {
   event: MeetEvent;
-  heat: Heat;
+  /** Which heat of the event, 1-based. */
+  heat: number;
+  /** The swims in it, so the phone knows who is in the lane it is timing. */
+  seeds: Seed[];
   /** 1-based, for "Heat 2 of 4". */
   number: number;
   of: number;
@@ -75,19 +78,27 @@ export interface Stop {
 /**
  * Every heat in the order they'll be swum.
  *
- * The timer moves through this one step at a time. Events with no heats seeded
+ * The timer moves through this one step at a time. Events with nothing seeded
  * are skipped rather than shown empty — there is nothing to time, and a screen
  * offering a stopwatch for a heat that doesn't exist is a screen that gets a
- * time recorded against nothing.
+ * time recorded against nothing. A heat is the distinct heats across an
+ * event's seeds, so an empty one cannot arise.
  */
-export function runningOrder(events: MeetEvent[], heats: Heat[]): Stop[] {
+export function runningOrder(events: MeetEvent[], seeds: Seed[]): Stop[] {
   const order: Stop[] = [];
   for (const event of events) {
-    const forEvent = heats
-      .filter((heat) => heat.eventId === event.id)
-      .sort((a, b) => a.index - b.index);
-    forEvent.forEach((heat, index) => {
-      order.push({ event, heat, number: index + 1, of: forEvent.length });
+    const forEvent = seeds.filter((seed) => seed.eventId === event.id);
+    const heats = [...new Set(forEvent.map((s) => s.heat))].sort((a, b) => a - b);
+    heats.forEach((heat, index) => {
+      order.push({
+        event,
+        heat,
+        seeds: forEvent
+          .filter((s) => s.heat === heat)
+          .sort((a, b) => a.lane - b.lane),
+        number: index + 1,
+        of: heats.length,
+      });
     });
   }
   return order;
@@ -180,7 +191,7 @@ export interface Snapshot {
   /** What to call athletes with no team label of their own. */
   ownTeam: string;
   events: MeetEvent[];
-  heats: Heat[];
+  seeds: Seed[];
   /** eventId -> athleteIds registered in it. */
   entries: Record<string, string[]>;
   athletes: TimerAthlete[];

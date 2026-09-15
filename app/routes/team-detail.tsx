@@ -16,12 +16,7 @@ import { AthleteSheet } from "~/components/AthleteSheet";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
 import { teamAccess } from "~/lib/access.server";
 import { publicTeamDetail } from "~/lib/public.server";
-import {
-  createSeason,
-  enrol,
-  getTeam,
-  updateTeam,
-} from "~/lib/teams.server";
+import { createSeason, enrol, getTeam, updateTeam } from "~/lib/teams.server";
 import { putAthlete } from "~/lib/athletes.server";
 import { downloadFile, parseRosterCsv, toCsv } from "~/lib/csv";
 import type { RosterEntry } from "~/lib/csv";
@@ -73,7 +68,7 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
     const swims = access.coach
       ? await env.DB.prepare(
           `SELECT s.athlete_id AS id, COUNT(DISTINCT w.meet_id) AS n
-           FROM seats s JOIN watches w ON w.heat_id = s.heat_id AND w.lane = s.lane
+           FROM seats s JOIN watches w ON w.heat = s.heat AND w.lane = s.lane
            GROUP BY s.athlete_id`,
         ).all<{ id: string; n: number }>()
       : null;
@@ -138,7 +133,9 @@ export async function action({ params, request, context }: Route.ActionArgs) {
     const previousId = String(form.get("previousId") ?? "");
     if (previousId) {
       await db
-        .prepare("UPDATE seasons SET end_date = COALESCE(end_date, ?) WHERE id = ?")
+        .prepare(
+          "UPDATE seasons SET end_date = COALESCE(end_date, ?) WHERE id = ?",
+        )
         .bind(dayBefore(startDate), previousId)
         .run();
     }
@@ -152,7 +149,9 @@ export async function action({ params, request, context }: Route.ActionArgs) {
   }
 
   const seasonId = String(form.get("seasonId") ?? "");
-  const entries = JSON.parse(String(form.get("entries") ?? "[]")) as RosterEntry[];
+  const entries = JSON.parse(
+    String(form.get("entries") ?? "[]"),
+  ) as RosterEntry[];
   const mode = String(form.get("mode") ?? "append");
 
   // "Replace" clears this season's roster and nobody's history: the athletes
@@ -423,9 +422,9 @@ export default function TeamDetail({ loaderData }: Route.ComponentProps) {
             <div className="mb-3 space-y-2">
               <Banner tone="warn">
                 {season.name} already has {roster.length} swimmers. Add the{" "}
-                {incoming.length} in this file, or replace the roster?
-                Replacing only clears this season&rsquo;s roster — the swimmers
-                themselves stay, so past meets keep their names and times.
+                {incoming.length} in this file, or replace the roster? Replacing
+                only clears this season&rsquo;s roster — the swimmers themselves
+                stay, so past meets keep their names and times.
               </Banner>
               <div className="grid grid-cols-3 gap-2">
                 <Button
@@ -452,7 +451,10 @@ export default function TeamDetail({ loaderData }: Route.ComponentProps) {
           )}
 
           <div className="grid grid-cols-2 gap-2">
-            <Button variant="primary" onClick={() => fileInput.current?.click()}>
+            <Button
+              variant="primary"
+              onClick={() => fileInput.current?.click()}
+            >
               Choose CSV
             </Button>
             <Button
@@ -512,7 +514,9 @@ export default function TeamDetail({ loaderData }: Route.ComponentProps) {
                 className="flex items-center justify-between gap-3 py-2"
               >
                 <span className="min-w-0">
-                  <span className="block truncate font-semibold">{row.name}</span>
+                  <span className="block truncate font-semibold">
+                    {row.name}
+                  </span>
                   <span className="block text-xs text-slate-500 dark:text-slate-400">
                     {[row.startDate, row.endDate].filter(Boolean).join(" → ") ||
                       "no dates — covers everything"}
@@ -644,8 +648,8 @@ export default function TeamDetail({ loaderData }: Route.ComponentProps) {
                       {meet.name}
                     </span>
                     <span className="block text-xs text-slate-500">
-                      {meet.date} · {meetTypeLabel(meet.type)} ·{" "}
-                      {meet.times} time{meet.times === 1 ? "" : "s"}
+                      {meet.date} · {meetTypeLabel(meet.type)} · {meet.times}{" "}
+                      time{meet.times === 1 ? "" : "s"}
                     </span>
                   </span>
                   <span aria-hidden className="shrink-0 text-slate-400">

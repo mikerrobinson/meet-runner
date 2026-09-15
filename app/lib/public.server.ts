@@ -15,6 +15,7 @@ import { ensureAuthStore } from "./auth.server";
 import { athleteRow, type AthleteRow } from "./athletes.server";
 import { teamRow, type TeamRow } from "./teams.server";
 import { listMeets, meetDetail } from "./meets.server";
+import { recordedCount } from "./timing";
 import {
   athleteSwims,
   meetResults,
@@ -37,24 +38,36 @@ async function teamCounts(
   db: D1Database,
   teamIds: string[],
 ): Promise<Map<string, { athletes: number; meets: number; times: number }>> {
-  const counts = new Map<string, { athletes: number; meets: number; times: number }>();
+  const counts = new Map<
+    string,
+    { athletes: number; meets: number; times: number }
+  >();
   if (teamIds.length === 0) return counts;
   const holes = teamIds.map(() => "?").join(", ");
 
   const [people, meets, claimed] = await Promise.all([
-    db.prepare(
-      `SELECT team_id, COUNT(DISTINCT athlete_id) AS n FROM enrollments
+    db
+      .prepare(
+        `SELECT team_id, COUNT(DISTINCT athlete_id) AS n FROM enrollments
        WHERE team_id IN (${holes}) GROUP BY team_id`,
-    ).bind(...teamIds).all<{ team_id: string; n: number }>(),
-    db.prepare(
-      `SELECT team_id, COUNT(*) AS n FROM meet_teams
+      )
+      .bind(...teamIds)
+      .all<{ team_id: string; n: number }>(),
+    db
+      .prepare(
+        `SELECT team_id, COUNT(*) AS n FROM meet_teams
        WHERE team_id IN (${holes}) GROUP BY team_id`,
-    ).bind(...teamIds).all<{ team_id: string; n: number }>(),
-    db.prepare(
-      `SELECT mt.team_id AS team_id, COUNT(DISTINCT w.heat_id || ':' || w.lane) AS n
+      )
+      .bind(...teamIds)
+      .all<{ team_id: string; n: number }>(),
+    db
+      .prepare(
+        `SELECT mt.team_id AS team_id, COUNT(DISTINCT w.heat || ':' || w.lane) AS n
        FROM meet_teams mt JOIN watches w ON w.meet_id = mt.meet_id
        WHERE mt.team_id IN (${holes}) GROUP BY mt.team_id`,
-    ).bind(...teamIds).all<{ team_id: string; n: number }>(),
+      )
+      .bind(...teamIds)
+      .all<{ team_id: string; n: number }>(),
   ]);
 
   for (const id of teamIds) counts.set(id, { athletes: 0, meets: 0, times: 0 });
@@ -81,7 +94,9 @@ async function claimedTeams(db: D1Database): Promise<Set<string>> {
 
 export async function listPublicTeams(db: D1Database): Promise<PublicTeam[]> {
   await ensureSchema(db);
-  const { results } = await db.prepare("SELECT * FROM teams ORDER BY name").all<TeamRow>();
+  const { results } = await db
+    .prepare("SELECT * FROM teams ORDER BY name")
+    .all<TeamRow>();
   const ids = results.map((r) => r.id);
   const [counts, claimed] = await Promise.all([
     teamCounts(db, ids),
@@ -114,7 +129,9 @@ export interface PublicTeamDetail extends Omit<PublicTeam, "meets"> {
     name: string;
     startDate?: string;
     endDate?: string;
-    roster: Array<PublicAthlete & { year: string; squad?: string; active: boolean }>;
+    roster: Array<
+      PublicAthlete & { year: string; squad?: string; active: boolean }
+    >;
   }>;
   meets: PublicMeetSummary[];
 }
@@ -132,22 +149,33 @@ export async function publicTeamDetail(
   const team = teamRow(row);
 
   const [seasons, roster, counts, claimed, meets] = await Promise.all([
-    db.prepare(
-      "SELECT * FROM seasons WHERE team_id = ? ORDER BY COALESCE(start_date, ''), name",
-    ).bind(teamId).all<{
-      id: string;
-      name: string;
-      start_date: string | null;
-      end_date: string | null;
-    }>(),
-    db.prepare(
-      `SELECT e.season_id, e.year, e.squad, e.status,
+    db
+      .prepare(
+        "SELECT * FROM seasons WHERE team_id = ? ORDER BY COALESCE(start_date, ''), name",
+      )
+      .bind(teamId)
+      .all<{
+        id: string;
+        name: string;
+        start_date: string | null;
+        end_date: string | null;
+      }>(),
+    db
+      .prepare(
+        `SELECT e.season_id, e.year, e.squad, e.status,
               a.id, a.first_name, a.last_name, a.gender, a.birth_date, a.user_id
        FROM enrollments e JOIN athletes a ON a.id = e.athlete_id
        WHERE e.team_id = ? ORDER BY a.last_name, a.first_name`,
-    ).bind(teamId).all<
-      AthleteRow & { season_id: string; year: string; squad: string | null; status: string }
-    >(),
+      )
+      .bind(teamId)
+      .all<
+        AthleteRow & {
+          season_id: string;
+          year: string;
+          squad: string | null;
+          status: string;
+        }
+      >(),
     teamCounts(db, [teamId]),
     claimedTeams(db),
     listMeets(db, { teamId }),
@@ -218,15 +246,15 @@ export async function publicMeetDetail(
     return enrolled ? (teams.get(enrolled.teamId) ?? null) : null;
   };
 
-  const entries = Object.values(detail.entries).reduce((n, ids) => n + ids.length, 0);
-  const lanes = new Set(detail.watches.map((w) => `${w.heatId}:${w.lane}`));
-  for (const call of detail.calls) lanes.add(`${call.heatId}:${call.lane}`);
-
+  const entries = Object.values(detail.entries).reduce(
+    (n, ids) => n + ids.length,
+    0,
+  );
   return {
     ...meetSummary(detail.meet, detail.teams, {
       events: detail.events.length,
       entries,
-      times: lanes.size,
+      times: recordedCount(detail),
     }),
     results: meetResults(detail, teamOf),
   };
@@ -251,7 +279,9 @@ export async function listPublicAthletes(
         .bind(`%${q}%`, limit)
         .all<AthleteRow>()
     : await db
-        .prepare("SELECT * FROM athletes ORDER BY last_name, first_name LIMIT ?")
+        .prepare(
+          "SELECT * FROM athletes ORDER BY last_name, first_name LIMIT ?",
+        )
         .bind(limit)
         .all<AthleteRow>();
 
@@ -312,7 +342,8 @@ export async function publicAthleteDetail(
       code: row.code,
       seasons: [],
     };
-    if (!existing.seasons.includes(row.season)) existing.seasons.push(row.season);
+    if (!existing.seasons.includes(row.season))
+      existing.seasons.push(row.season);
     teams.set(row.id, existing);
   }
 

@@ -4,18 +4,20 @@ import { Button, Card, EmptyState, SectionTitle, TextInput } from "~/components/
 import { LaneAssignSheet } from "~/components/LaneAssignSheet";
 import { formatClock, formatTime, parseTime } from "~/lib/time";
 import { enrollmentIndex } from "~/lib/roster";
+import { generateId } from "~/lib/id";
 import {
-  activeLanes,
-  fromStopwatch,
-  athleteInLane,
-  callForLane,
   eventClosed,
+  fromStopwatch,
   heatClosed,
   heatProgress,
+  heatsOf,
   laneProgress,
   laneTime,
-  resultForLane,
-  watchesForLane,
+  resultFor,
+  runningWatches,
+  seedsForHeat,
+  swimTime,
+  watchesOn,
 } from "~/lib/timing";
 import { applyPending } from "~/lib/pending";
 import { usePending, useSend } from "~/state/outbox";
@@ -27,11 +29,10 @@ import {
   displayName,
   eventName,
   findAthlete,
-  type Heat,
   type MeetDetail,
   type MeetEvent,
+  type Seed,
   type ResultStatus,
-  type TimerActivity,
   type WatchRole,
 } from "~/types/meet";
 
@@ -61,27 +62,26 @@ export function RunControl() {
 
   // Only while a thumb is actually down somewhere in the meet.
   const now = useTicker(
-    detail.activity.some((a) => a.startedAt !== undefined && a.stoppedAt === undefined),
+    detail.watches.some(
+      (w) => w.timeMs === undefined && w.startedAt !== undefined,
+    ),
   );
 
   const [openEvent, setOpenEvent] = useState<string | null>(
     detail.events[0]?.id ?? null,
   );
-  const [assigning, setAssigning] = useState<{ heat: Heat; lane: number } | null>(
+  const [assigning, setAssigning] = useState<{ heat: number; lane: number } | null>(
     null,
   );
 
   const roster = detail.athletes;
 
   const event = detail.events.find((e) => e.id === openEvent) ?? detail.events[0];
+  // A heat is the distinct heats across an event's seeds, so one with nothing
+  // in it cannot arise — and "no heats yet" means "nothing seeded yet".
   const heats = useMemo(
-    () =>
-      event
-        ? detail.heats
-            .filter((h) => h.eventId === event.id)
-            .sort((a, b) => a.index - b.index)
-        : [],
-    [detail.heats, event],
+    () => (event ? heatsOf(detail, event.id) : []),
+    [detail, event],
   );
 
   if (detail.events.length === 0) {
@@ -132,7 +132,7 @@ export function RunControl() {
           ) : (
             heats.map((heat) => (
               <HeatCard
-                key={heat.id}
+                key={heat}
                 detail={detail}
                 event={event}
                 heat={heat}
@@ -150,18 +150,25 @@ export function RunControl() {
       {assigning && (
         <LaneAssignSheet
           detail={detail}
+          eventId={event?.id ?? ""}
           heat={assigning.heat}
           lane={assigning.lane}
           roster={roster}
           enrollments={enrollmentIndex(detail.enrollments)}
           nameOrder={nameOrder}
           onAssign={(athleteId) => {
+            if (!event) return;
             send({
-              kind: "seat",
+              kind: "seed",
               meetId: meet.id,
-              heatId: assigning.heat.id,
+              eventId: event.id,
+              heat: assigning.heat,
               lane: assigning.lane,
               athleteId,
+              // The id the server will use if this lane is new. When it isn't,
+              // the server keeps the row that's there and this is ignored —
+              // the overlay agrees either way.
+              seedId: generateId(),
             });
             setAssigning(null);
           }}
@@ -256,7 +263,7 @@ function HeatCard({
 }: {
   detail: MeetDetail;
   event: MeetEvent;
-  heat: Heat;
+  heat: number;
   nameOrder: "first" | "last";
   send: (write: Write) => void;
   /** Whoever is at the desk — the watch they type is filed under them. */
@@ -265,31 +272,36 @@ function HeatCard({
   now: number;
   onAssign: (lane: number) => void;
 }) {
-  const progress = heatProgress(detail, heat);
-  const closed = heatClosed(detail, heat);
-  const active = activeLanes(detail, heat);
-  const outstanding = active.filter(
-    (lane) => callForLane(detail, heat.id, lane)?.final !== true,
+  const seeds = seedsForHeat(detail, event.id, heat);
+  const progress = heatProgress(detail, event.id, heat);
+  const closed = heatClosed(detail, event.id, heat);
+
+  // Only the swims still outstanding, so "sign off all" never quietly
+  // overwrites a correction somebody already made.
+  const outstanding = seeds.filter(
+    (seed) => resultFor(detail, seed.id) === undefined,
   );
 
   return (
     <Card>
       <SectionTitle
         action={
-          progress.signedOff < progress.active ? (
+          outstanding.length > 0 ? (
             <Button
               size="sm"
               variant="primary"
               onClick={() => {
-                // Only the lanes still outstanding, so "sign off all" never
-                // quietly overwrites a correction somebody already made.
-                for (const lane of outstanding) {
+                for (const seed of outstanding) {
+                  const time = laneTime(watchesOn(detail, seed.id));
+                  // Nothing to accept on a lane with no time at all: signing
+                  // one off would record a zero as though somebody swam it.
+                  if (!time) continue;
                   send({
-                    kind: "call",
+                    kind: "result",
                     meetId: detail.meet.id,
-                    heatId: heat.id,
-                    lane,
-                    final: true,
+                    seedId: seed.id,
+                    status: "OK",
+                    timeMs: time.timeMs,
                   });
                 }
               }}
@@ -299,7 +311,7 @@ function HeatCard({
           ) : undefined
         }
       >
-        {eventName(event)} · heat {heat.index + 1}
+        {eventName(event)} · heat {heat}
         {closed && (
           <span className="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
             closed
@@ -307,9 +319,9 @@ function HeatCard({
         )}
       </SectionTitle>
 
-      {active.length === 0 && (
+      {seeds.length === 0 && (
         <p className="mb-2 text-sm text-slate-500">
-          Nothing recorded in this heat yet.
+          Nobody is in this heat yet.
         </p>
       )}
 
@@ -326,19 +338,25 @@ function HeatCard({
             </tr>
           </thead>
           <tbody>
-            {heat.lanes.map((_, index) => (
+            {/* Every lane of the pool, not only the seeded ones: an empty
+                lane is where somebody gets added, and a lane the desk can't
+                see is a lane it can't fill. */}
+            {Array.from({ length: detail.meet.laneCount }, (_, i) => i + 1).map(
+              (lane) => (
               <LaneRow
-                key={index}
+                key={lane}
                 detail={detail}
+                event={event}
                 heat={heat}
-                lane={index + 1}
+                lane={lane}
                 nameOrder={nameOrder}
                 send={send}
                 me={me}
                 now={now}
                 onAssign={onAssign}
               />
-            ))}
+              ),
+            )}
           </tbody>
         </table>
       </div>
@@ -364,27 +382,6 @@ function useTicker(active: boolean): number {
     return () => clearInterval(id);
   }, [active]);
   return now;
-}
-
-/** Stopwatches that are running: started, not stopped, nothing sent yet. */
-function runningOn(
-  detail: MeetDetail,
-  heatId: string,
-  lane: number,
-): TimerActivity[] {
-  return detail.activity.filter(
-    (a) =>
-      a.heatId === heatId &&
-      a.lane === lane &&
-      a.startedAt !== undefined &&
-      a.stoppedAt === undefined &&
-      // Once a time has arrived the clock is history; the chip becomes the
-      // number. A watch still running *and* already submitted is a timer who
-      // re-armed, and the submitted time is the one that counts.
-      !detail.watches.some(
-        (w) => w.heatId === heatId && w.lane === lane && w.timerId === a.timerId,
-      ),
-  );
 }
 
 const STATUSES: ResultStatus[] = ["OK", "DQ", "NS"];
@@ -435,6 +432,7 @@ function describeTime(time: LaneTime): string {
 
 function LaneRow({
   detail,
+  event,
   heat,
   lane,
   nameOrder,
@@ -444,7 +442,8 @@ function LaneRow({
   onAssign,
 }: {
   detail: MeetDetail;
-  heat: Heat;
+  event: MeetEvent;
+  heat: number;
   lane: number;
   nameOrder: "first" | "last";
   send: (write: Write) => void;
@@ -462,20 +461,23 @@ function LaneRow({
    */
   const [draft, setDraft] = useState<string | null>(null);
 
-  const watches = watchesForLane(detail, heat.id, lane);
-  const call = callForLane(detail, heat.id, lane);
-  const proposed = resultForLane(detail, heat, lane);
+  /** The swim in this lane, if anybody has said who is in it. */
+  const seed = detail.seeds.find(
+    (s) => s.eventId === event.id && s.heat === heat && s.lane === lane,
+  );
+  const watches = seed ? watchesOn(detail, seed.id) : [];
+  const timed = watches.filter((w) => w.timeMs !== undefined);
+  const running = seed ? runningWatches(detail, seed.id) : [];
+  const result = seed ? resultFor(detail, seed.id) : undefined;
+  const accepted = seed ? swimTime(detail, seed.id) : null;
   const derived = laneTime(watches);
+  const progress = seed ? laneProgress(detail, seed.id) : "none";
 
-  const seated = heat.lanes[lane - 1];
-  const athleteId = athleteInLane(detail, heat, lane);
-  const athlete = findAthlete(detail.athletes, athleteId);
-  const signedOff = call?.final === true;
+  const athlete = findAthlete(detail.athletes, seed?.athleteId ?? null);
+  const signedOff = result !== undefined;
 
-  // An empty lane nobody has touched is just an empty lane. A lane with a time
-  // and nobody in it is the opposite — it's the thing most needing a decision.
-  const idle = !seated && watches.length === 0 && !call;
-  const orphanTime = !athleteId && watches.length > 0;
+  // A lane with nobody in it and nothing against it is just an empty lane.
+  const idle = !seed;
 
   /**
    * Type a time in at the desk.
@@ -493,11 +495,11 @@ function LaneRow({
    * leaves the reason visible in what's left.
    */
   const typeTime = (timeMs: number) => {
+    if (!seed) return;
     send({
       kind: "watch",
       meetId: detail.meet.id,
-      heatId: heat.id,
-      lane,
+      seedId: seed.id,
       // The server files it under the signed-in user regardless; this is what
       // the optimistic overlay needs to agree with it about.
       timerId: me ?? "desk",
@@ -512,32 +514,15 @@ function LaneRow({
   };
 
   /**
-   * Record the decision.
+   * What the box shows: what somebody is typing, or the swim's time.
    *
-   * The status and the sign-off are two fields of one call, folded onto
-   * whatever is already there — so marking a DQ keeps the sign-off and
-   * signing off keeps the DQ.
+   * `swimTime` rather than `laneTime` directly, because it is the one every
+   * other screen reads and the box must not disagree with the results page
+   * about what this lane swam. It adds the thing that matters: a signed-off
+   * swim reads the number that was accepted rather than what the watches say
+   * now, so a late watch cannot move it.
    */
-  const progress = laneProgress(detail, heat.id, lane);
-  const running = runningOn(detail, heat.id, lane);
-
-  /**
-   * What the box shows: what somebody is typing, or the lane's time.
-   *
-   * `resultForLane` rather than `laneTime` directly, because it is the one
-   * every other screen reads and the box must not disagree with the results
-   * page about what this lane swam. It adds two things on top: a signed-off
-   * lane reads the number that was accepted rather than what the watches say
-   * now, and a lane carrying a time written onto the call by an older build
-   * still reads that.
-   *
-   * Falling back to `laneTime` covers the lane with a time and nobody in it —
-   * no result to speak of, but a number the desk needs to see while it works
-   * out whose it was.
-   */
-  const accepted = proposed ?? derived;
-  const shownTime =
-    draft ?? (accepted ? formatTime(accepted.timeMs) : "");
+  const shownTime = draft ?? (accepted ? formatTime(accepted.timeMs) : "");
 
   /**
    * Take what was typed, if it changed anything.
@@ -545,13 +530,13 @@ function LaneRow({
    * Unchanged is the common case — the desk tabs through a heat reading times
    * without meaning to alter one — so an unchanged box must write nothing at
    * all, or every glance would file a ruling. Emptying it withdraws the
-   * desk's own reading and lets the lane fall back to the watches, which is
+   * desk's own reading and lets the swim fall back to the watches, which is
    * the way out of a number typed by mistake.
    */
   const commitTime = () => {
     const text = draft;
     setDraft(null);
-    if (text === null) return;
+    if (text === null || !seed) return;
 
     const mine = watches.find((w) => w.role === "admin" && w.timerId === me);
     if (text.trim() === "") {
@@ -559,8 +544,7 @@ function LaneRow({
         send({
           kind: "drop-watch",
           meetId: detail.meet.id,
-          heatId: heat.id,
-          lane,
+          seedId: seed.id,
           timerId: mine.timerId,
         });
       }
@@ -572,18 +556,29 @@ function LaneRow({
     typeTime(ms);
   };
 
-  const save = (patch: {
-    timeMs?: number;
-    status?: ResultStatus;
-    final?: boolean;
-  }) => {
+  /**
+   * Sign the swim off, as whatever it was.
+   *
+   * One act rather than two: the status is chosen *as* the lane is accepted,
+   * and the number written down is the one that was on screen — so a watch
+   * landing in the same second cannot sign off a time nobody looked at.
+   * Taking it back is deleting the row, which is what `unresult` does.
+   */
+  const signOff = (status: ResultStatus) => {
+    if (!seed) return;
     send({
-      kind: "call",
+      kind: "result",
       meetId: detail.meet.id,
-      heatId: heat.id,
-      lane,
-      ...patch,
+      seedId: seed.id,
+      status,
+      // A no-show or a disqualification needn't have a time behind it.
+      timeMs: status === "OK" ? (accepted?.timeMs ?? 0) : (accepted?.timeMs ?? 0),
     });
+  };
+
+  const undo = () => {
+    if (!seed) return;
+    send({ kind: "unresult", meetId: detail.meet.id, seedId: seed.id });
   };
 
   return (
@@ -603,9 +598,9 @@ function LaneRow({
           <span className="block font-medium">
             {athlete ? displayName(athlete, nameOrder) : "— assign —"}
           </span>
-          {orphanTime && (
+          {!seed && running.length > 0 && (
             <span className="block text-xs text-amber-700 dark:text-amber-400">
-              a time with nobody in the lane
+              a stopwatch running on an empty lane
             </span>
           )}
         </button>
@@ -617,7 +612,7 @@ function LaneRow({
           if you can see what it chose between. */}
       <td className="py-2 pr-2">
         <span className="flex flex-wrap items-center gap-1">
-          {watches.length === 0 && running.length === 0 && (
+          {timed.length === 0 && running.length === 0 && (
             <span className="text-xs text-slate-400">—</span>
           )}
 
@@ -647,7 +642,7 @@ function LaneRow({
               number typed onto the call that silently outranked everything.
               Throwing out the reading you don't believe says which one you
               didn't believe; overriding it said nothing at all. */}
-          {watches.map((w) => {
+          {timed.map((w) => {
             // Which watches actually made the number. Everything is kept and
             // everything is shown — a coach's stopwatch is still evidence —
             // but a chip that fed the time has to look different from one
@@ -670,18 +665,18 @@ function LaneRow({
                     : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
               }`}
             >
-              {formatTime(w.timeMs)}
+              {formatTime(w.timeMs!)}
               {!fromStopwatch(w) && "✎"}
               <button
                 type="button"
-                aria-label={`Discard the ${formatTime(w.timeMs)} watch`}
+                aria-label={`Discard the ${formatTime(w.timeMs!)} watch`}
                 title="Discard this watch"
                 onClick={() =>
+                  seed &&
                   send({
                     kind: "drop-watch",
                     meetId: detail.meet.id,
-                    heatId: heat.id,
-                    lane,
+                    seedId: seed.id,
                     timerId: w.timerId,
                   })
                 }
@@ -692,16 +687,7 @@ function LaneRow({
             </span>
             );
           })}
-          {/* A number written onto the call by an older build. Nothing writes
-              these any more; it still outranks the watches, so it says so. */}
-          {call?.timeMs !== undefined && (
-            <span
-              title="Entered by hand on an older build — stands over the watches"
-              className="rounded bg-amber-100 px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums text-amber-900 dark:bg-amber-950 dark:text-amber-200"
-            >
-              {formatTime(call.timeMs)} ✎
-            </span>
-          )}
+
         </span>
       </td>
 
@@ -739,18 +725,27 @@ function LaneRow({
         )}
       </td>
 
+      {/* Status is how the lane is signed off, not a separate mark made
+          beforehand. Tapping one accepts the swim as that — which is the act
+          the desk came to the row to perform, in one tap rather than two. */}
       <td className="py-2 pr-2">
         <div className="flex gap-1">
           {STATUSES.map((status) => {
-            const current = call?.status ?? proposed?.status ?? "OK";
+            const current = result?.status ?? "OK";
+            const chosen = signedOff && current === status;
             return (
               <button
                 key={status}
                 type="button"
                 disabled={idle}
-                onClick={() => save({ status, final: true })}
+                title={
+                  signedOff
+                    ? `Signed off as ${status}`
+                    : `Sign this lane off as ${status}`
+                }
+                onClick={() => signOff(status)}
                 className={`rounded px-1.5 py-0.5 text-xs font-semibold ${
-                  current === status
+                  chosen
                     ? status === "OK"
                       ? "bg-slate-700 text-white dark:bg-slate-200 dark:text-slate-900"
                       : "bg-red-600 text-white"
@@ -773,8 +768,8 @@ function LaneRow({
             <Button
               size="sm"
               variant="ghost"
-              title="Takes the sign-off back. Any time you entered by hand stays."
-              onClick={() => save({ final: false })}
+              title="Takes the sign-off back. Every watch underneath it stays."
+              onClick={undo}
             >
               Undo
             </Button>
@@ -783,8 +778,8 @@ function LaneRow({
           <Button
             size="sm"
             variant="success"
-            disabled={idle || !proposed}
-            onClick={() => save({ final: true })}
+            disabled={idle || !accepted}
+            onClick={() => signOff("OK")}
           >
             Sign off
           </Button>

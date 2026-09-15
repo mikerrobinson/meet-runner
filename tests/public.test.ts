@@ -8,11 +8,11 @@ import {
   teamRef,
 } from "../app/lib/public.ts";
 import { defaultEvents } from "../app/lib/events.ts";
-import { buildHeats } from "../app/lib/heats.ts";
+import { buildSeeds } from "../app/lib/heats.ts";
 import { makeEnrollment } from "../app/lib/roster.ts";
 import type {
   Athlete,
-  LaneCall,
+  Result,
   Meet,
   MeetDetail,
   Team,
@@ -64,9 +64,8 @@ const athletes: Athlete[] = [
 
 const events = defaultEvents("m1", { course: "SCY" });
 const free50 = events.find((e) => e.distance === 50 && e.stroke === "Free")!;
-const heats = buildHeats("m1", free50.id, ["a1", "a9", "a2"], 6);
-const lanes = heats[0].lanes;
-const laneOf = (id: string) => lanes.indexOf(id) + 1;
+const seeds = buildSeeds("m1", free50.id, ["a1", "a9", "a2"], 6);
+const seedOf = (id: string) => seeds.find((s) => s.athleteId === id)!;
 
 const meetRow: Meet = {
   id: "m1",
@@ -84,9 +83,8 @@ const meetRow: Meet = {
   athletesMayEnter: false,
 };
 
-const watch = (lane: number, timeMs: number, at: number): Watch => ({
-  heatId: heats[0].id,
-  lane,
+const watch = (athleteId: string, timeMs: number, at: number): Watch => ({
+  seedId: seedOf(athleteId).id,
   timerId: "t1",
   role: "timer" as const,
   timeMs,
@@ -95,26 +93,27 @@ const watch = (lane: number, timeMs: number, at: number): Watch => ({
 
 const detail: MeetDetail = {
   meet: meetRow,
-  activity: [],
   teams: [home, away],
   events,
   entries: { [free50.id]: ["a1", "a9", "a2"] },
-  heats,
+  seeds,
   // Dana is fastest, Avery second, Marcus is disqualified.
   watches: [
-    watch(laneOf("a9"), 25_400, 1),
-    watch(laneOf("a1"), 26_100, 2),
-    watch(laneOf("a2"), 24_900, 3),
+    watch("a9", 25_400, 1),
+    watch("a1", 26_100, 2),
+    watch("a2", 24_900, 3),
   ],
-  calls: [
+  results: [
     {
-      heatId: heats[0].id,
-      lane: laneOf("a2"),
+      seedId: seedOf("a2").id,
+      meetId: "m1",
+      eventId: free50.id,
+      athleteId: "a2",
       status: "DQ",
-      final: false,
+      timeMs: 24_900,
       decidedAt: 4,
     },
-  ] as LaneCall[],
+  ] as Result[],
   athletes,
   enrollments: [
     makeEnrollment(home.id, "s1", "a1", { year: "10" }),
@@ -160,8 +159,12 @@ const detail: MeetDetail = {
   );
   eq(race.placings[0].team?.code, "HRZN", "each swim is credited to the right team");
   eq(race.placings[1].team?.code, "CHAP", "on both sides of the meet");
-  eq(race.official, false, "nothing is signed off, so the event isn't official");
-  eq(race.placings.every((p) => p.final === false), true, "and no placing claims to be");
+  eq(race.official, false, "one swim signed off doesn't make the event official");
+  eq(
+    race.placings.map((p) => p.final),
+    [false, false, true],
+    "only the signed-off swim claims to be official",
+  );
   eq(
     JSON.stringify(byEvent).includes("2009-03-14"),
     false,
@@ -175,23 +178,21 @@ const detail: MeetDetail = {
 
 /* ---- one athlete's history ---- */
 {
-  const secondHeats = buildHeats("m2", free50.id, ["a1"], 6);
+  const secondSeeds = buildSeeds("m2", free50.id, ["a1"], 6);
   const faster: MeetDetail = {
     ...detail,
     meet: { ...meetRow, id: "m2", name: "vs Central", date: "2027-01-10" },
-    heats: secondHeats,
+    seeds: secondSeeds,
     entries: { [free50.id]: ["a1"] },
-    activity: [],
-    calls: [],
+    results: [],
     watches: [
       {
-        heatId: secondHeats[0].id,
-        lane: secondHeats[0].lanes.indexOf("a1") + 1,
+        seedId: secondSeeds[0].id,
         timerId: "t1",
         role: "timer" as const,
         timeMs: 25_800,
         recordedAt: 5,
-              },
+      },
     ],
   };
 

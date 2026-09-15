@@ -20,19 +20,17 @@ import type {
   Enrollment,
   EntryLimits,
   Gender,
-  Heat,
-  LaneCall,
   LaneCount,
   Meet,
   MeetCourse,
   MeetDetail,
   MeetEvent,
+  Result,
+  Seed,
   MeetType,
   ResultStatus,
-  Seat,
   Stroke,
   Team,
-  TimerActivity,
   Watch,
 } from "~/types/meet";
 import { athleteRow, type AthleteRow } from "./athletes.server";
@@ -110,27 +108,34 @@ function eventFrom(row: EventRow): MeetEvent {
   };
 }
 
-interface HeatRow {
+interface SeedRow {
   id: string;
   meet_id: string;
   event_id: string;
-  idx: number;
-  lane_count: number;
-}
-
-interface SeatRow {
-  heat_id: string;
+  heat: number;
   lane: number;
   athlete_id: string;
+  seed_time_ms: number | null;
+}
+
+function seedFrom(row: SeedRow): Seed {
+  return {
+    id: row.id,
+    meetId: row.meet_id,
+    eventId: row.event_id,
+    heat: row.heat,
+    lane: row.lane,
+    athleteId: row.athlete_id,
+    seedTimeMs: row.seed_time_ms ?? undefined,
+  };
 }
 
 interface WatchRow {
-  heat_id: string;
-  lane: number;
+  seed_id: string;
   timer_id: string;
   user_id: string | null;
   role: string | null;
-  time_ms: number;
+  time_ms: number | null;
   recorded_at: number;
   started_at: number | null;
   stopped_at: number | null;
@@ -138,108 +143,40 @@ interface WatchRow {
 
 function watchFrom(row: WatchRow): Watch {
   return {
-    heatId: row.heat_id,
-    lane: row.lane,
+    seedId: row.seed_id,
     timerId: row.timer_id,
     userId: row.user_id ?? undefined,
-    // Rows from before the column existed: a watch with an account behind it
-    // was a coach's or an administrator's, and coach is the answer that grants
-    // nothing it shouldn't.
     role:
-      row.role === "admin" || row.role === "coach" || row.role === "timer"
-        ? row.role
-        : row.user_id
-          ? "coach"
-          : "timer",
-    timeMs: row.time_ms,
+      row.role === "admin" || row.role === "coach" ? row.role : "timer",
+    timeMs: row.time_ms ?? undefined,
     recordedAt: row.recorded_at,
     startedAt: row.started_at ?? undefined,
     stoppedAt: row.stopped_at ?? undefined,
   };
 }
 
-interface ActivityRow {
-  heat_id: string;
-  lane: number;
-  timer_id: string;
-  started_at: number | null;
-  stopped_at: number | null;
-  updated_at: number;
-}
-
-function activityFrom(row: ActivityRow): TimerActivity {
-  return {
-    heatId: row.heat_id,
-    lane: row.lane,
-    timerId: row.timer_id,
-    startedAt: row.started_at ?? undefined,
-    stoppedAt: row.stopped_at ?? undefined,
-    updatedAt: row.updated_at,
-  };
-}
-
-interface CallRow {
-  heat_id: string;
-  lane: number;
-  athlete_id: string | null;
+interface ResultRow {
+  seed_id: string;
+  meet_id: string;
+  event_id: string;
+  athlete_id: string;
   status: string;
-  time_ms: number | null;
-  final: number;
+  time_ms: number;
   decided_by: string | null;
   decided_at: number;
-  from_time_ms: number | null;
-  from_watch_count: number | null;
-  from_method: string | null;
 }
 
-function callFrom(row: CallRow): LaneCall {
+function resultFrom(row: ResultRow): Result {
   return {
-    heatId: row.heat_id,
-    lane: row.lane,
-    athleteId: row.athlete_id ?? undefined,
-    status: row.status as ResultStatus,
-    timeMs: row.time_ms ?? undefined,
-    final: row.final === 1,
-    decidedBy: row.decided_by ?? undefined,
-    decidedAt: row.decided_at,
-    ...(row.from_time_ms != null
-      ? {
-          fromWatches: {
-            timeMs: row.from_time_ms,
-            watchCount: row.from_watch_count ?? 0,
-            method: (row.from_method ?? "official") as LaneCall["status"] extends never
-              ? never
-              : NonNullable<LaneCall["fromWatches"]>["method"],
-          },
-        }
-      : {}),
-  };
-}
-
-/**
- * Rebuild a heat's lanes from its seats.
- *
- * The lanes are an array because that's what every screen wants to read, and
- * separate rows because that's what several people writing at once need. This
- * is the one place the two meet.
- */
-function heatsFrom(rows: HeatRow[], seats: SeatRow[]): Heat[] {
-  const heats = rows.map((row) => ({
-    id: row.id,
+    seedId: row.seed_id,
     meetId: row.meet_id,
     eventId: row.event_id,
-    index: row.idx,
-    lanes: Array.from({ length: row.lane_count }, () => null as string | null),
-  }));
-  const byId = new Map(heats.map((h) => [h.id, h] as const));
-  for (const seat of seats) {
-    const heat = byId.get(seat.heat_id);
-    // A seat naming a lane the heat doesn't have is not information.
-    if (heat && seat.lane >= 1 && seat.lane <= heat.lanes.length) {
-      heat.lanes[seat.lane - 1] = seat.athlete_id;
-    }
-  }
-  return heats.sort((a, b) => a.eventId.localeCompare(b.eventId) || a.index - b.index);
+    athleteId: row.athlete_id,
+    status: row.status === "DQ" || row.status === "NS" ? row.status : "OK",
+    timeMs: row.time_ms,
+    decidedBy: row.decided_by ?? undefined,
+    decidedAt: row.decided_at,
+  };
 }
 
 /* ------------------------------------------------------------------ reads */
@@ -299,7 +236,7 @@ export async function listMeets(
     db.prepare(`SELECT meet_id, COUNT(*) AS n FROM entries WHERE meet_id IN (${holes}) GROUP BY meet_id`)
       .bind(...ids).all<{ meet_id: string; n: number }>(),
     db.prepare(
-      `SELECT meet_id, COUNT(DISTINCT heat_id || ':' || lane) AS n
+      `SELECT meet_id, COUNT(DISTINCT heat || ':' || lane) AS n
        FROM watches WHERE meet_id IN (${holes}) GROUP BY meet_id`,
     ).bind(...ids).all<{ meet_id: string; n: number }>(),
     db.prepare(
@@ -346,17 +283,15 @@ export async function meetDetail(
   await ensureSchema(db);
 
   const meetRowP = db.prepare("SELECT * FROM meets WHERE id = ?").bind(meetId).first<MeetRow>();
-  const [meetRow, links, events, entries, heats, seats, watches, calls, activity] =
+  const [meetRow, links, events, entries, seeds, watches, results] =
     await Promise.all([
       meetRowP,
       db.prepare("SELECT team_id FROM meet_teams WHERE meet_id = ?").bind(meetId).all<{ team_id: string }>(),
       db.prepare("SELECT * FROM events WHERE meet_id = ? ORDER BY position").bind(meetId).all<EventRow>(),
       db.prepare("SELECT event_id, athlete_id FROM entries WHERE meet_id = ?").bind(meetId).all<{ event_id: string; athlete_id: string }>(),
-      db.prepare("SELECT * FROM heats WHERE meet_id = ?").bind(meetId).all<HeatRow>(),
-      db.prepare("SELECT heat_id, lane, athlete_id FROM seats WHERE meet_id = ?").bind(meetId).all<SeatRow>(),
+      db.prepare("SELECT * FROM seeds WHERE meet_id = ?").bind(meetId).all<SeedRow>(),
       db.prepare("SELECT * FROM watches WHERE meet_id = ?").bind(meetId).all<WatchRow>(),
-      db.prepare("SELECT * FROM calls WHERE meet_id = ?").bind(meetId).all<CallRow>(),
-      db.prepare("SELECT * FROM timer_activity WHERE meet_id = ?").bind(meetId).all<ActivityRow>(),
+      db.prepare("SELECT * FROM results WHERE meet_id = ?").bind(meetId).all<ResultRow>(),
     ]);
   if (!meetRow) return null;
 
@@ -372,8 +307,7 @@ export async function meetDetail(
   // roster — a swimmer nobody has entered yet still has to be pickable.
   const wanted = new Set<string>();
   for (const list of Object.values(entryMap)) for (const id of list) wanted.add(id);
-  for (const seat of seats.results) wanted.add(seat.athlete_id);
-  for (const call of calls.results) if (call.athlete_id) wanted.add(call.athlete_id);
+  for (const seed of seeds.results) wanted.add(seed.athlete_id);
 
   const holes = teamIds.map(() => "?").join(", ");
   const [teams, rosters] = await Promise.all([
@@ -402,10 +336,9 @@ export async function meetDetail(
     teams: teams.results.map(teamRow),
     events: events.results.map(eventFrom),
     entries: entryMap,
-    heats: heatsFrom(heats.results, seats.results),
+    seeds: seeds.results.map(seedFrom),
     watches: watches.results.map(watchFrom),
-    calls: calls.results.map(callFrom),
-    activity: activity.results.map(activityFrom),
+    results: results.results.map(resultFrom),
     athletes: await athletesByIds(db, [...wanted]),
     enrollments: rosters.results.map(enrollmentFrom),
   };
@@ -553,7 +486,7 @@ export async function updateMeet(
 export async function deleteMeet(db: D1Database, meetId: string): Promise<void> {
   await ensureSchema(db);
   await db.batch(
-    ["calls", "watches", "seats", "heats", "entries", "events", "meet_teams"]
+    ["results", "watches", "seeds", "entries", "events", "meet_teams"]
       .map((table) => db.prepare(`DELETE FROM ${table} WHERE meet_id = ?`).bind(meetId))
       .concat(db.prepare("DELETE FROM meets WHERE id = ?").bind(meetId)),
   );
@@ -608,23 +541,21 @@ export async function addEventsToMeet(
   );
 }
 
+/**
+ * Remove an event and everything under it.
+ *
+ * Watches and results hang off seeds rather than the event, so they are found
+ * through them — a subselect rather than two round trips, and one that cannot
+ * miss a row the way a list of ids fetched a moment earlier can.
+ */
 export async function removeEvent(db: D1Database, eventId: string): Promise<void> {
   await ensureSchema(db);
-  const { results } = await db
-    .prepare("SELECT id FROM heats WHERE event_id = ?")
-    .bind(eventId)
-    .all<{ id: string }>();
-  const heatIds = results.map((r) => r.id);
-  const holes = heatIds.map(() => "?").join(", ");
+  // Nothing hanging off these seeds is deleted, and nothing needs to be:
+  // `reseedEvent` refuses once the event has a watch or a result against it,
+  // so by the time this runs there is nothing to orphan. Deleting evidence to
+  // make room for a reseeding is the failure that rule exists to prevent.
   await db.batch([
-    ...(heatIds.length
-      ? [
-          db.prepare(`DELETE FROM calls WHERE heat_id IN (${holes})`).bind(...heatIds),
-          db.prepare(`DELETE FROM watches WHERE heat_id IN (${holes})`).bind(...heatIds),
-          db.prepare(`DELETE FROM seats WHERE heat_id IN (${holes})`).bind(...heatIds),
-        ]
-      : []),
-    db.prepare("DELETE FROM heats WHERE event_id = ?").bind(eventId),
+    db.prepare("DELETE FROM seeds WHERE event_id = ?").bind(eventId),
     db.prepare("DELETE FROM entries WHERE event_id = ?").bind(eventId),
     db.prepare("DELETE FROM events WHERE id = ?").bind(eventId),
   ]);
@@ -677,106 +608,136 @@ export async function removeEntry(
  * `reseedHeats` in `heats.ts`, which reuses the existing ids by position so a
  * reseed doesn't orphan the seats, watches and calls pointing at them.
  */
-export async function replaceHeats(
+/**
+ * Replace an event's seeding wholesale.
+ *
+ * Seeding is one person's single decision about a whole event, so the rows are
+ * rewritten rather than diffed — but `reseedEvent` hands back the ids of any
+ * swim that didn't actually move, so a watch already taken on it survives.
+ */
+export async function replaceSeeds(
   db: D1Database,
   meetId: string,
   eventId: string,
-  heats: Heat[],
+  seeds: Seed[],
 ): Promise<void> {
   await ensureSchema(db);
-  const { results } = await db
-    .prepare("SELECT id FROM heats WHERE event_id = ?")
-    .bind(eventId)
-    .all<{ id: string }>();
-  const going = results.map((r) => r.id).filter((id) => !heats.some((h) => h.id === id));
-  const holes = going.map(() => "?").join(", ");
-
+  const under = "SELECT id FROM seeds WHERE event_id = ?";
   await db.batch([
-    ...(going.length
-      ? [
-          db.prepare(`DELETE FROM calls WHERE heat_id IN (${holes})`).bind(...going),
-          db.prepare(`DELETE FROM watches WHERE heat_id IN (${holes})`).bind(...going),
-          db.prepare(`DELETE FROM seats WHERE heat_id IN (${holes})`).bind(...going),
-          db.prepare(`DELETE FROM heats WHERE id IN (${holes})`).bind(...going),
-        ]
-      : []),
-    // Seats are rewritten wholesale for the heats being (re)built, because
-    // seeding is one person's single decision about the whole event.
-    ...heats.map((heat) =>
-      db.prepare("DELETE FROM seats WHERE heat_id = ?").bind(heat.id),
-    ),
-    ...heats.map((heat) =>
-      db.prepare(
-        `INSERT INTO heats (id, meet_id, event_id, idx, lane_count)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET idx = excluded.idx, lane_count = excluded.lane_count`,
-      ).bind(heat.id, meetId, eventId, heat.index, heat.lanes.length),
-    ),
-    ...heats.flatMap((heat) =>
-      heat.lanes.flatMap((athleteId, i) =>
-        athleteId
-          ? [
-              db.prepare(
-                "INSERT INTO seats (meet_id, heat_id, lane, athlete_id) VALUES (?, ?, ?, ?)",
-              ).bind(meetId, heat.id, i + 1, athleteId),
-            ]
-          : [],
-      ),
+    db.prepare(`DELETE FROM results WHERE seed_id IN (${under})`).bind(eventId),
+    db.prepare(`DELETE FROM watches WHERE seed_id IN (${under})`).bind(eventId),
+    db.prepare("DELETE FROM seeds WHERE event_id = ?").bind(eventId),
+    ...seeds.map((seed) =>
+      db
+        .prepare(
+          `INSERT INTO seeds (id, meet_id, event_id, heat, lane, athlete_id, seed_time_ms)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .bind(
+          seed.id,
+          meetId,
+          eventId,
+          seed.heat,
+          seed.lane,
+          seed.athleteId,
+          seed.seedTimeMs ?? null,
+        ),
     ),
   ]);
 }
-
-/* ------------------------------------------------------------------ seats */
 
 /**
- * Put a swimmer in a lane.
+ * Put somebody in a lane, or move who is already there.
  *
- * Also vacates whatever other lane of the same event they held — nobody swims
- * an event twice — and enters them in the event if they weren't, because
- * swimming a race is being in it.
+ * The single answer to "who is in lane 4": the coach seeding, the
+ * administrator correcting the desk and the timer fixing a name behind the
+ * blocks all write this same row, and the last one wins.
+ *
+ * Nobody swims an event twice, so this vacates whatever other lane they held —
+ * and swimming a race is being in it, so it enters them too. The returned seed
+ * is what the caller needs to file a watch against.
  */
-export async function setSeat(
+export async function setSeed(
   db: D1Database,
   meetId: string,
-  seat: Seat,
-): Promise<void> {
+  place: { eventId: string; heat: number; lane: number; athleteId: string },
+): Promise<Seed> {
   await ensureSchema(db);
-  const heat = await db
-    .prepare("SELECT event_id, lane_count FROM heats WHERE id = ?")
-    .bind(seat.heatId)
-    .first<{ event_id: string; lane_count: number }>();
-  if (!heat) return;
-  if (seat.lane < 1 || seat.lane > heat.lane_count) return;
 
-  await db.batch([
-    db.prepare(
-      `DELETE FROM seats WHERE athlete_id = ? AND heat_id IN
-         (SELECT id FROM heats WHERE event_id = ?)`,
-    ).bind(seat.athleteId, heat.event_id),
-    db.prepare(
-      `INSERT INTO seats (meet_id, heat_id, lane, athlete_id) VALUES (?, ?, ?, ?)
-       ON CONFLICT(heat_id, lane) DO UPDATE SET athlete_id = excluded.athlete_id`,
-    ).bind(meetId, seat.heatId, seat.lane, seat.athleteId),
-    db.prepare(
-      "INSERT OR IGNORE INTO entries (meet_id, event_id, athlete_id) VALUES (?, ?, ?)",
-    ).bind(meetId, heat.event_id, seat.athleteId),
-  ]);
+  const existing = await db
+    .prepare("SELECT * FROM seeds WHERE event_id = ? AND heat = ? AND lane = ?")
+    .bind(place.eventId, place.heat, place.lane)
+    .first<SeedRow>();
+
+  // Somewhere else in this event, if they were.
+  await db
+    .prepare(
+      `DELETE FROM seeds
+       WHERE event_id = ? AND athlete_id = ? AND NOT (heat = ? AND lane = ?)`,
+    )
+    .bind(place.eventId, place.athleteId, place.heat, place.lane)
+    .run();
+
+  const id = existing?.id ?? generateId();
+  await db
+    .prepare(
+      `INSERT INTO seeds (id, meet_id, event_id, heat, lane, athlete_id)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(event_id, heat, lane) DO UPDATE SET athlete_id = excluded.athlete_id`,
+    )
+    .bind(id, meetId, place.eventId, place.heat, place.lane, place.athleteId)
+    .run();
+
+  await db
+    .prepare("INSERT OR IGNORE INTO entries (meet_id, event_id, athlete_id) VALUES (?, ?, ?)")
+    .bind(meetId, place.eventId, place.athleteId)
+    .run();
+
+  return {
+    id,
+    meetId,
+    eventId: place.eventId,
+    heat: place.heat,
+    lane: place.lane,
+    athleteId: place.athleteId,
+    seedTimeMs: existing?.seed_time_ms ?? undefined,
+  };
 }
 
-export async function clearSeat(
+/** Find the swim in a lane, if there is one. */
+export async function seedAt(
   db: D1Database,
-  heatId: string,
+  eventId: string,
+  heat: number,
   lane: number,
-): Promise<void> {
+): Promise<Seed | null> {
   await ensureSchema(db);
-  await db
-    .prepare("DELETE FROM seats WHERE heat_id = ? AND lane = ?")
-    .bind(heatId, lane)
-    .run();
+  const row = await db
+    .prepare("SELECT * FROM seeds WHERE event_id = ? AND heat = ? AND lane = ?")
+    .bind(eventId, heat, lane)
+    .first<SeedRow>();
+  return row ? seedFrom(row) : null;
+}
+
+/** Take somebody out of a lane. Their watches go with the swim. */
+export async function removeSeed(db: D1Database, seedId: string): Promise<void> {
+  await ensureSchema(db);
+  await db.batch([
+    db.prepare("DELETE FROM watches WHERE seed_id = ?").bind(seedId),
+    db.prepare("DELETE FROM results WHERE seed_id = ?").bind(seedId),
+    db.prepare("DELETE FROM seeds WHERE id = ?").bind(seedId),
+  ]);
 }
 
 /* ---------------------------------------------------------------- watches */
 
+/**
+ * Record a measurement, or update the one this submitter already made.
+ *
+ * `timeMs` absent is a stopwatch that has started and not been submitted, and
+ * it is written the same way — one row per submitter per swim, upserted, so a
+ * start followed by a time is one row rather than two facts to reconcile.
+ */
 export async function putWatch(
   db: D1Database,
   meetId: string,
@@ -785,25 +746,26 @@ export async function putWatch(
   await ensureSchema(db);
   await db
     .prepare(
-      `INSERT INTO watches (meet_id, heat_id, lane, timer_id, user_id, role,
-                            time_ms, recorded_at, started_at, stopped_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(heat_id, lane, timer_id) DO UPDATE SET
+      `INSERT INTO watches (seed_id, meet_id, timer_id, user_id, role, time_ms,
+                            recorded_at, started_at, stopped_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(seed_id, timer_id) DO UPDATE SET
          user_id = excluded.user_id,
          role = excluded.role,
-         time_ms = excluded.time_ms,
+         -- A start arriving after a time must not blank the time, which is
+         -- what a re-sent start cookie would otherwise do.
+         time_ms = COALESCE(excluded.time_ms, watches.time_ms),
          recorded_at = excluded.recorded_at,
-         started_at = excluded.started_at,
-         stopped_at = excluded.stopped_at`,
+         started_at = COALESCE(excluded.started_at, watches.started_at),
+         stopped_at = COALESCE(excluded.stopped_at, watches.stopped_at)`,
     )
     .bind(
+      watch.seedId,
       meetId,
-      watch.heatId,
-      watch.lane,
       watch.timerId,
       watch.userId ?? null,
       watch.role,
-      watch.timeMs,
+      watch.timeMs ?? null,
       watch.recordedAt,
       watch.startedAt ?? null,
       watch.stoppedAt ?? null,
@@ -813,84 +775,56 @@ export async function putWatch(
 
 export async function deleteWatch(
   db: D1Database,
-  heatId: string,
-  lane: number,
+  seedId: string,
   timerId: string,
 ): Promise<void> {
   await ensureSchema(db);
   await db
-    .prepare("DELETE FROM watches WHERE heat_id = ? AND lane = ? AND timer_id = ?")
-    .bind(heatId, lane, timerId)
+    .prepare("DELETE FROM watches WHERE seed_id = ? AND timer_id = ?")
+    .bind(seedId, timerId)
     .run();
 }
+
+/* ---------------------------------------------------------------- results */
 
 /**
- * Drop one device's watches for a heat — a false start, or starting again.
+ * Sign a swim off.
  *
- * Scoped to the timer on purpose. A device may discard its own evidence; it
- * may not discard anybody else's, which is a decision and belongs at the desk.
+ * Writing the row *is* the sign-off, and the number is written straight in —
+ * so a watch arriving late, or one discarded afterwards, cannot move a result
+ * that has already been accepted.
  */
-export async function clearOwnWatches(
+export async function putResult(
   db: D1Database,
-  heatId: string,
-  timerId: string,
-): Promise<void> {
-  await ensureSchema(db);
-  await db
-    .prepare("DELETE FROM watches WHERE heat_id = ? AND timer_id = ?")
-    .bind(heatId, timerId)
-    .run();
-}
-
-/* ------------------------------------------------------------------ calls */
-
-export async function putCall(
-  db: D1Database,
-  meetId: string,
-  call: LaneCall,
+  result: Result,
 ): Promise<void> {
   await ensureSchema(db);
   await db
     .prepare(
-      `INSERT INTO calls (meet_id, heat_id, lane, athlete_id, status, time_ms, final,
-                          decided_by, decided_at, from_time_ms, from_watch_count, from_method)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(heat_id, lane) DO UPDATE SET
-         athlete_id = excluded.athlete_id,
+      `INSERT INTO results (seed_id, meet_id, event_id, athlete_id, status,
+                            time_ms, decided_by, decided_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(seed_id) DO UPDATE SET
          status = excluded.status,
          time_ms = excluded.time_ms,
-         final = excluded.final,
          decided_by = excluded.decided_by,
-         decided_at = excluded.decided_at,
-         from_time_ms = excluded.from_time_ms,
-         from_watch_count = excluded.from_watch_count,
-         from_method = excluded.from_method`,
+         decided_at = excluded.decided_at`,
     )
     .bind(
-      meetId,
-      call.heatId,
-      call.lane,
-      call.athleteId ?? null,
-      call.status,
-      call.timeMs ?? null,
-      call.final ? 1 : 0,
-      call.decidedBy ?? null,
-      call.decidedAt,
-      call.fromWatches?.timeMs ?? null,
-      call.fromWatches?.watchCount ?? null,
-      call.fromWatches?.method ?? null,
+      result.seedId,
+      result.meetId,
+      result.eventId,
+      result.athleteId,
+      result.status,
+      result.timeMs,
+      result.decidedBy ?? null,
+      result.decidedAt,
     )
     .run();
 }
 
-export async function deleteCall(
-  db: D1Database,
-  heatId: string,
-  lane: number,
-): Promise<void> {
+/** Take a sign-off back. The watches underneath it are untouched. */
+export async function deleteResult(db: D1Database, seedId: string): Promise<void> {
   await ensureSchema(db);
-  await db
-    .prepare("DELETE FROM calls WHERE heat_id = ? AND lane = ?")
-    .bind(heatId, lane)
-    .run();
+  await db.prepare("DELETE FROM results WHERE seed_id = ?").bind(seedId).run();
 }

@@ -14,8 +14,8 @@
  * indexed single-table reads.
  *
  * **Rows several people write at once are keyed so they can't collide.** A
- * seat is `(heat_id, lane)`, a watch is `(heat_id, lane, timer_id)`, a call is
- * `(heat_id, lane)`. Six timers seating their own lane write six different
+ * seat is `(heat, lane)`, a watch is `(heat, lane, timer_id)`, a call is
+ * `(heat, lane)`. Six timers seating their own lane write six different
  * rows; three timers on one lane write three different rows. Concurrency is a
  * property of the keys rather than something the app has to reconcile
  * afterwards.
@@ -129,94 +129,72 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS entries_by_meet ON entries (meet_id)`,
   `CREATE INDEX IF NOT EXISTS entries_by_athlete ON entries (athlete_id)`,
 
-  `CREATE TABLE IF NOT EXISTS heats (
+  /**
+   * One planned swim. The unit everything about running a meet hangs off.
+   *
+   * There is no heats table: a heat is which heat, a small integer, so the
+   * heats of an event are the distinct heats across its seeds and a heat
+   * cannot exist with nothing in it. Keyed by event, heat and lane, so the
+   * coach seeding, the administrator correcting the desk and the timer fixing
+   * a name behind the blocks all write the same row and the last wins.
+   *
+   * The `id` is what lets a time survive somebody being moved: watches and
+   * results point at it, not at a lane number.
+   */
+  `CREATE TABLE IF NOT EXISTS seeds (
      id TEXT PRIMARY KEY,
      meet_id TEXT NOT NULL,
      event_id TEXT NOT NULL,
-     idx INTEGER NOT NULL,
-     lane_count INTEGER NOT NULL
-   )`,
-  `CREATE INDEX IF NOT EXISTS heats_by_meet ON heats (meet_id)`,
-  `CREATE INDEX IF NOT EXISTS heats_by_event ON heats (event_id, idx)`,
-
-  /**
-   * Who is in a lane — the single answer to that question, whoever writes it.
-   * Keyed by lane, so six timers seating their own lane write six rows.
-   */
-  `CREATE TABLE IF NOT EXISTS seats (
-     meet_id TEXT NOT NULL,
-     heat_id TEXT NOT NULL,
+     heat INTEGER NOT NULL,
      lane INTEGER NOT NULL,
      athlete_id TEXT NOT NULL,
-     PRIMARY KEY (heat_id, lane)
+     seed_time_ms INTEGER
    )`,
-  `CREATE INDEX IF NOT EXISTS seats_by_meet ON seats (meet_id)`,
+  `CREATE INDEX IF NOT EXISTS seeds_by_meet ON seeds (meet_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS seeds_by_lane ON seeds (event_id, heat, lane)`,
 
   /**
-   * Evidence. One row per timer per lane, so an extra watch never overwrites
-   * anybody and a re-send is an update rather than a duplicate.
+   * Evidence. One row per submitter per swim, so an extra watch never
+   * overwrites anybody and a re-send is an update rather than a duplicate.
+   *
+   * `time_ms` is null while a stopwatch is running and nothing has been
+   * submitted — which is how the desk tells a lane nobody is covering from one
+   * whose timers are still holding their clocks.
    */
   `CREATE TABLE IF NOT EXISTS watches (
+     seed_id TEXT NOT NULL,
      meet_id TEXT NOT NULL,
-     heat_id TEXT NOT NULL,
-     lane INTEGER NOT NULL,
      timer_id TEXT NOT NULL,
      user_id TEXT,
-     role TEXT,
-     time_ms INTEGER NOT NULL,
+     role TEXT NOT NULL DEFAULT 'timer',
+     time_ms INTEGER,
      recorded_at INTEGER NOT NULL,
      started_at INTEGER,
      stopped_at INTEGER,
-     PRIMARY KEY (heat_id, lane, timer_id)
+     PRIMARY KEY (seed_id, timer_id)
    )`,
   `CREATE INDEX IF NOT EXISTS watches_by_meet ON watches (meet_id)`,
 
   /**
-   * A timer's stopwatch, while it is running.
+   * The official outcome of one swim, written only by an administrator.
    *
-   * Not a watch: a watch is evidence of a time somebody swam, and this is only
-   * the fact that a thumb has been pressed. It exists so the desk can see
-   * which lanes are armed before a heat goes off, and so a submitted time can
-   * say whether it came off the built-in stopwatch or was typed in from a
-   * handheld one — three lanes reading "started" and a fourth not is a
-   * question worth asking *before* the race rather than after.
-   *
-   * Keyed like a watch, by heat, lane and timer, so the same device pressing
-   * start twice is one row and two devices on a lane are two.
+   * Its existence *is* the sign-off — there is no flag, because a row that
+   * isn't signed off is a row that isn't there, and taking it back is deleting
+   * it. The accepted number is written straight in, so a late watch or a
+   * discarded one cannot move a result after the fact.
    */
-  `CREATE TABLE IF NOT EXISTS timer_activity (
+  `CREATE TABLE IF NOT EXISTS results (
+     seed_id TEXT PRIMARY KEY,
      meet_id TEXT NOT NULL,
-     heat_id TEXT NOT NULL,
-     lane INTEGER NOT NULL,
-     timer_id TEXT NOT NULL,
-     started_at INTEGER,
-     stopped_at INTEGER,
-     updated_at INTEGER NOT NULL,
-     PRIMARY KEY (heat_id, lane, timer_id)
-   )`,
-  `CREATE INDEX IF NOT EXISTS activity_by_meet ON timer_activity (meet_id)`,
-
-  /**
-   * The decision. One row per lane, replacing what used to be a ruling and an
-   * acceptance written on the same tap. `final` is the sign-off; `time_ms` is
-   * the official's own reading and survives taking the sign-off back.
-   */
-  `CREATE TABLE IF NOT EXISTS calls (
-     meet_id TEXT NOT NULL,
-     heat_id TEXT NOT NULL,
-     lane INTEGER NOT NULL,
-     athlete_id TEXT,
+     event_id TEXT NOT NULL,
+     athlete_id TEXT NOT NULL,
      status TEXT NOT NULL DEFAULT 'OK',
-     time_ms INTEGER,
-     final INTEGER NOT NULL DEFAULT 0,
+     time_ms INTEGER NOT NULL,
      decided_by TEXT,
-     decided_at INTEGER NOT NULL,
-     from_time_ms INTEGER,
-     from_watch_count INTEGER,
-     from_method TEXT,
-     PRIMARY KEY (heat_id, lane)
+     decided_at INTEGER NOT NULL
    )`,
-  `CREATE INDEX IF NOT EXISTS calls_by_meet ON calls (meet_id)`,
+  `CREATE INDEX IF NOT EXISTS results_by_meet ON results (meet_id)`,
+  `CREATE INDEX IF NOT EXISTS results_by_event ON results (event_id)`,
 ];
 
 let ready = false;

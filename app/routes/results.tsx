@@ -5,10 +5,10 @@ import { Button, Card, EmptyState, SectionTitle } from "~/components/ui";
 import { downloadFile, resultsToCsv } from "~/lib/csv";
 import { formatTime } from "~/lib/time";
 import { enrollmentIndex } from "~/lib/roster";
-import { allResults, recordedCount } from "~/lib/timing";
+import { recordedCount, swimTime, type SwimTime } from "~/lib/timing";
 import { useMeet } from "./meet-layout";
 import { useLiveData } from "~/hooks/use-live-data";
-import { eventName, athleteName, type Result } from "~/types/meet";
+import { eventName, athleteName, type Seed } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Results · Meet Runner" }];
@@ -44,18 +44,30 @@ export default function Results() {
     [detail.teams],
   );
 
+  /**
+   * Every swim that has a time, grouped by event and ranked across all heats.
+   *
+   * Ranking ignores heat: a slower heat can hold the fastest swim, and the
+   * printed sheet has always been ordered by time rather than by when it was
+   * swum. A seed with nothing against it is somebody whose time never arrived,
+   * which is a hole rather than a blank line to publish.
+   */
   const byEvent = useMemo(() => {
-    const map = new Map<string, Result[]>();
-    for (const result of allResults(detail)) {
-      const list = map.get(result.eventId) ?? [];
-      list.push(result);
-      map.set(result.eventId, list);
+    const map = new Map<string, Array<{ seed: Seed; time: SwimTime }>>();
+    for (const seed of detail.seeds) {
+      const time = swimTime(detail, seed.id);
+      if (!time) continue;
+      const list = map.get(seed.eventId) ?? [];
+      list.push({ seed, time });
+      map.set(seed.eventId, list);
     }
-    // Rank across the whole event, not within a heat — DQs and no-shows last.
     for (const list of map.values()) {
       list.sort((a, b) => {
-        if (a.status !== b.status) return a.status === "OK" ? -1 : 1;
-        return a.timeMs - b.timeMs;
+        // DQs and no-shows keep their line and lose their place.
+        if (a.time.status !== b.time.status) {
+          return a.time.status === "OK" ? -1 : 1;
+        }
+        return a.time.timeMs - b.time.timeMs;
       });
     }
     return map;
@@ -136,19 +148,19 @@ export default function Results() {
 
             {open && (
               <ol className="mt-3 divide-y divide-slate-200 dark:divide-slate-800">
-                {results.map((result, place) => {
-                  const athlete = byId.get(result.athleteId);
-                  const enrollment = enrollments.get(result.athleteId);
+                {results.map(({ seed, time }, place) => {
+                  const athlete = byId.get(seed.athleteId);
+                  const enrollment = enrollments.get(seed.athleteId);
                   const team = enrollment
                     ? teamsById.get(enrollment.teamId)
                     : undefined;
                   return (
                     <li
-                      key={`${result.heatId}:${result.lane}`}
+                      key={seed.id}
                       className="flex items-center gap-3 py-2"
                     >
                       <span className="w-6 text-center text-sm font-bold text-slate-400">
-                        {result.status === "OK" ? place + 1 : "—"}
+                        {time.status === "OK" ? place + 1 : "—"}
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-semibold">
@@ -161,14 +173,14 @@ export default function Results() {
                             in a way "Cactus Shadows" does not. */}
                         <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
                           {team && `${team.code || team.name} · `}
-                          Lane {result.lane}
+                          Lane {seed.lane}
                           {enrollment?.squad && ` · ${enrollment.squad}`}
                         </span>
                       </span>
                       <span className="text-lg font-bold tabular-nums">
-                        {result.status === "OK"
-                          ? formatTime(result.timeMs)
-                          : result.status}
+                        {time.status === "OK"
+                          ? formatTime(time.timeMs)
+                          : time.status}
                       </span>
                     </li>
                   );

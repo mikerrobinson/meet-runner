@@ -1,6 +1,6 @@
 import { generateId } from "./id";
-import { heatTouched, type TimingRows } from "./timing";
-import type { Heat, LaneCount } from "~/types/meet";
+import { eventTouched, seedsForEvent, type TimingRows } from "./timing";
+import type { LaneCount, Seed } from "~/types/meet";
 
 /**
  * Lane assignment order, fastest lane first. Standard practice puts the top
@@ -27,16 +27,20 @@ export function laneOrder(laneCount: LaneCount): number[] {
 /**
  * Split swimmers into heats and assign lanes.
  *
- * Heats are numbered in swum order, and any short heat comes first — that's
- * how meets actually run it, so the last heat is full. Within a heat, swimmers
- * fill lanes from the middle outward.
+ * Heats are numbered in swum order, 1-based, and any short heat comes first —
+ * that's how meets actually run it, so the last heat is full. Within a heat,
+ * swimmers fill lanes from the middle outward.
+ *
+ * One seed per swimmer, and none for the lanes nobody is in: a lane with
+ * nobody in it isn't a planned swim, and a heat is the distinct heats across
+ * the seeds rather than a row of its own.
  */
-export function buildHeats(
+export function buildSeeds(
   meetId: string,
   eventId: string,
   athleteIds: string[],
   laneCount: LaneCount,
-): Heat[] {
+): Seed[] {
   if (athleteIds.length === 0) return [];
 
   const order = laneOrder(laneCount);
@@ -44,7 +48,7 @@ export function buildHeats(
   const remainder = athleteIds.length % laneCount;
   const firstHeatSize = remainder === 0 ? laneCount : remainder;
 
-  const heats: Heat[] = [];
+  const seeds: Seed[] = [];
   let cursor = 0;
 
   for (let index = 0; index < heatCount; index++) {
@@ -52,15 +56,19 @@ export function buildHeats(
     const group = athleteIds.slice(cursor, cursor + size);
     cursor += size;
 
-    const lanes: (string | null)[] = new Array(laneCount).fill(null);
     group.forEach((athleteId, i) => {
-      lanes[order[i] - 1] = athleteId;
+      seeds.push({
+        id: generateId(),
+        meetId,
+        eventId,
+        heat: index + 1,
+        lane: order[i],
+        athleteId,
+      });
     });
-
-    heats.push({ id: generateId(), meetId, eventId, index, lanes });
   }
 
-  return heats;
+  return seeds;
 }
 
 /** Fisher-Yates, used when the coach asks to reshuffle an event's lanes. */
@@ -73,45 +81,41 @@ export function shuffle<T>(items: T[]): T[] {
   return copy;
 }
 
-export function heatsForEvent(heats: Heat[], eventId: string): Heat[] {
-  return heats
-    .filter((h) => h.eventId === eventId)
-    .sort((a, b) => a.index - b.index);
-}
-
 /**
  * Seed an event's lanes again, or refuse to.
- *
- * Two rules, both learned from watching it go wrong.
  *
  * It refuses once anything has been recorded against the event. Reseeding used
  * to clear the event's watches and rulings to make room, and on a deck with
  * three timers on it that is somebody's whole afternoon — deleted from one
  * device and synced to the rest.
  *
- * And it reuses the existing heats' ids in place rather than minting fresh
- * ones. A new id orphans every seat, watch and result pointing at the old
- * heat: they stay in the meet, count towards things, and render nowhere. It's
- * the same failure the roster's "Replace" has, and once is enough.
+ * Where a swimmer keeps their lane, the seed keeps its id. A fresh id orphans
+ * every watch and result pointing at the old one: they stay in the meet, count
+ * towards things, and render nowhere. Only somebody who actually moved gets a
+ * new row, and nothing can have been recorded against them anyway.
  *
  * Returns null when it refuses, so the caller can say so rather than appearing
  * to work.
  */
-export function reseedHeats(
-  rows: TimingRows & { heats: Heat[] },
+export function reseedEvent(
+  rows: TimingRows,
   meetId: string,
   eventId: string,
   entrants: string[],
   laneCount: LaneCount,
-): Heat[] | null {
-  const existing = rows.heats
-    .filter((h) => h.eventId === eventId)
-    .sort((a, b) => a.index - b.index);
-  if (existing.some((heat) => heatTouched(rows, heat))) return null;
+): Seed[] | null {
+  if (eventTouched(rows, eventId)) return null;
 
-  const byIndex = new Map(existing.map((h) => [h.index, h.id] as const));
-  return buildHeats(meetId, eventId, entrants, laneCount).map((heat) => ({
-    ...heat,
-    id: byIndex.get(heat.index) ?? heat.id,
-  }));
+  // Keyed by where the swim *is*, so a swimmer who lands back in the same lane
+  // of the same heat keeps the row they had.
+  const existing = new Map(
+    seedsForEvent(rows, eventId).map((s) => [`${s.heat}/${s.lane}`, s] as const),
+  );
+
+  return buildSeeds(meetId, eventId, entrants, laneCount).map((seed) => {
+    const before = existing.get(`${seed.heat}/${seed.lane}`);
+    return before && before.athleteId === seed.athleteId
+      ? { ...seed, id: before.id, seedTimeMs: before.seedTimeMs }
+      : seed;
+  });
 }

@@ -2,21 +2,21 @@ import { done, eq } from "./harness.ts";
 import { earliestAllowed, newVisitingAthlete, runningOrder } from "../app/lib/timer.ts";
 import { grantExpiry } from "../app/lib/grants.server.ts";
 import { defaultEvents } from "../app/lib/events.ts";
-import { buildHeats } from "../app/lib/heats.ts";
-import type { Heat } from "../app/types/meet.ts";
+import { buildSeeds } from "../app/lib/heats.ts";
+import type { Seed } from "../app/types/meet.ts";
 
 /* ------------------------------------------------------- the running order */
 
 const events = defaultEvents("m1", { course: "SCY" }).slice(0, 3);
 // Twelve entrants over six lanes is two heats; four is one. The middle event
 // is left unseeded, which is the case that matters.
-const heats: Heat[] = [
-  ...buildHeats("m1", events[0].id, ["a1", "a2", "a3", "a4", "a5", "a6", "a7"], 6),
-  ...buildHeats("m1", events[2].id, ["a1", "a2"], 6),
+const seeds: Seed[] = [
+  ...buildSeeds("m1", events[0].id, ["a1", "a2", "a3", "a4", "a5", "a6", "a7"], 6),
+  ...buildSeeds("m1", events[2].id, ["a1", "a2"], 6),
 ];
 
 {
-  const order = runningOrder(events, heats);
+  const order = runningOrder(events, seeds);
   eq(order.length, 3, "two heats for the first event, one for the third");
   eq(
     order.map((stop) => stop.event.id),
@@ -33,21 +33,21 @@ const heats: Heat[] = [
   eq(
     order.some((stop) => stop.event.id === events[1].id),
     false,
-    "an event with no heats is skipped entirely",
+    "an event with nothing seeded is skipped entirely",
   );
 }
 
 eq(runningOrder([], []), [], "nothing to swim, nothing to time");
-eq(runningOrder(events, []), [], "events without heats produce no stops");
+eq(runningOrder(events, []), [], "events with nothing seeded produce no stops");
 
 // Heats arriving out of order still come back in the order they'll be swum:
 // the snapshot is assembled from rows, and rows have no inherent order.
 {
-  const shuffled = [...heats].reverse();
+  const shuffled = [...seeds].reverse();
   eq(
-    runningOrder(events, shuffled).map((stop) => stop.heat.index),
-    [0, 1, 0],
-    "heat order is by index, however the rows arrived",
+    runningOrder(events, shuffled).map((stop) => stop.heat),
+    [1, 2, 1],
+    "heat order is by number, however the rows arrived",
   );
 }
 

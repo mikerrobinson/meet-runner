@@ -1,9 +1,9 @@
 import { formatTime } from "~/lib/time";
+import type { SwimTime } from "~/lib/timing";
 import {
   displayName,
   type LaneLayout,
   type NameOrder,
-  type Result,
   type Athlete,
 } from "~/types/meet";
 
@@ -34,7 +34,7 @@ export function laneTileHeight(laneCount: number, layout: LaneLayout): string {
   return table[laneCount] ?? (layout === "grid" ? "h-28" : "h-16");
 }
 
-function tone(result: Result | undefined, running: boolean): string {
+function tone(result: SwimTime | undefined, running: boolean): string {
   if (result) {
     return result.status === "OK"
       ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-100"
@@ -48,7 +48,7 @@ function tone(result: Result | undefined, running: boolean): string {
 export function LaneTile({
   lane,
   athlete,
-  result,
+  time: result,
   stoppedHere,
   running,
   clockRunning,
@@ -62,7 +62,7 @@ export function LaneTile({
   lane: number;
   athlete?: Athlete;
   /** The lane's official time, from whoever's watches are on it. */
-  result?: Result;
+  time?: SwimTime;
   /**
    * Whether *this* device has taken this lane.
    *

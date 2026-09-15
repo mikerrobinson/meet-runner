@@ -7,10 +7,9 @@ import {
   type SyncEnv,
 } from "~/lib/api.server";
 import { grantFor, grantToken } from "~/lib/grants.server";
-import { meetDetail, putWatch, setSeat } from "~/lib/meets.server";
+import { meetDetail, putWatch, seedAt, setSeed } from "~/lib/meets.server";
 import { putAthlete } from "~/lib/athletes.server";
 import { enrolVisitor } from "~/lib/teams.server";
-import { markActivity, readActivity } from "~/lib/timer.server";
 import { generateId } from "~/lib/id";
 import {
   TIMER_ACTIONS,
@@ -91,14 +90,16 @@ export async function action({ params, request, context }: Route.ActionArgs) {
     const event = detail.events.find((e) => e.position === eventNo - 1);
     if (!event) throw new SyncError(`There is no event ${eventNo}`, 404);
 
-    const heat = detail.heats.find(
-      (h) => h.eventId === event.id && h.index === heatNo - 1,
-    );
-    if (!heat) throw new SyncError(`There is no heat ${heatNo} in that event`, 404);
-
-    if (!Number.isInteger(lane) || lane < 1 || lane > heat.lanes.length) {
+    if (!Number.isInteger(heatNo) || heatNo < 1) {
+      throw new SyncError(`There is no heat ${heatNo}`, 400);
+    }
+    if (!Number.isInteger(lane) || lane < 1 || lane > detail.meet.laneCount) {
       throw new SyncError(`There is no lane ${lane}`, 400);
     }
+
+    // The swim this lane is, if anybody has said who is in it. A `seat`
+    // message below may be about to create one.
+    let seed = await seedAt(db, event.id, heatNo, lane);
 
     let applied = 0;
 
@@ -133,7 +134,12 @@ export async function action({ params, request, context }: Route.ActionArgs) {
         }
 
         if (athleteId) {
-          await setSeat(db, grant.meetId, { heatId: heat.id, lane, athleteId });
+          seed = await setSeed(db, grant.meetId, {
+            eventId: event.id,
+            heat: heatNo,
+            lane,
+            athleteId,
+          });
           applied += 1;
         }
       }
@@ -142,77 +148,58 @@ export async function action({ params, request, context }: Route.ActionArgs) {
     /* ---- the stopwatch, while it is running. Telemetry, not evidence. */
     const start = messages.get("start") ? parseStart(messages.get("start")!) : null;
     const stop = messages.get("stop") ? parseStop(messages.get("stop")!) : null;
-    if (start || stop) {
+    const submit = messages.get("submit") ? parseSubmit(messages.get("submit")!) : null;
+
+    if (start || stop || submit) {
+      /**
+       * Nothing can be filed against a lane nobody is in.
+       *
+       * A watch belongs to a swim, and a swim is somebody in a lane — so a
+       * time arriving before a name has nowhere to go. The timing screen asks
+       * who is in the lane before it offers a stopwatch, so in practice the
+       * `seat` message is in this same request or an earlier one; refusing is
+       * what happens when it genuinely isn't.
+       *
+       * A 4xx, so the phone drops it and says so rather than retrying a
+       * message the server will never accept.
+       */
+      if (!seed) {
+        throw new SyncError(
+          "Say who is in this lane before sending a time for it.",
+          409,
+        );
+      }
+
       /**
        * Put the phone's timestamps on the server's clock.
        *
        * A phone's idea of now can be minutes out, and nothing else in this app
        * cares — a time is a difference between two readings of one clock, and
        * that difference is right however wrong the clock is. This is the one
-       * place that needs the absolute value: the desk wants to show a running
+       * place that needs the absolute value: the desk shows a running
        * stopwatch, which means comparing the phone's start against the desk's
        * now, and those are two different clocks.
        *
        * The offset comes from the message itself. It says when the thumb
-       * landed (`at`) and it arrives at a known moment, so the difference is
-       * the phone's error plus however long the message took to get here — and
-       * `start` is flushed the instant it is made, so that second part is a
+       * landed and it arrives at a known moment, and `start` is flushed the
+       * instant it is made, so the difference is the phone's error plus a
        * network hop.
-       *
-       * A message that sat in a pocket through a dead spot has that whole
-       * delay folded into the offset, and comes out looking like it started
-       * just now. That is wrong, and it is nearly always invisible: the
-       * `submit` for that race flushes in the same breath, and a lane whose
-       * time has arrived never draws a running clock.
        */
-      const offsetFrom = (message: { at: number }) =>
-        message.at > 0 ? receivedAt - message.at : 0;
+      const onServerClock = (message: { at: number }, value: number) =>
+        message.at > 0 ? value + (receivedAt - message.at) : value;
 
-      await markActivity(db, grant.meetId, {
-        heatId: heat.id,
-        lane,
+      await putWatch(db, grant.meetId, {
+        seedId: seed.id,
         timerId,
-        startedAt: start ? start.startedAt + offsetFrom(start) : undefined,
-        stoppedAt: stop ? stop.stoppedAt + offsetFrom(stop) : undefined,
+        // A grant is a lane and a stopwatch, nothing else — there is no
+        // account behind it and no other role it could be.
+        role: "timer",
+        timeMs: submit?.elapsedMs,
+        recordedAt: submit?.at || receivedAt,
+        startedAt: start ? onServerClock(start, start.startedAt) : undefined,
+        stoppedAt: stop ? onServerClock(stop, stop.stoppedAt) : undefined,
       });
       applied += 1;
-    }
-
-    /* ---- the time. The only one of the four that is a result. */
-    const submitRaw = messages.get("submit");
-    if (submitRaw) {
-      const parsed = parseSubmit(submitRaw);
-      if (parsed) {
-        /**
-         * Whether the built-in stopwatch ran this race is read from the
-         * record, not from this request.
-         *
-         * The four messages need not arrive together — `start` goes up alone
-         * the instant the thumb lands, so that the desk sees an armed lane
-         * before the gun, and is long since accepted and cleared by the time
-         * `submit` follows. Judging by what this request happens to carry
-         * left every properly-timed lane looking typed in.
-         *
-         * The two timestamps *are* the answer, so there is nothing else to
-         * set: a watch carrying both came off a stopwatch, and one carrying
-         * neither was typed.
-         */
-        const activity = await readActivity(db, heat.id, lane, timerId);
-
-        await putWatch(db, grant.meetId, {
-          heatId: heat.id,
-          lane,
-          timerId,
-          // A grant is a lane and a stopwatch, nothing else — there is no
-          // account behind it and no other role it could be.
-          role: "timer",
-          timeMs: parsed.elapsedMs,
-          recordedAt: parsed.at || Date.now(),
-          startedAt: activity.startedAt,
-          stoppedAt: activity.stoppedAt,
-        });
-        applied += 1;
-      }
     }
 
     // Consumed. Clearing them is what stops the next request to this lane

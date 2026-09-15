@@ -19,7 +19,7 @@ export function stopPath(
 ): string {
   return (
     `/meets/${encodeURIComponent(meetId)}/timers/${encodeURIComponent(timerId)}` +
-    `/${stop.event.position + 1}/${stop.heat.index + 1}/${lane}`
+    `/${stop.event.position + 1}/${stop.heat}/${lane}`
   );
 }
 
@@ -36,9 +36,10 @@ export function firstStopPath(
   timerId: string,
   lane: number,
 ): string {
-  const order = runningOrder(snapshot.events, snapshot.heats);
-  const first =
-    order.find((stop) => stop.heat.lanes.some((id) => id !== null)) ?? order[0];
+  // The first heat with anything in it — which, since a heat *is* its seeds,
+  // is simply the first heat there is.
+  const order = runningOrder(snapshot.events, snapshot.seeds);
+  const first = order[0];
 
   // A meet with no heats seeded at all still has to go somewhere, and event 1
   // heat 1 is where seeding will put the first one.
