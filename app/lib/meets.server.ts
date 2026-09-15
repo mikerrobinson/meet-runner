@@ -236,8 +236,9 @@ export async function listMeets(
     db.prepare(`SELECT meet_id, COUNT(*) AS n FROM entries WHERE meet_id IN (${holes}) GROUP BY meet_id`)
       .bind(...ids).all<{ meet_id: string; n: number }>(),
     db.prepare(
-      `SELECT meet_id, COUNT(DISTINCT heat || ':' || lane) AS n
-       FROM watches WHERE meet_id IN (${holes}) GROUP BY meet_id`,
+      `SELECT meet_id, COUNT(DISTINCT seed_id) AS n
+       FROM watches WHERE meet_id IN (${holes}) AND time_ms IS NOT NULL
+       GROUP BY meet_id`,
     ).bind(...ids).all<{ meet_id: string; n: number }>(),
     db.prepare(
       `SELECT * FROM teams WHERE id IN (

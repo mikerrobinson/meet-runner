@@ -36,8 +36,8 @@ export default function Teams({ loaderData }: Route.ComponentProps) {
     session.memberships.filter((m) => m.status === "active").map((m) => m.teamId),
   );
 
-  const ours = teams.filter((t) => t.id === '');
-  const others = teams.filter((t) => t.id !== '');
+  const ours = teams.filter((t) => mineIds.has(t.id));
+  const others = teams.filter((t) => !mineIds.has(t.id));
 
   return (
     <div className="space-y-4">

@@ -280,3 +280,16 @@ export function teamToOpen(
   if (has(options.lastTeamId)) return options.lastTeamId!;
   return active[0]?.teamId ?? null;
 }
+
+/**
+ * `last_seen_at` for somebody who has never signed in.
+ *
+ * A sentinel rather than a nullable column, because every other account has a
+ * real timestamp here and a second "but is it null" case in every read is a
+ * worse trade than one reserved value. An invited person's contact is
+ * unproven until they sign in, and this is how the screens say so.
+ *
+ * Lives here, with the other rules, so the stores that read it don't have to
+ * import each other to agree on what it means.
+ */
+export const NEVER_SEEN = 0;

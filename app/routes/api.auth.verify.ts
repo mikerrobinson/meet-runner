@@ -45,14 +45,16 @@ export async function action({ request, context }: Route.ActionArgs) {
     if (!result.ok) throw new SyncError(messageFor(result.check), 401);
 
     let invitedTeamId: string | null = null;
+    let invitedMeetId: string | null = null;
     let inviteError: string | undefined;
     if (body.invite) {
       const redeemed = await redeemInvite(db, body.invite, result.user.id);
       // A spent invite doesn't fail the sign-in: they're signed in either way,
       // and being told so while also being told the link is stale beats being
       // bounced back to a screen that says nothing.
-      if (redeemed.ok) invitedTeamId = redeemed.membership.teamId;
-      else inviteError = redeemed.error;
+      if (!redeemed.ok) inviteError = redeemed.error;
+      else if (redeemed.kind === "meet") invitedMeetId = redeemed.meetId;
+      else invitedTeamId = redeemed.membership.teamId;
     }
 
     const token = await createSession(db, result.user.id);
@@ -61,7 +63,15 @@ export async function action({ request, context }: Route.ActionArgs) {
     // The token goes back in the body for the header path, and into a cookie
     // so that loaders on ordinary navigations know who this is.
     return json(
-      { token, isNew: result.isNew, ...payload, ...(inviteError ? { inviteError } : {}) },
+      {
+        token,
+        isNew: result.isNew,
+        ...payload,
+        // Where to land. The whole point of a meet invitation is that
+        // following it puts you on that meet, not on a team picker.
+        ...(invitedMeetId ? { invitedMeetId } : {}),
+        ...(inviteError ? { inviteError } : {}),
+      },
       200,
       { "set-cookie": sessionCookie(token, request) },
     );

@@ -60,10 +60,13 @@ export default function SignIn() {
    */
   const signedInHere = useRef(false);
   const carried = useRef<string | null>(null);
+  const landOn = useRef<string | null>(null);
   useEffect(() => {
     if (session.status !== "in") return;
     if (invite && !signedInHere.current) return;
-    navigate(session.openTeamId ? APP_HOME : "/join", {
+    // A meet invitation names where it goes; anything else falls back to the
+    // ordinary "do you have a team yet" question.
+    navigate(landOn.current ?? (session.openTeamId ? APP_HOME : "/join"), {
       replace: true,
       state: carried.current ? { notice: carried.current } : undefined,
     });
@@ -72,7 +75,13 @@ export default function SignIn() {
   useEffect(() => {
     if (!invite) return;
     inspectInvite(invite)
-      .then(setInvited)
+      .then((info) => {
+        setInvited(info);
+        // A meet invitation was sent to a particular address, and that address
+        // is the one that redeems it. Filling it in saves them typing it and
+        // saves the "code went to the wrong place" failure when they don't.
+        if (info.kind === "meet") setContact(info.contact);
+      })
       .catch((err) =>
         setInviteError(err instanceof Error ? err.message : "That invitation isn't valid."),
       );
@@ -85,6 +94,9 @@ export default function SignIn() {
       try {
         const next = await verifyCode(forContact, submitted, invite);
         signedInHere.current = true;
+        landOn.current = next.invitedMeetId
+          ? `/meets/${encodeURIComponent(next.invitedMeetId)}`
+          : null;
         // Signed in, but the link was spent. Carried along so it can be said
         // wherever they land, rather than dropping them there unexplained.
         carried.current = next.inviteError ?? null;
@@ -141,17 +153,19 @@ export default function SignIn() {
       <div className="mb-6 text-center">
         <h1 className="text-2xl font-bold">Meet Runner</h1>
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-          {invited
-            ? `Join ${invited.name} as ${ROLE_LABELS[invited.role].toLowerCase()}.`
-            : "Sign in with your email or mobile number."}
+          {invited === null
+            ? "Sign in with your email or mobile number."
+            : invited.kind === "meet"
+              ? `Sign in to help run ${invited.name}.`
+              : `Join ${invited.name} as ${ROLE_LABELS[invited.role].toLowerCase()}.`}
         </p>
       </div>
 
       {inviteError && (
         <div className="mb-4">
           <Banner tone="warn">
-            {inviteError} You can still sign in — you&rsquo;ll just need a coach
-            to let you onto the team.
+            {inviteError} You can still sign in — you&rsquo;ll just need
+            whoever sent it to invite you again.
           </Banner>
         </div>
       )}

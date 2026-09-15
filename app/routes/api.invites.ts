@@ -28,6 +28,8 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     const token = new URL(request.url).searchParams.get("token");
     if (!token) throw new SyncError("No invitation given", 400);
 
+    // Tagged, so the sign-in screen can say "join Horizon" or "help run
+    // Tuesday's meet" rather than guessing from which fields are present.
     const invite = await inspectInvite(requireDb(env), token);
     if (!invite) throw new SyncError("That invitation has expired or been used.", 404);
     return json(invite);
@@ -64,7 +66,7 @@ export async function action({ request, context }: Route.ActionArgs) {
       throw new SyncError("That role can't be handed out by invitation", 400);
     }
 
-    const token = await createInvite(db, body.teamId, role, user.id);
+    const token = await createInvite(db, { teamId: body.teamId, role }, user.id);
     return json({
       token,
       role,

@@ -16,6 +16,8 @@
  * meet, which is precisely when you want them.
  */
 
+import { NEVER_SEEN } from "./identity";
+
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS meet_admins (
      meet_id TEXT NOT NULL,
@@ -25,6 +27,7 @@ const SCHEMA = [
      PRIMARY KEY (meet_id, user_id)
    )`,
   `CREATE INDEX IF NOT EXISTS admins_by_user ON meet_admins (user_id)`,
+
 ];
 
 let ready = false;
@@ -98,8 +101,17 @@ export interface MeetAdmin {
   contact: string;
   name: string | null;
   addedAt: number;
+  /** Invited, but has never signed in — so the contact is still unproven. */
+  pending: boolean;
 }
 
+/**
+ * The people running a meet, with the contact each is shown by.
+ *
+ * That subquery is `auth.server`'s `primaryContact` rule written out rather
+ * than imported: accounts must not depend on meets, and importing it here
+ * would close that loop. Three lines of SQL is the cheaper of the two.
+ */
 export async function meetAdmins(
   db: D1Database,
   meetId: string,
@@ -107,18 +119,27 @@ export async function meetAdmins(
   await ensureAdminStore(db);
   const { results } = await db
     .prepare(
-      `SELECT a.user_id, a.added_at, u.contact, u.name
+      `SELECT a.user_id, a.added_at, u.name, u.last_seen_at,
+              (SELECT i.contact FROM identities i WHERE i.user_id = u.id
+                ORDER BY i.added_at, i.contact LIMIT 1) AS contact
        FROM meet_admins a JOIN users u ON u.id = a.user_id
        WHERE a.meet_id = ? ORDER BY a.added_at`,
     )
     .bind(meetId)
-    .all<{ user_id: string; added_at: number; contact: string; name: string | null }>();
+    .all<{
+      user_id: string;
+      added_at: number;
+      contact: string;
+      name: string | null;
+      last_seen_at: number;
+    }>();
 
   return results.map((row) => ({
     userId: row.user_id,
     contact: row.contact,
     name: row.name,
     addedAt: row.added_at,
+    pending: row.last_seen_at === NEVER_SEEN,
   }));
 }
 

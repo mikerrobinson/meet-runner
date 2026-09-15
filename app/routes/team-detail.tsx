@@ -68,7 +68,8 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
     const swims = access.coach
       ? await env.DB.prepare(
           `SELECT s.athlete_id AS id, COUNT(DISTINCT w.meet_id) AS n
-           FROM seats s JOIN watches w ON w.heat = s.heat AND w.lane = s.lane
+           FROM seeds s JOIN watches w ON w.seed_id = s.id
+           WHERE w.time_ms IS NOT NULL
            GROUP BY s.athlete_id`,
         ).all<{ id: string; n: number }>()
       : null;

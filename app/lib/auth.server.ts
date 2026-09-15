@@ -16,6 +16,7 @@ import {
   RESEND_INTERVAL_MS,
   checkChallenge,
   isCoach,
+  NEVER_SEEN,
   newCode,
   normalizeCode,
   teamToOpen,
@@ -26,13 +27,19 @@ import {
   type MembershipStatus,
   type Role,
 } from "./identity";
+import { addMeetAdmin } from "./admins.server";
 import { ensureSchema } from "./schema.server";
 import { createSeason, createTeam } from "./teams.server";
 
 /**
- * `users.contact` is the identity, and is unique: signing in with a contact
- * nobody has used before is what creates an account, so there is no separate
- * sign-up and no way to end up with two accounts for one address.
+ * An account is an id and the contacts that open it — nothing more.
+ *
+ * `users` deliberately carries no contact of its own. It used to, as the
+ * identity and as a display field, with `identities` bolted on beside it; that
+ * left one fact in two places and a hand-written UPDATE keeping them level
+ * every time a contact was removed. Uniqueness comes from `identities.contact`
+ * being the primary key, and the address a screen shows is derived — see
+ * `primaryContact`.
  *
  * `login_codes` is keyed by contact rather than by user, because a code is
  * sent before we know — or care — whether the person behind it exists yet.
@@ -40,8 +47,6 @@ import { createSeason, createTeam } from "./teams.server";
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS users (
      id TEXT PRIMARY KEY,
-     contact TEXT NOT NULL UNIQUE,
-     contact_kind TEXT NOT NULL,
      name TEXT,
      created_at INTEGER NOT NULL,
      last_seen_at INTEGER NOT NULL,
@@ -91,10 +96,25 @@ const SCHEMA = [
      PRIMARY KEY (team_id, user_id)
    )`,
   `CREATE INDEX IF NOT EXISTS memberships_by_user ON memberships (user_id)`,
+  /**
+   * An invitation, whatever it lets you into.
+   *
+   * One table, because an invite is an invite: a token somebody minted, that
+   * expires, that is spent once, and that grants exactly one thing when it is.
+   * What it grants is which of `team_id` and `meet_id` is set — exactly one
+   * always is — rather than a kind column, so a row can't claim to be a team
+   * invitation while carrying a meet.
+   *
+   * `role` belongs to the team case alone; a meet has one job to hand out.
+   * `contact` is set when the link was sent to somebody in particular, and
+   * null when it's one a coach copies and passes around.
+   */
   `CREATE TABLE IF NOT EXISTS invites (
      token_hash TEXT PRIMARY KEY,
-     team_id TEXT NOT NULL,
-     role TEXT NOT NULL,
+     team_id TEXT,
+     meet_id TEXT,
+     role TEXT,
+     contact TEXT,
      created_by TEXT NOT NULL,
      created_at INTEGER NOT NULL,
      expires_at INTEGER NOT NULL,
@@ -105,29 +125,9 @@ const SCHEMA = [
 
 let ready = false;
 
-/**
- * Move the contact off `users` and into `identities`, once.
- *
- * Every account predates the identities table, so their contact lives in a
- * column. Copying rather than migrating destructively: `users.contact` keeps
- * working as a display field and as the fallback below, and nothing has to be
- * rewritten in one go.
- */
-async function liftContactsToIdentities(db: D1Database): Promise<void> {
-  await db
-    .prepare(
-      `INSERT INTO identities (contact, kind, user_id, added_at)
-       SELECT contact, contact_kind, id, created_at FROM users
-       WHERE contact IS NOT NULL
-       ON CONFLICT(contact) DO NOTHING`,
-    )
-    .run();
-}
-
 export async function ensureAuthStore(db: D1Database): Promise<void> {
   if (ready) return;
   for (const statement of SCHEMA) await db.prepare(statement).run();
-  await liftContactsToIdentities(db);
   ready = true;
 }
 
@@ -306,12 +306,13 @@ export async function verifyChallenge(
   };
   await db
     .prepare(
-      `INSERT INTO users (id, contact, contact_kind, name, created_at, last_seen_at)
-       VALUES (?, ?, ?, NULL, ?, ?)`,
+      `INSERT INTO users (id, name, created_at, last_seen_at)
+       VALUES (?, NULL, ?, ?)`,
     )
-    .bind(user.id, user.contact, user.contactKind, now, now)
+    .bind(user.id, now, now)
     .run();
-  // The contact they just proved is their first way in.
+  // The contact they just proved is their first way in — and, being the first,
+  // the one they'll be shown by.
   await db
     .prepare(
       "INSERT INTO identities (contact, kind, user_id, added_at) VALUES (?, ?, ?, ?) ON CONFLICT(contact) DO NOTHING",
@@ -382,29 +383,43 @@ function toUser(row: UserRow): User {
   };
 }
 
-const USER_COLUMNS =
-  "id, contact, contact_kind, name, created_at, last_seen_at, last_team_id, last_season_id";
+/**
+ * The contact an account is shown by.
+ *
+ * Derived, not stored: it's the first contact added, and when that one is
+ * removed the next becomes it on its own. `users` used to keep a copy, which
+ * meant every path that touched `identities` had to remember to rewrite it —
+ * a denormalisation whose only job was to answer a question the rows that
+ * actually define it can answer directly.
+ *
+ * `added_at` decides, with the contact itself as a tiebreak so two added in
+ * the same millisecond still order the same way on every read.
+ */
+function primaryContact(column: "contact" | "kind"): string {
+  return `(SELECT i2.${column} FROM identities i2
+            WHERE i2.user_id = u.id
+            ORDER BY i2.added_at, i2.contact LIMIT 1)`;
+}
+
+const USER_SELECT = `u.id, u.name, u.created_at, u.last_seen_at,
+     u.last_team_id, u.last_season_id,
+     ${primaryContact("contact")} AS contact,
+     ${primaryContact("kind")} AS contact_kind`;
 
 /**
  * The account a contact signs in to.
  *
- * Through `identities`, so a second address added later opens the same account
- * rather than a new one. The `users.contact` fallback covers the moment before
- * the lift has run, and costs one query on a miss.
+ * Through `identities`, which is now the only place a contact lives — so a
+ * second address added later opens the same account rather than a new one,
+ * and there is no second lookup that could disagree.
  */
 async function findUser(db: D1Database, contact: string): Promise<User | null> {
-  const linked = await db
+  const row = await db
     .prepare(
-      `SELECT ${USER_COLUMNS.split(", ").map((c) => "u." + c).join(", ")}
+      `SELECT ${USER_SELECT}
        FROM identities i JOIN users u ON u.id = i.user_id
        WHERE i.contact = ?`,
     )
-    .bind(contact)
-    .first<UserRow>();
-  if (linked) return toUser(linked);
-
-  const row = await db
-    .prepare(`SELECT ${USER_COLUMNS} FROM users WHERE contact = ?`)
     .bind(contact)
     .first<UserRow>();
   return row ? toUser(row) : null;
@@ -499,14 +514,8 @@ export async function removeIdentity(
     .bind(contact, userId)
     .run();
 
-  // `users.contact` is what the rest of the app displays and what the fallback
-  // above reads, so it can't be left pointing at something that's gone.
-  const remaining = mine.filter((i) => i.contact !== contact)[0];
-  await db
-    .prepare("UPDATE users SET contact = ?, contact_kind = ? WHERE id = ?")
-    .bind(remaining.contact, remaining.kind, userId)
-    .run();
-
+  // Nothing else to put right. What the app displays is whichever contact is
+  // now the earliest, which is true the moment the row is gone.
   return { ok: true };
 }
 
@@ -545,8 +554,7 @@ export async function userForToken(
   const hash = await tokenHash(token);
   const row = await db
     .prepare(
-      `SELECT u.id, u.contact, u.contact_kind, u.name, u.created_at, u.last_seen_at,
-              u.last_team_id, u.last_season_id, s.last_used_at
+      `SELECT ${USER_SELECT}, s.last_used_at
        FROM sessions s JOIN users u ON u.id = s.user_id
        WHERE s.token_hash = ? AND s.expires_at > ?`,
     )
@@ -983,7 +991,8 @@ export async function pendingRequests(
   await ensureAuthStore(db);
   const { results } = await db
     .prepare(
-      `SELECT m.user_id, m.created_at, u.contact, u.name
+      `SELECT m.user_id, m.created_at, u.name,
+              ${primaryContact("contact")} AS contact
        FROM memberships m JOIN users u ON u.id = m.user_id
        WHERE m.team_id = ? AND m.status = 'pending'
        ORDER BY m.created_at`,
@@ -1021,10 +1030,11 @@ export async function teamMembers(
   await ensureAuthStore(db);
   const { results } = await db
     .prepare(
-      `SELECT m.user_id, m.role, m.created_at, u.contact, u.name
+      `SELECT m.user_id, m.role, m.created_at, u.name,
+              ${primaryContact("contact")} AS contact
        FROM memberships m JOIN users u ON u.id = m.user_id
        WHERE m.team_id = ? AND m.status = 'active'
-       ORDER BY u.name, u.contact`,
+       ORDER BY u.name, contact`,
     )
     .bind(teamId)
     .all<{
@@ -1089,40 +1099,88 @@ export async function removeMember(
 const INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
 /**
- * Mint a one-time invite to a team.
+ * What an invitation lets you into. Exactly one of the two.
+ *
+ * A team invitation carries the role it grants; a meet invitation doesn't,
+ * because running a meet is the only job there is to hand out. `contact` is
+ * set when the link was sent to somebody in particular — it lets the sign-in
+ * screen fill the box in — and left off for a link that's simply copied.
+ */
+export type InviteGrant =
+  | { teamId: string; role: Role; contact?: string }
+  | { meetId: string; contact?: string };
+
+/**
+ * Mint a one-time invitation.
  *
  * Returned in plaintext once, exactly like a session token, because it *is*
- * one — a bearer credential that turns into membership for whoever redeems it.
- * That's the trade for letting a coach add another coach by sending a link.
+ * one — a bearer credential that turns into membership, or into running a
+ * meet, for whoever redeems it. That's the trade for letting somebody be
+ * added by sending them a link.
  */
 export async function createInvite(
   db: D1Database,
-  teamId: string,
-  role: Role,
+  grant: InviteGrant,
   createdBy: string,
   now = Date.now(),
 ): Promise<string> {
   await ensureAuthStore(db);
   const token = newToken();
+  const teamId = "teamId" in grant ? grant.teamId : null;
+  const meetId = "meetId" in grant ? grant.meetId : null;
+  const role = "role" in grant ? grant.role : null;
+
   await db
     .prepare(
-      `INSERT INTO invites (token_hash, team_id, role, created_by, created_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO invites
+         (token_hash, team_id, meet_id, role, contact, created_by, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .bind(await tokenHash(token), teamId, role, createdBy, now, now + INVITE_TTL_MS)
+    .bind(
+      await tokenHash(token),
+      teamId,
+      meetId,
+      role,
+      grant.contact ?? null,
+      createdBy,
+      now,
+      now + INVITE_TTL_MS,
+    )
     .run();
   return token;
 }
 
-export interface InviteInfo {
-  teamId: string;
-  role: Role;
-  name: string;
-  code: string;
+/**
+ * Replace whatever was outstanding for one person on one thing.
+ *
+ * Resending shouldn't leave two live tokens for the same job — the older one
+ * would still work, and "I sent it twice" would mean two ways in rather than
+ * one that arrived.
+ */
+export async function supersedeInvites(
+  db: D1Database,
+  grant: { meetId?: string; teamId?: string; contact: string },
+): Promise<void> {
+  await ensureAuthStore(db);
+  await db
+    .prepare(
+      `DELETE FROM invites
+       WHERE contact = ? AND used_at IS NULL
+         AND meet_id IS ? AND team_id IS ?`,
+    )
+    .bind(grant.contact, grant.meetId ?? null, grant.teamId ?? null)
+    .run();
 }
 
-/** What an invite is for, before anyone signs in — so the sign-in screen can
- *  say which team is being joined instead of asking for a contact blind. */
+export type InviteInfo =
+  | { kind: "team"; teamId: string; role: Role; name: string; code: string }
+  | { kind: "meet"; meetId: string; name: string; date: string; contact: string | null };
+
+/**
+ * What an invitation is for, before anyone signs in — so the sign-in screen
+ * can say which team is being joined, or which meet is being run, instead of
+ * asking for a contact blind.
+ */
 export async function inspectInvite(
   db: D1Database,
   token: string,
@@ -1131,56 +1189,92 @@ export async function inspectInvite(
   await ensureAuthStore(db);
   const row = await db
     .prepare(
-      `SELECT team_id, role FROM invites
+      `SELECT team_id, meet_id, role, contact FROM invites
        WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?`,
     )
     .bind(await tokenHash(token), now)
-    .first<{ team_id: string; role: Role }>();
+    .first<{
+      team_id: string | null;
+      meet_id: string | null;
+      role: Role | null;
+      contact: string | null;
+    }>();
   if (!row) return null;
 
-  const facts = (await teamFacts(db)).get(row.team_id);
+  if (row.meet_id) {
+    const meet = await db
+      .prepare("SELECT name, date FROM meets WHERE id = ?")
+      .bind(row.meet_id)
+      .first<{ name: string; date: string }>();
+    if (!meet) return null;
+    return {
+      kind: "meet",
+      meetId: row.meet_id,
+      name: meet.name,
+      date: meet.date,
+      contact: row.contact,
+    };
+  }
+
+  const facts = (await teamFacts(db)).get(row.team_id!);
   return {
-    teamId: row.team_id,
-    role: row.role,
+    kind: "team",
+    teamId: row.team_id!,
+    role: row.role ?? "coach",
     name: facts?.name ?? "Untitled team",
     code: facts?.code ?? "",
   };
 }
 
+export type InviteRedemption =
+  | { ok: true; kind: "team"; membership: Membership }
+  | { ok: true; kind: "meet"; meetId: string }
+  | { ok: false; error: string };
+
 /**
- * Turn an invite into membership.
+ * Spend the link and grant what it names.
  *
  * The update that marks it used carries `used_at IS NULL` in its WHERE, so two
- * people racing on a forwarded link can't both come out members — whoever's
+ * people racing on a forwarded link can't both come out with it — whoever's
  * write lands second sees no rows changed and is told the invite is spent.
+ *
+ * What's granted goes to whoever proved a contact just now, not to whoever the
+ * invitation was addressed to: a link forwarded to a colleague is redeemed by
+ * the colleague, which is the behaviour a forwarded link should have.
  */
 export async function redeemInvite(
   db: D1Database,
   token: string,
   userId: string,
   now = Date.now(),
-): Promise<{ ok: true; membership: Membership } | { ok: false; error: string }> {
+): Promise<InviteRedemption> {
   await ensureAuthStore(db);
-  const hash = await tokenHash(token);
 
   const claimed = await db
     .prepare(
       `UPDATE invites SET used_at = ?, used_by = ?
        WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
-       RETURNING team_id, role`,
+       RETURNING team_id, meet_id, role`,
     )
-    .bind(now, userId, hash, now)
-    .first<{ team_id: string; role: Role }>();
+    .bind(now, userId, await tokenHash(token), now)
+    .first<{ team_id: string | null; meet_id: string | null; role: Role | null }>();
 
   if (!claimed) return { ok: false, error: "That invitation has expired or been used." };
 
+  if (claimed.meet_id) {
+    await addMeetAdmin(db, claimed.meet_id, userId, null, now);
+    return { ok: true, kind: "meet", meetId: claimed.meet_id };
+  }
+
+  const teamId = claimed.team_id!;
   // An existing member keeps whatever they already had if it reaches further;
   // an invite should never quietly demote a coach who follows one.
-  const existing = await membershipIn(db, userId, claimed.team_id);
+  const existing = await membershipIn(db, userId, teamId);
+  const granted = claimed.role ?? "coach";
   const role: Role =
-    existing?.status === "active" && rank(existing.role) >= rank(claimed.role)
+    existing?.status === "active" && rank(existing.role) >= rank(granted)
       ? existing.role
-      : claimed.role;
+      : granted;
 
   await db
     .prepare(
@@ -1189,10 +1283,14 @@ export async function redeemInvite(
        ON CONFLICT(team_id, user_id) DO UPDATE SET
          role = excluded.role, status = 'active', decided_at = excluded.decided_at`,
     )
-    .bind(claimed.team_id, userId, role, now, now, userId)
+    .bind(teamId, userId, role, now, now, userId)
     .run();
 
-  return { ok: true, membership: { teamId: claimed.team_id, role, status: "active" } };
+  return {
+    ok: true,
+    kind: "team",
+    membership: { teamId, role, status: "active" },
+  };
 }
 
 /* ------------------------------------------------------------- the answer */
@@ -1252,4 +1350,112 @@ function rank(role: Role): number {
   if (isCoach(role)) return 2;
   if (role === "viewer") return 0;
   return 1;
+}
+
+/* ------------------------------------------------------------- directory */
+
+/**
+ * The account for a contact, creating an unproven one if there isn't one.
+ *
+ * This is the only place an account appears without somebody having read a
+ * code — which is a real departure from "proving you can read what was sent
+ * to it is the entire signup", and is deliberate: a meet administrator has to
+ * be nameable before they arrive, or the person setting the meet up can't
+ * hand the job over in advance.
+ *
+ * The contact is what makes it safe. `identities.contact` is unique, so
+ * inviting somebody who already has an account returns *that* account rather
+ * than minting a rival for the same address — and the moment they sign in,
+ * the ordinary flow finds them by the same contact and stamps `last_seen_at`.
+ */
+export async function inviteUser(
+  db: D1Database,
+  contact: Contact,
+  name: string | null,
+  now = Date.now(),
+): Promise<{ user: User; created: boolean }> {
+  await ensureAuthStore(db);
+
+  const existing = await findUser(db, contact.value);
+  if (existing) return { user: existing, created: false };
+
+  const user: User = {
+    id: newId(),
+    contact: contact.value,
+    contactKind: contact.kind,
+    name: name?.trim() || null,
+    createdAt: now,
+    lastSeenAt: NEVER_SEEN,
+    lastTeamId: null,
+    lastSeasonId: null,
+  };
+  await db
+    .prepare(
+      `INSERT INTO users (id, name, created_at, last_seen_at) VALUES (?, ?, ?, ?)`,
+    )
+    .bind(user.id, user.name, now, NEVER_SEEN)
+    .run();
+  await db
+    .prepare(
+      "INSERT INTO identities (contact, kind, user_id, added_at) VALUES (?, ?, ?, ?) ON CONFLICT(contact) DO NOTHING",
+    )
+    .bind(user.contact, user.contactKind, user.id, now)
+    .run();
+
+  return { user, created: true };
+}
+
+export interface DirectoryUser {
+  userId: string;
+  name: string | null;
+  contact: string;
+  pending: boolean;
+}
+
+/**
+ * Everyone with an account, for picking a person by name.
+ *
+ * Deliberately not scoped to a team. Running a meet is the one job in this app
+ * that belongs to no team — often it's a referee who coaches nobody — so a
+ * picker that could only offer your own club's coaches could not express the
+ * case the role exists for.
+ *
+ * The cost is that it hands one meet's administrator a list of contacts, and
+ * that cost is real. It's bounded by requiring a search: an empty query
+ * returns nothing, so the endpoint answers "is this person here?" rather than
+ * printing the directory.
+ */
+export async function searchUsers(
+  db: D1Database,
+  query: string,
+  limit = 20,
+): Promise<DirectoryUser[]> {
+  await ensureAuthStore(db);
+  const trimmed = query.trim();
+  if (trimmed.length < 2) return [];
+
+  // The wildcards are ours, so anything that looks like one in what was typed
+  // has to stop being one before it reaches LIKE.
+  const escaped = trimmed.replace(/[\\%_]/g, (ch) => `\\${ch}`).toLowerCase();
+
+  const { results } = await db
+    .prepare(
+      `SELECT u.id, u.name, u.last_seen_at,
+              ${primaryContact("contact")} AS contact
+       FROM users u
+       WHERE LOWER(u.name) LIKE '%' || ?1 || '%' ESCAPE '\\'
+          OR EXISTS (SELECT 1 FROM identities i WHERE i.user_id = u.id
+                       AND LOWER(i.contact) LIKE '%' || ?1 || '%' ESCAPE '\\')
+       ORDER BY u.name IS NULL, u.name, contact
+       LIMIT ?2`,
+    )
+    .bind(escaped, limit)
+    .all<{ id: string; name: string | null; contact: string; last_seen_at: number }>();
+
+  return results.map((row) => ({
+    userId: row.id,
+    name: row.name,
+    contact: row.contact,
+    pending: row.last_seen_at === NEVER_SEEN,
+  }));
 }

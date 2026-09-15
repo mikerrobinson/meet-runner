@@ -12,6 +12,7 @@ import {
 } from "~/components/ui";
 import { TimerAccess } from "~/components/TimerAccess";
 import { MeetTeams } from "~/components/MeetTeams";
+import { MeetAdmins } from "~/components/MeetAdmins";
 import { downloadFile, resultsToCsv } from "~/lib/csv";
 import { eventClosed, recordedCount } from "~/lib/timing";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
@@ -210,6 +211,10 @@ export default function MeetInfo() {
           entries grid can draw from, so it is the first thing to get right
           and the first thing to notice is wrong. */}
       <MeetTeamsCard />
+
+      {/* Directly under who's racing, because they answer adjacent questions —
+          which teams are in this, and who among everyone here decides it. */}
+      <MeetAdmins meetId={meet.id} />
 
       <EventList editing={editing} />
 

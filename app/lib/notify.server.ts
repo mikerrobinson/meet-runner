@@ -134,6 +134,105 @@ async function sendSms(env: NotifyEnv, number: string, code: string): Promise<De
   return { sent: true, detail: "Texted" };
 }
 
+/**
+ * Tell somebody they're running a meet, and hand them the link.
+ *
+ * The link is the whole message. Unlike a login code there's no fallback to
+ * read out — the token is what proves the contact and drops them on the meet
+ * — so a text carries it too, despite the note on `sendSms` about URLs. A
+ * meet invitation without its link is just a rumour.
+ */
+export async function sendMeetInvite(
+  env: NotifyEnv,
+  contact: Contact,
+  link: string,
+): Promise<Delivery> {
+  const subject = "You've been asked to run a meet";
+  const lines = [
+    "You've been asked to help run a meet on Meet Runner.",
+    "",
+    "Open this link to sign in and go straight to it:",
+    link,
+    "",
+    "The link is good for two weeks. If you weren't expecting it, ignore this.",
+  ];
+
+  try {
+    if (contact.kind === "email") {
+      if (!env.RESEND_API_KEY || !env.AUTH_FROM_EMAIL) {
+        return logOnlyLink("email", contact.value, link, "RESEND_API_KEY / AUTH_FROM_EMAIL");
+      }
+      const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.RESEND_API_KEY}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          from: env.AUTH_FROM_EMAIL,
+          to: contact.value,
+          subject,
+          text: lines.join("\n"),
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(`Resend refused the message (${response.status}) ${body}`.trim());
+      }
+      return { sent: true, detail: "Emailed" };
+    }
+
+    const { TWILIO_ACCOUNT_SID: sid, TWILIO_AUTH_TOKEN: token, TWILIO_FROM: from } = env;
+    if (!sid || !token || !from) {
+      return logOnlyLink(
+        "phone",
+        contact.value,
+        link,
+        "TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM",
+      );
+    }
+    const response = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Basic ${btoa(`${sid}:${token}`)}`,
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          To: contact.value,
+          From: from,
+          Body: `You've been asked to help run a meet on Meet Runner: ${link}`,
+        }),
+      },
+    );
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`Twilio refused the message (${response.status}) ${body}`.trim());
+    }
+    return { sent: true, detail: "Texted" };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Delivery failed";
+    console.error(`Could not send a meet invitation to ${contact.value}:`, detail);
+    return { sent: false, detail };
+  }
+}
+
+function logOnlyLink(
+  kind: string,
+  to: string,
+  link: string,
+  missing: string,
+): Delivery {
+  console.warn(
+    `No ${kind} provider configured (${missing}). Meet invitation for ${to} is ${link}`,
+  );
+  return {
+    sent: false,
+    detail: `No ${kind} provider is configured on this server.`,
+  };
+}
+
 function logOnly(
   kind: string,
   to: string,

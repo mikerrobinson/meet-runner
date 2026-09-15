@@ -83,6 +83,7 @@ export default [
   route("api/profile", "routes/api.profile.ts"),
   route("api/memberships", "routes/api.memberships.ts"),
   route("api/members", "routes/api.members.ts"),
+  route("api/users", "routes/api.users.ts"),
   route("api/athletes/:athleteId/link", "routes/api.athlete.link.ts"),
   route("api/invites", "routes/api.invites.ts"),
 

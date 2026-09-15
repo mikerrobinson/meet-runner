@@ -92,15 +92,27 @@ export async function verifyCode(
   contact: string,
   code: string,
   invite?: string | null,
-): Promise<Session & { isNew: boolean; inviteError?: string }> {
+): Promise<
+  Session & { isNew: boolean; inviteError?: string; invitedMeetId?: string }
+> {
   const body = await request<
-    Session & { token: string; isNew: boolean; inviteError?: string }
+    Session & {
+      token: string;
+      isNew: boolean;
+      inviteError?: string;
+      invitedMeetId?: string;
+    }
   >("/api/auth/verify", {
     method: "POST",
     body: JSON.stringify({ contact, code, invite: invite || undefined }),
   });
   saveSessionToken(body.token);
-  return { ...normalize(body), isNew: body.isNew, inviteError: body.inviteError };
+  return {
+    ...normalize(body),
+    isNew: body.isNew,
+    inviteError: body.inviteError,
+    invitedMeetId: body.invitedMeetId,
+  };
 }
 
 export async function readSession(): Promise<Session> {
@@ -182,12 +194,14 @@ export async function decideRequest(
   );
 }
 
-export interface InviteInfo {
-  teamId: string;
-  role: Role;
-  name: string;
-  code: string;
-}
+/**
+ * What a link is for. Two kinds, tagged, because they land you in different
+ * places: a team invitation makes you a member, a meet invitation makes you
+ * one of the people running that meet.
+ */
+export type InviteInfo =
+  | { kind: "team"; teamId: string; role: Role; name: string; code: string }
+  | { kind: "meet"; meetId: string; name: string; date: string; contact: string };
 
 /** What a link joins, read before anyone has signed in. */
 export async function inspectInvite(token: string): Promise<InviteInfo> {
