@@ -31,6 +31,7 @@ const SCHEMA = [
      name TEXT NOT NULL,
      code TEXT NOT NULL,
      current_season_id TEXT,
+     created_by TEXT,
      created_at INTEGER NOT NULL
    )`,
 

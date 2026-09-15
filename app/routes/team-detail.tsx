@@ -571,7 +571,10 @@ export default function TeamDetail({ loaderData }: Route.ComponentProps) {
         </Card>
       )}
 
-      {mayEdit && <TeamMembers teamId={team.id} />}
+      {/* Not gated on being a coach: who coaches a team is on every heat
+          sheet, and the card shows its own controls to whoever may use them —
+          the same way a meet's administrators are listed to everybody. */}
+      <TeamMembers teamId={team.id} />
 
       {mayEdit && (
         <Card>

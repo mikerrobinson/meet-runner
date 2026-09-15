@@ -385,7 +385,7 @@ title · view options · status · profile.
 | `/meets/:id/entries` | The registration grid — roster down the side, races across the top |
 | `/meets/:id/run` | **Control** (the desk) and **Stopwatch** (the deck), switchable for an admin |
 | `/meets/:id/results` | Ranked by event across all heats |
-| `/teams`, `/teams/:id` | Every team; one team's roster, seasons, meets — and for a coach of it: CSV import, add by hand, renaming, seasons, invites, export |
+| `/teams`, `/teams/:id` | Every team, and starting one; one team's roster, seasons, meets, coaches — and for a coach of it: CSV import, add by hand, renaming, seasons, invites, export |
 | `/profile` | The account: name, ways to sign in, signing out, and this device's display preferences |
 | `/athletes`, `/users/:id` | Browsing — open to anyone, no account |
 | `/meets/:id/timers/:timerId` | The volunteer picks a lane, reached by QR code, no account |
@@ -438,6 +438,7 @@ UI and API mirror each other, with one query and one projection behind both.
 | `POST`/`DELETE /api/meets/:id/watches`                   | Times, and dropping your own                                 |
 | `POST`/`DELETE /api/meets/:id/calls`                     | Deciding a lane                                              |
 | `GET`/`POST`/`DELETE /api/meets/:id/admins`              | Who runs a meet                                              |
+| `GET`/`POST`/`DELETE /api/teams/:id/coaches`             | Who coaches a team, and who's waiting to join                |
 | `POST /api/athletes/:id/link`                            | Say which account a swimmer is. Coaches only                 |
 | `/api/auth/*`, `/api/memberships`, `/api/invites`        | Accounts and membership                                      |
 | `/api/timer/grant`, `/timer/meet`                        | The QR-code timing path                                      |
@@ -448,6 +449,12 @@ UI and API mirror each other, with one query and one projection behind both.
 Roles are team-scoped except one. **Running a meet is scoped to the meet**,
 because a meet belongs to no team — often it's the host's coach, sometimes a
 referee who coaches nobody. Whoever creates a meet administrates it.
+
+Whoever creates a team is its head coach, and a team can have as many coaches as
+it needs — added by name from the directory, or invited by email or text, which
+makes an account for them and mails the link that proves it. Neither a team nor
+a meet can go down to nobody: removing the last coach, or the last
+administrator, is refused rather than leaving a thing nobody can run.
 
 |                                  | Meet admin | Coach of a racing team |         Linked athlete         |
 | -------------------------------- | :--------: | :--------------------: | :----------------------------: |
@@ -473,7 +480,11 @@ npm run build
 ```
 
 `wrangler dev` creates a local D1 automatically, and `ensureSchema()` creates any
-missing tables on first use — a fresh database needs no migration step.
+missing tables on first use — a fresh database needs no migration step. A column
+added to a table that has already shipped goes in `ADDITIONS` beside the schema
+as well, since `CREATE TABLE IF NOT EXISTS` does nothing to a table that exists;
+those run best-effort, because `ADD COLUMN` on a table that already has it is an
+error rather than a no-op.
 `.dev.vars` sets `AUTH_DEV_CODES=1`, which hands the login code straight back to
 the browser so you can sign in with no email or SMS provider. It is gitignored,
 and must never be set on a deployed worker.

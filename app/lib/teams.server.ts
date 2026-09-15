@@ -23,6 +23,7 @@ export interface TeamRow {
   name: string;
   code: string;
   current_season_id: string | null;
+  created_by: string | null;
   created_at: number;
 }
 
@@ -32,6 +33,7 @@ export function teamRow(row: TeamRow): Team {
     name: row.name,
     code: row.code,
     currentSeasonId: row.current_season_id ?? undefined,
+    createdBy: row.created_by ?? undefined,
   };
 }
 
@@ -161,9 +163,17 @@ export function seasonForDate(
 
 /* ----------------------------------------------------------------- writing */
 
+/**
+ * Make a team.
+ *
+ * `createdBy` is who set it up, recorded the same way a meet records it: not a
+ * permission — coaching a team is a membership, and the creator holds one of
+ * those too — but the answer to "where did this come from", which matters most
+ * for the placeholder teams typed in as opponents.
+ */
 export async function createTeam(
   db: D1Database,
-  input: { name: string; code?: string; id?: string },
+  input: { name: string; code?: string; id?: string; createdBy?: string },
   now = Date.now(),
 ): Promise<Team> {
   await ensureSchema(db);
@@ -171,11 +181,11 @@ export async function createTeam(
   const code = normalizeTeamCode(input.code || input.name);
   await db
     .prepare(
-      `INSERT INTO teams (id, name, code, current_season_id, created_at)
-       VALUES (?, ?, ?, NULL, ?)
+      `INSERT INTO teams (id, name, code, current_season_id, created_by, created_at)
+       VALUES (?, ?, ?, NULL, ?, ?)
        ON CONFLICT(id) DO UPDATE SET name = excluded.name, code = excluded.code`,
     )
-    .bind(id, input.name.trim().slice(0, 80), code, now)
+    .bind(id, input.name.trim().slice(0, 80), code, input.createdBy ?? null, now)
     .run();
   return (await getTeam(db, id))!;
 }

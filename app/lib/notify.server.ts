@@ -135,21 +135,64 @@ async function sendSms(env: NotifyEnv, number: string, code: string): Promise<De
 }
 
 /**
- * Tell somebody they're running a meet, and hand them the link.
+ * What an invitation says, in each channel it can go out through.
  *
- * The link is the whole message. Unlike a login code there's no fallback to
- * read out — the token is what proves the contact and drops them on the meet
- * — so a text carries it too, despite the note on `sendSms` about URLs. A
- * meet invitation without its link is just a rumour.
+ * The link is the whole message either way. Unlike a login code there's no
+ * fallback to read out — the token is what proves the contact and drops them
+ * where they're wanted — so a text carries it too, despite the note on
+ * `sendSms` about URLs. An invitation without its link is just a rumour.
  */
-export async function sendMeetInvite(
+interface InviteMessage {
+  subject: string;
+  /** The email body, before the link is appended. */
+  opening: string;
+  /** What the invitation is, for the log line when nothing could be sent. */
+  kind: string;
+}
+
+/**
+ * Tell somebody they're running a meet, and hand them the link.
+ */
+export function sendMeetInvite(
   env: NotifyEnv,
   contact: Contact,
   link: string,
 ): Promise<Delivery> {
-  const subject = "You've been asked to run a meet";
+  return sendInvite(env, contact, link, {
+    subject: "You've been asked to run a meet",
+    opening: "You've been asked to help run a meet on Meet Runner.",
+    kind: "meet invitation",
+  });
+}
+
+/**
+ * Tell somebody they're coaching a team, and hand them the link.
+ *
+ * Named, because "you've been added to a team" is a sentence that could mean
+ * half a dozen things and the one it does mean — you can edit this roster and
+ * enter these swimmers — is worth saying.
+ */
+export function sendTeamInvite(
+  env: NotifyEnv,
+  contact: Contact,
+  teamName: string,
+  link: string,
+): Promise<Delivery> {
+  return sendInvite(env, contact, link, {
+    subject: `You've been added as a coach of ${teamName}`,
+    opening: `You've been added as a coach of ${teamName} on Meet Runner.`,
+    kind: "team invitation",
+  });
+}
+
+async function sendInvite(
+  env: NotifyEnv,
+  contact: Contact,
+  link: string,
+  message: InviteMessage,
+): Promise<Delivery> {
   const lines = [
-    "You've been asked to help run a meet on Meet Runner.",
+    message.opening,
     "",
     "Open this link to sign in and go straight to it:",
     link,
@@ -160,7 +203,13 @@ export async function sendMeetInvite(
   try {
     if (contact.kind === "email") {
       if (!env.RESEND_API_KEY || !env.AUTH_FROM_EMAIL) {
-        return logOnlyLink("email", contact.value, link, "RESEND_API_KEY / AUTH_FROM_EMAIL");
+        return logOnlyLink(
+          "email",
+          contact.value,
+          link,
+          "RESEND_API_KEY / AUTH_FROM_EMAIL",
+          message.kind,
+        );
       }
       const response = await fetch("https://api.resend.com/emails", {
         method: "POST",
@@ -171,7 +220,7 @@ export async function sendMeetInvite(
         body: JSON.stringify({
           from: env.AUTH_FROM_EMAIL,
           to: contact.value,
-          subject,
+          subject: message.subject,
           text: lines.join("\n"),
         }),
       });
@@ -189,6 +238,7 @@ export async function sendMeetInvite(
         contact.value,
         link,
         "TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM",
+        message.kind,
       );
     }
     const response = await fetch(
@@ -202,7 +252,7 @@ export async function sendMeetInvite(
         body: new URLSearchParams({
           To: contact.value,
           From: from,
-          Body: `You've been asked to help run a meet on Meet Runner: ${link}`,
+          Body: `${message.opening} ${link}`,
         }),
       },
     );
@@ -213,7 +263,7 @@ export async function sendMeetInvite(
     return { sent: true, detail: "Texted" };
   } catch (error) {
     const detail = error instanceof Error ? error.message : "Delivery failed";
-    console.error(`Could not send a meet invitation to ${contact.value}:`, detail);
+    console.error(`Could not send a ${message.kind} to ${contact.value}:`, detail);
     return { sent: false, detail };
   }
 }
@@ -223,9 +273,10 @@ function logOnlyLink(
   to: string,
   link: string,
   missing: string,
+  what: string,
 ): Delivery {
   console.warn(
-    `No ${kind} provider configured (${missing}). Meet invitation for ${to} is ${link}`,
+    `No ${kind} provider configured (${missing}). The ${what} for ${to} is ${link}`,
   );
   return {
     sent: false,

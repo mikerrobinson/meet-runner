@@ -12,7 +12,6 @@ import {
   claimNewTeam,
   decideRequest,
   membershipIn,
-  pendingRequests,
   removeMember,
   requestToJoin,
   sessionPayload,
@@ -20,29 +19,16 @@ import {
 import { ROLES, canAdmit, type Role } from "~/lib/identity";
 
 /**
- * Who's on a team, and who wants to be.
+ * Changing who's on a team.
  *
- *   GET    ?teamId=  -> { pending }              (coaches only)
  *   POST   { teamId } -> the session, updated    (ask to join)
  *   PATCH  { teamId, userId, admit, role }       (coaches only)
  *   DELETE { teamId, userId }                    (a coach, or yourself)
+ *
+ * Writes only. Reading who's on a team — its coaches and the people waiting —
+ * is `GET /api/teams/:teamId/coaches`, in one answer, so there is one place
+ * that says what a team's roll is.
  */
-export async function loader({ request, context }: Route.LoaderArgs) {
-  const env = context.cloudflare.env as SyncEnv;
-  try {
-    const db = requireDb(env);
-    const user = await requireUser(request, env);
-    const teamId = new URL(request.url).searchParams.get("teamId");
-    if (!teamId) throw new SyncError("Which team?", 400);
-
-    if (!canAdmit(await membershipIn(db, user.id, teamId))) {
-      throw new SyncError("Only a coach can see who's waiting to join", 403);
-    }
-    return json({ pending: await pendingRequests(db, teamId) });
-  } catch (error) {
-    return errorResponse(error);
-  }
-}
 
 export async function action({ request, context }: Route.ActionArgs) {
   const env = context.cloudflare.env as SyncEnv;
@@ -63,7 +49,7 @@ export async function action({ request, context }: Route.ActionArgs) {
       // `create` is a device saying "this id is a team I just made", which is
       // a different question from "let me into that one".
       const result = body.create
-        ? await claimNewTeam(db, user.id, body.teamId, body.name)
+        ? await claimNewTeam(db, user.id, body.teamId, { name: body.name })
         : await requestToJoin(db, user.id, body.teamId);
       if (!result.ok) throw new SyncError(result.error, 409);
       return json({

@@ -67,7 +67,7 @@ export async function action({ request, context }: Route.ActionArgs) {
     if (request.method !== "POST") throw new SyncError("Use POST", 405);
 
     const db = requireDb(env);
-    await requireUser(request, env);
+    const user = await requireUser(request, env);
 
     const body = await readJson<{ name?: string; code?: string }>(request);
     const name = String(body.name ?? "").trim().slice(0, 60);
@@ -82,7 +82,11 @@ export async function action({ request, context }: Route.ActionArgs) {
     // meant to prevent.
     if (clash) return json({ team: clash, created: false });
 
-    const team = await createTeam(db, { name, code: body.code });
+    const team = await createTeam(db, {
+      name,
+      code: body.code,
+      createdBy: user.id,
+    });
     // A team with no season can hold no roster, and every path that adds one
     // asks which season it's for. Minting it here means an opponent created
     // mid-setup is immediately usable.

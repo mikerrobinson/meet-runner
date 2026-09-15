@@ -939,7 +939,7 @@ export async function claimNewTeam(
   db: D1Database,
   userId: string,
   teamId: string,
-  name = "My Team",
+  input: { name?: string; code?: string } = {},
   now = Date.now(),
 ): Promise<JoinResult> {
   await ensureAuthStore(db);
@@ -958,7 +958,16 @@ export async function claimNewTeam(
   // The team and its first season are created here rather than pushed up by
   // the device afterwards. A membership pointing at a team that doesn't exist
   // yet was only ever safe while a client was expected to fill the gap.
-  await createTeam(db, { id: teamId, name }, now);
+  await createTeam(
+    db,
+    {
+      id: teamId,
+      name: input.name || "My Team",
+      code: input.code,
+      createdBy: userId,
+    },
+    now,
+  );
   await createSeason(db, { teamId, name: "Current season" });
 
   await db
@@ -1090,6 +1099,125 @@ export async function removeMember(
     .prepare("DELETE FROM memberships WHERE team_id = ? AND user_id = ?")
     .bind(teamId, userId)
     .run();
+}
+
+/* ---------------------------------------------------------------- coaches */
+
+/**
+ * Who coaches a team.
+ *
+ * A team has as many as it needs and cannot go down to none, which is the same
+ * shape as the people running a meet — see `admins.server`. The difference is
+ * only where the relationship lives: running a meet is its own table because a
+ * meet belongs to no team, while coaching *is* a membership, so this is a view
+ * over the rows that are already there rather than a second list to keep level
+ * with them.
+ */
+export interface TeamCoach {
+  userId: string;
+  contact: string;
+  name: string | null;
+  role: Role;
+  since: number;
+  /** Invited, but has never signed in — so the contact is still unproven. */
+  pending: boolean;
+}
+
+export async function teamCoaches(
+  db: D1Database,
+  teamId: string,
+): Promise<TeamCoach[]> {
+  await ensureAuthStore(db);
+  const { results } = await db
+    .prepare(
+      `SELECT m.user_id, m.role, m.created_at, u.name, u.last_seen_at,
+              ${primaryContact("contact")} AS contact
+       FROM memberships m JOIN users u ON u.id = m.user_id
+       WHERE m.team_id = ? AND m.status = 'active'
+         AND m.role IN ('head_coach', 'coach')
+       ORDER BY m.created_at`,
+    )
+    .bind(teamId)
+    .all<{
+      user_id: string;
+      role: Role;
+      created_at: number;
+      contact: string;
+      name: string | null;
+      last_seen_at: number;
+    }>();
+
+  return results.map((row) => ({
+    userId: row.user_id,
+    contact: row.contact,
+    name: row.name,
+    role: row.role,
+    since: row.created_at,
+    pending: row.last_seen_at === NEVER_SEEN,
+  }));
+}
+
+/**
+ * Make somebody a coach here, directly.
+ *
+ * Never a demotion: a head coach appointed again stays head coach, and a
+ * pending request answered this way is admitted rather than left waiting. The
+ * caller is the one that checks whether the person doing it may — same rule as
+ * everywhere else, and the same reason: only the caller knows who's asking.
+ */
+export async function addTeamCoach(
+  db: D1Database,
+  teamId: string,
+  userId: string,
+  addedBy: string,
+  now = Date.now(),
+): Promise<void> {
+  await ensureAuthStore(db);
+  const existing = await membershipIn(db, userId, teamId);
+  const role: Role =
+    existing?.status === "active" && rank(existing.role) >= rank("coach")
+      ? existing.role
+      : "coach";
+
+  await db
+    .prepare(
+      `INSERT INTO memberships (team_id, user_id, role, status, created_at, decided_at, decided_by)
+       VALUES (?, ?, ?, 'active', ?, ?, ?)
+       ON CONFLICT(team_id, user_id) DO UPDATE SET
+         role = excluded.role, status = 'active',
+         decided_at = excluded.decided_at, decided_by = excluded.decided_by`,
+    )
+    .bind(teamId, userId, role, now, now, addedBy)
+    .run();
+}
+
+/**
+ * Step down, or take it off somebody else.
+ *
+ * Refuses the last one, exactly as a meet refuses its last administrator: a
+ * team with no coach can't admit anyone, hand the job on, or edit its own
+ * roster, and the only way back would be a database edit. Note what this
+ * removes is the membership — they're off the team, not quietly demoted to a
+ * viewer who still sees everything.
+ */
+export async function removeTeamCoach(
+  db: D1Database,
+  teamId: string,
+  userId: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  await ensureAuthStore(db);
+  const current = await teamCoaches(db, teamId);
+  if (!current.some((coach) => coach.userId === userId)) {
+    return { ok: false, reason: "They don't coach this team." };
+  }
+  if (current.length <= 1) {
+    return {
+      ok: false,
+      reason: "A team needs a coach. Add another one first.",
+    };
+  }
+  await removeMember(db, teamId, userId);
+  return { ok: true };
 }
 
 /* --------------------------------------------------------------- invites */

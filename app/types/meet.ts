@@ -171,6 +171,9 @@ export interface Team {
   code: string;
   /** Which season the app works in when nothing says otherwise. */
   currentSeasonId?: string;
+  /** Who set it up. Absent for the teams typed in as opponents before this
+   *  was recorded, and for the ones that predate accounts entirely. */
+  createdBy?: string;
 }
 
 /**

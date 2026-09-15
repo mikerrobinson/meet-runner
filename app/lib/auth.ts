@@ -173,13 +173,6 @@ export interface PendingRequest {
   requestedAt: number;
 }
 
-export async function listPending(teamId: string): Promise<PendingRequest[]> {
-  const body = await request<{ pending: PendingRequest[] }>(
-    `/api/memberships?teamId=${encodeURIComponent(teamId)}`,
-  );
-  return body.pending;
-}
-
 export async function decideRequest(
   teamId: string,
   userId: string,

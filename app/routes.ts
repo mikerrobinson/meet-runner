@@ -61,6 +61,7 @@ export default [
   // out at the door. Sync is for working a deck; this is for everyone else.
   route("api/teams", "routes/api.teams.ts"),
   route("api/teams/:teamId", "routes/api.public.team.ts"),
+  route("api/teams/:teamId/coaches", "routes/api.team.coaches.ts"),
   route("api/meets", "routes/api.public.meets.ts"),
   route("api/meets/:meetId", "routes/api.public.meet.ts"),
   route("api/meets/:meetId/admins", "routes/api.meet.admins.ts"),
