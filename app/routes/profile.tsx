@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { useFetcher } from "react-router";
 import type { Route } from "./+types/profile";
 import {
   Banner,
@@ -10,7 +11,17 @@ import {
   Segmented,
   TextInput,
 } from "~/components/ui";
-import { request } from "~/lib/http";
+import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
+import {
+  addIdentity,
+  consumeLoginCode,
+  identitiesFor,
+  removeIdentity,
+  setName as setAccountName,
+  startChallenge,
+} from "~/lib/auth.server";
+import { maskContact, parseContact } from "~/lib/identity";
+import { revealsCodes, sendLoginCode } from "~/lib/notify.server";
 import { useSession } from "~/state/session";
 import { useViewPrefs } from "~/state/view-prefs";
 
@@ -18,14 +29,95 @@ export function meta({}: Route.MetaArgs) {
   return [{ title: "Profile · Meet Runner" }];
 }
 
-interface Identity {
-  contact: string;
-  kind: string;
+/** Your name and your contacts, or null when nobody is signed in. */
+export async function loader({ request, context }: Route.LoaderArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  const db = requireDb(env);
+  const user = await currentUser(request, env);
+  // Signed out is the ordinary state of a fresh device, not an error — so it
+  // is an empty page rather than a 401 the screen has to catch.
+  if (!user) return { profile: null };
+
+  return {
+    profile: {
+      name: user.name,
+      identities: await identitiesFor(db, user.id),
+    },
+  };
 }
 
-interface Profile {
-  name: string | null;
-  identities: Identity[];
+/**
+ * Your name, and attaching or detaching a way to sign in.
+ *
+ * Adding a contact goes through the same challenge as signing in, and that
+ * isn't ceremony: an address you can't read isn't yours, and without the proof
+ * anyone could attach someone else's email to their own account and then use
+ * it to sign in as them.
+ */
+export async function action({ request, context }: Route.ActionArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  const db = requireDb(env);
+  const user = await currentUser(request, env);
+  if (!user) throw new Response("Sign in first.", { status: 401 });
+
+  const form = await request.formData();
+  const intent = String(form.get("intent") ?? "");
+
+  if (intent === "rename") {
+    await setAccountName(db, user.id, String(form.get("name") ?? "").trim().slice(0, 80));
+    return { ok: true, renamed: true };
+  }
+
+  if (intent === "contact-remove") {
+    const result = await removeIdentity(db, user.id, String(form.get("contact") ?? ""));
+    return result.ok ? { ok: true } : { ok: false, error: result.reason };
+  }
+
+  const parsed = parseContact(String(form.get("contact") ?? ""));
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+
+  /**
+   * Send a code to an address that isn't yet yours.
+   *
+   * The same path as signing in, so the same rate limit and the same expiry
+   * apply — but with no sign-in link attached, because this code attaches a
+   * contact to an account you are already inside and a link to the sign-in
+   * screen would be the wrong door.
+   */
+  if (intent === "contact-start") {
+    const start = await startChallenge(db, parsed.contact);
+    if (!start.ok) {
+      return {
+        ok: false,
+        error: `A code has just been sent. Try again in ${Math.ceil(start.retryInMs / 1000)}s.`,
+      };
+    }
+    const delivery = await sendLoginCode(env, parsed.contact, start.code, "");
+    return {
+      ok: true,
+      contact: parsed.contact.value,
+      masked: maskContact(parsed.contact),
+      detail: delivery.detail,
+      // Only ever in development, where no provider is configured.
+      ...(revealsCodes(env) ? { code: start.code } : {}),
+    };
+  }
+
+  if (intent === "contact-verify") {
+    // `consumeLoginCode`, not `verifyChallenge`: the code proves you can read
+    // the contact, and nothing more. Verifying here would mint an account for
+    // the new contact, which would then own it and refuse the attach below.
+    const spent = await consumeLoginCode(db, parsed.contact, String(form.get("code") ?? ""));
+    if (!spent.ok) {
+      return { ok: false, error: "That code didn't work. Ask for a new one." };
+    }
+    const result = await addIdentity(db, user.id, parsed.contact);
+    return result.ok
+      ? { ok: true, added: true }
+      : { ok: false, error: result.reason };
+  }
+
+  return { ok: false };
 }
 
 /**
@@ -35,57 +127,77 @@ interface Profile {
  * coach has a school address and a mobile, and either should open the same
  * account rather than minting a second one that owns none of their teams.
  */
-export default function ProfileScreen() {
+/** Whatever the action last answered, whichever intent was used. */
+interface ProfileResult {
+  ok?: boolean;
+  error?: string;
+  renamed?: boolean;
+  added?: boolean;
+  /** Echoed back by `contact-start`, so the code form knows what it is for. */
+  contact?: string;
+  masked?: string;
+  detail?: string;
+  /** Local builds only, where no provider is configured to send it. */
+  code?: string;
+}
+
+export default function ProfileScreen({ loaderData }: Route.ComponentProps) {
+  const { profile } = loaderData;
   const session = useSession();
   const { nameOrder, setNameOrder } = useViewPrefs();
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const fetcher = useFetcher<ProfileResult>();
 
+  const [name, setName] = useState(profile?.name ?? "");
   // Adding a contact is two steps: send a code, then prove it.
   const [adding, setAdding] = useState("");
   const [code, setCode] = useState("");
   const [awaiting, setAwaiting] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    request<Profile>("/api/profile")
-      .then((body) => {
-        setProfile(body);
-        setName(body.name ?? "");
-      })
-      .catch(() => setProfile(null));
-  }, []);
+  const busy = fetcher.state !== "idle";
+  const result = fetcher.data;
+  const error = result?.ok === false ? (result.error ?? "That didn't work.") : null;
 
-  useEffect(load, [load]);
+  /**
+   * What just happened, said in a banner.
+   *
+   * Composed here rather than returned as a sentence: the action reports what
+   * it did, and the wording is the screen's business.
+   */
+  const note = result?.renamed
+    ? "Name saved."
+    : result?.added
+      ? "Contact added."
+      : result?.masked
+        ? result.code
+          ? `No mail provider configured here — your code is ${result.code}.`
+          : `Code sent to ${result.masked}.`
+        : null;
 
-  const run = async (work: () => Promise<void>) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await work();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't work.");
-    } finally {
-      setBusy(false);
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !result?.ok) return;
+    // A code went out: move to the form that asks for it back.
+    if (result.contact) setAwaiting(result.contact);
+    // It came back good: the contact is attached, so the two-step is over.
+    if (result.added) {
+      setAwaiting(null);
+      setAdding("");
+      setCode("");
     }
-  };
+    // The header carries the name, and reads it from the session.
+    if (result.renamed) void session.refresh();
+    // The session object is rebuilt each render; the answer is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.state, result]);
 
-  if (session.status === "out") {
+  const submit = (fields: Record<string, string>) =>
+    fetcher.submit(fields, { method: "post" });
+
+  if (!profile) {
     return (
       <Card>
         <EmptyState title="Not signed in">
           Sign in to see your profile.
         </EmptyState>
-      </Card>
-    );
-  }
-
-  if (!profile) {
-    return (
-      <Card>
-        <p className="text-sm text-slate-500">Loading…</p>
       </Card>
     );
   }
@@ -112,18 +224,7 @@ export default function ProfileScreen() {
           <Button
             variant="primary"
             disabled={busy || name === (profile.name ?? "")}
-            onClick={() =>
-              void run(async () => {
-                await request("/api/profile", {
-                  method: "PATCH",
-                  body: JSON.stringify({ name }),
-                });
-                setNote("Name saved.");
-                load();
-                // The header shows it, so it has to hear about the change.
-                void session.refresh();
-              })
-            }
+            onClick={() => submit({ intent: "rename", name })}
           >
             Save
           </Button>
@@ -177,12 +278,9 @@ export default function ProfileScreen() {
                   variant="ghost"
                   disabled={busy}
                   onClick={() =>
-                    void run(async () => {
-                      await request("/api/profile", {
-                        method: "DELETE",
-                        body: JSON.stringify({ contact: identity.contact }),
-                      });
-                      load();
+                    submit({
+                      intent: "contact-remove",
+                      contact: identity.contact,
                     })
                   }
                 >
@@ -213,16 +311,10 @@ export default function ProfileScreen() {
                   variant="primary"
                   disabled={busy || !code.trim()}
                   onClick={() =>
-                    void run(async () => {
-                      await request("/api/profile", {
-                        method: "POST",
-                        body: JSON.stringify({ contact: awaiting, code }),
-                      });
-                      setAwaiting(null);
-                      setAdding("");
-                      setCode("");
-                      setNote("Contact added.");
-                      load();
+                    submit({
+                      intent: "contact-verify",
+                      contact: awaiting,
+                      code,
                     })
                   }
                 >
@@ -253,22 +345,7 @@ export default function ProfileScreen() {
               <Button
                 disabled={busy || !adding.trim()}
                 onClick={() =>
-                  void run(async () => {
-                    const body = await request<{
-                      masked?: string;
-                      code?: string;
-                      detail?: string;
-                    }>("/api/profile", {
-                      method: "POST",
-                      body: JSON.stringify({ contact: adding }),
-                    });
-                    setAwaiting(adding.trim());
-                    setNote(
-                      body.code
-                        ? `No mail provider configured here — your code is ${body.code}.`
-                        : `Code sent to ${body.masked ?? adding}.`,
-                    );
-                  })
+                  submit({ intent: "contact-start", contact: adding.trim() })
                 }
               >
                 Send a code

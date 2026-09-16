@@ -1,33 +1,38 @@
-import { useCallback, useEffect, useState } from "react";
-import { useRevalidator } from "react-router";
+import { useEffect, useState } from "react";
+import { useFetcher } from "react-router";
 import { Banner, Button, Card, SectionTitle, TextInput } from "./ui";
 import { PersonPicker } from "./PersonPicker";
-import { claimTeam, createInvite } from "~/lib/auth";
-import { request } from "~/lib/http";
 import { describeContact } from "~/lib/identity";
 import { useSession } from "~/state/session";
+import type { TeamAccess } from "~/lib/access";
 
-interface Coach {
+/** A coach as the page hands them over: the contact is null for a visitor. */
+export interface Coach {
   userId: string;
-  /** Null for anyone who isn't a coach here — see the endpoint. */
   contact: string | null;
   name: string | null;
   /** Invited, but has never signed in — so the contact is still unproven. */
   pending: boolean;
 }
 
-interface Roll {
-  coaches: Coach[];
-  youCoachThis: boolean;
-  /** Nobody coaches this team, so anyone signed in may take it on. */
-  claimable: boolean;
-}
-
-interface AddResult extends Pick<Roll, "coaches"> {
+/**
+ * What the team's action answers with, whichever intent was used.
+ *
+ * One loose shape rather than the action's own union: this card shares the
+ * action with the roster and the seasons, so typing it from `typeof action`
+ * would mean naming those results here to read the four fields it cares about.
+ */
+interface CoachResult {
+  ok?: boolean;
+  error?: string;
   sent?: boolean;
   detail?: string;
   /** Local builds only, so an invite can be followed with no provider set up. */
   link?: string;
+  /** The copyable invitation, from `invite-link`. Shown once. */
+  url?: string;
+  /** Set when the move changed which teams the caller coaches. */
+  standingChanged?: boolean;
 }
 
 /**
@@ -42,104 +47,68 @@ interface AddResult extends Pick<Roll, "coaches"> {
  * in as an opponent is a team nobody has ever signed in to. An empty list is
  * that state, and it's the only time somebody can let themselves in.
  *
- * Read from the server rather than from the session, which is what lets it be
- * right the moment a team is created or claimed: the session is fetched at
- * boot, so a coach who has just taken a team on isn't in the copy this device
- * holds yet.
+ * Rows and standing both arrive with the page, from the same request — which
+ * is what lets this be right the moment a team is claimed. It used to fetch
+ * the list itself and read standing from a session fetched at boot, so a coach
+ * who had just taken a team on wasn't in the copy the device held yet.
  */
-export function TeamMembers({ teamId }: { teamId: string }) {
+export function TeamMembers({
+  teamId,
+  coaches,
+  access,
+}: {
+  teamId: string;
+  coaches: Coach[];
+  access: TeamAccess;
+}) {
   const session = useSession();
-  // Taking a team on, or stepping down from it, changes what the page around
-  // this card may do — the loader worked that out before either happened, so
-  // it has to be asked again.
-  const { revalidate } = useRevalidator();
-
-  const [roll, setRoll] = useState<Roll | null>(null);
+  const fetcher = useFetcher<CoachResult>();
   const [adding, setAdding] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [invite, setInvite] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const path = `/api/teams/${encodeURIComponent(teamId)}/coaches`;
+  const busy = fetcher.state !== "idle";
+  const result = fetcher.data;
+  const error = result?.error ?? null;
+  const invite = result?.url ?? null;
 
-  const load = useCallback(() => {
-    request<Roll>(path)
-      .then(setRoll)
-      .catch(() => setRoll(null));
-  }, [path]);
+  const youCoachThis = access.coach;
+  const claimable = coaches.length === 0;
 
-  useEffect(load, [load]);
+  // The sheet closes on the answer, not on the tap — so an invitation that
+  // couldn't be sent still has somewhere to say so.
+  useEffect(() => {
+    if (fetcher.state === "idle" && result?.ok) setAdding(false);
+  }, [fetcher.state, result]);
 
-  if (roll === null) return null;
-  const { coaches, youCoachThis, claimable } = roll;
-
-  const add = async (body: Record<string, unknown>) => {
-    const result = await request<AddResult>(path, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    setRoll({ ...roll, coaches: result.coaches });
-    setAdding(false);
-    setError(null);
-    setNotice(
-      result.link
-        ? `Invitation ready. No provider is configured, so open it yourself: ${result.link}`
-        : result.sent === false
-          ? `They're a coach here, but nothing was sent. ${result.detail ?? ""}`.trim()
-          : null,
-    );
-  };
-
-  const remove = async (userId: string) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const body = await request<{ coaches: Coach[] }>(path, {
-        method: "DELETE",
-        body: JSON.stringify({ userId }),
-      });
-      setRoll({ ...roll, coaches: body.coaches });
-      // Stepping down is allowed, and it takes the controls with it.
-      load();
-      if (userId === session.user?.id) {
-        void session.refresh();
-        void revalidate();
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't work.");
-    } finally {
-      setBusy(false);
+  /**
+   * Tell the session provider its team list has moved.
+   *
+   * Claiming a team or stepping down changes which teams this account coaches,
+   * which the header and the team picker read from the session rather than
+   * from this page's loader. Only those two moves — adding somebody else or
+   * minting a link leaves your own standing exactly where it was, and the
+   * action says which is which rather than this guessing from the intent.
+   *
+   * Goes away with the provider itself, once the session is served by a loader
+   * like everything else.
+   */
+  useEffect(() => {
+    if (fetcher.state === "idle" && result?.standingChanged) {
+      void session.refresh();
     }
-  };
+    // The session object is rebuilt each render; the answer is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.state, result]);
 
-  /** Take on a team nobody coaches. Closes behind you — see the endpoint. */
-  const claim = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      session.adopt(await claimTeam(teamId));
-      load();
-      void revalidate();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't claim it.");
-    } finally {
-      setBusy(false);
-    }
-  };
+  const notice = result?.link
+    ? `Invitation ready. No provider is configured, so open it yourself: ${result.link}`
+    : result?.sent === false
+      ? `They're a coach here, but nothing was sent. ${result.detail ?? ""}`.trim()
+      : null;
 
-  const makeInvite = async () => {
-    setBusy(true);
-    setError(null);
+  const submit = (fields: Record<string, string>) => {
     setCopied(false);
-    try {
-      setInvite((await createInvite(teamId)).url);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't make an invitation.");
-    } finally {
-      setBusy(false);
-    }
+    fetcher.submit(fields, { method: "post", action: `/teams/${teamId}` });
   };
 
   return (
@@ -150,12 +119,12 @@ export function TeamMembers({ teamId }: { teamId: string }) {
             <Button size="sm" onClick={() => setAdding(true)} disabled={busy}>
               + Coach
             </Button>
-          ) : claimable && session.status === "in" ? (
+          ) : claimable && access.signedIn ? (
             <Button
               size="sm"
               variant="primary"
               disabled={busy}
-              onClick={() => void claim()}
+              onClick={() => submit({ intent: "claim" })}
             >
               This is my team
             </Button>
@@ -165,7 +134,7 @@ export function TeamMembers({ teamId }: { teamId: string }) {
         Coaches
       </SectionTitle>
 
-      {error && (
+      {error && !adding && (
         <div className="mb-3">
           <Banner tone="error">{error}</Banner>
         </div>
@@ -212,9 +181,11 @@ export function TeamMembers({ teamId }: { teamId: string }) {
                     size="sm"
                     variant="ghost"
                     disabled={busy}
-                    onClick={() => void remove(coach.userId)}
+                    onClick={() =>
+                      submit({ intent: "coach-remove", userId: coach.userId })
+                    }
                   >
-                    {coach.userId === session.user?.id ? "Step down" : "Remove"}
+                    {coach.userId === access.userId ? "Step down" : "Remove"}
                   </Button>
                 )}
               </li>
@@ -253,7 +224,11 @@ export function TeamMembers({ teamId }: { teamId: string }) {
               </Button>
             </>
           ) : (
-            <Button size="sm" disabled={busy} onClick={() => void makeInvite()}>
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => submit({ intent: "invite-link" })}
+            >
               Make an invite link
             </Button>
           )}
@@ -266,8 +241,14 @@ export function TeamMembers({ teamId }: { teamId: string }) {
           inviteTitle="Invite a coach"
           inviteHint="We'll send a link that signs them in and opens this team."
           exclude={coaches.map((coach) => coach.userId)}
-          onAppoint={(user) => add({ userId: user.userId })}
-          onInvite={(contact, name) => add({ contact, name })}
+          busy={busy}
+          error={error}
+          onAppoint={(user) =>
+            submit({ intent: "coach-add", userId: user.userId })
+          }
+          onInvite={(contact, name) =>
+            submit({ intent: "coach-invite", contact, ...(name ? { name } : {}) })
+          }
           onClose={() => setAdding(false)}
         />
       )}

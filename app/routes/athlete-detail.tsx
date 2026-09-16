@@ -7,7 +7,12 @@ import { Banner, Button, Card, EmptyState, SectionTitle } from "~/components/ui"
 import { formatTime } from "~/lib/time";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
 import { teamAccess } from "~/lib/access.server";
-import { getAthlete, putAthlete } from "~/lib/athletes.server";
+import {
+  athleteForUser,
+  getAthlete,
+  linkAthleteToUser,
+  putAthlete,
+} from "~/lib/athletes.server";
 import { enrol, listSeasons, getTeam } from "~/lib/teams.server";
 import { publicAthleteDetail } from "~/lib/public.server";
 import { describeUser } from "~/lib/auth.server";
@@ -106,6 +111,40 @@ export async function action({ params, request, context }: Route.ActionArgs) {
       squad: String(form.get("squad") ?? "") || undefined,
       status: form.get("status") === "inactive" ? "inactive" : "active",
     });
+    return { ok: true };
+  }
+
+  /**
+   * Which account is this swimmer, or none.
+   *
+   * A coach does this, never the person themselves. A roster record is an
+   * assertion about who somebody is, and letting anyone claim any swimmer
+   * would make it worthless — the coach is the one who knows which address
+   * belongs to which kid. The check is the guard above: a coach of a team this
+   * swimmer is actually on, which is what the form's `teamId` names.
+   *
+   * The account is whichever one the coach picked out of the whole directory.
+   * It used to have to be on the team first — back when a swimmer held a
+   * membership row of their own — which put a join-and-approve dance in front
+   * of the only fact being asserted. The contact proves itself when they sign
+   * in; nothing in between is needed.
+   */
+  if (intent === "link-account") {
+    const userId = String(form.get("userId") ?? "");
+
+    // One account, one swimmer. Two roster rows claiming the same person is a
+    // mistake worth refusing rather than quietly allowing.
+    if (userId) {
+      const held = await athleteForUser(db, userId);
+      if (held && held.id !== params.athleteId) {
+        return {
+          ok: false,
+          error: `That account is already ${held.firstName} ${held.lastName}.`.trim(),
+        };
+      }
+    }
+
+    await linkAthleteToUser(db, params.athleteId, userId || null);
     return { ok: true };
   }
 
@@ -323,11 +362,7 @@ export default function AthleteDetail({ loaderData }: Route.ComponentProps) {
 
       {mayEdit && teamId && (
         <>
-          <AthleteAccount
-            athlete={athlete}
-            teamId={teamId}
-            linked={loaderData.linked ?? null}
-          />
+          <AthleteAccount teamId={teamId} linked={loaderData.linked ?? null} />
 
           <Card>
             <SectionTitle>Roster</SectionTitle>

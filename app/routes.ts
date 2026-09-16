@@ -61,7 +61,6 @@ export default [
   // meet load it from their own loader; these are what the cards on those
   // screens ask for as somebody types.
   route("api/teams", "routes/api.teams.ts"),
-  route("api/teams/:teamId/coaches", "routes/api.team.coaches.ts"),
 
   // What the deck writes. Small, single-row endpoints: the outbox posts one of
   // these per thing somebody did, so two people working at once never touch
@@ -75,9 +74,7 @@ export default [
   route("api/auth/start", "routes/api.auth.start.ts"),
   route("api/auth/verify", "routes/api.auth.verify.ts"),
   route("api/auth/session", "routes/api.auth.session.ts"),
-  route("api/profile", "routes/api.profile.ts"),
   route("api/users", "routes/api.users.ts"),
-  route("api/athletes/:athleteId/link", "routes/api.athlete.link.ts"),
   route("api/invites", "routes/api.invites.ts"),
 
   // Timers. A meet-scoped grant, not an account.

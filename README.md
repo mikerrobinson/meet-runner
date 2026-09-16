@@ -444,9 +444,8 @@ being a store that had to be filled.
 | `POST`/`DELETE /api/meets/:id/seeds`                     | Who is in a lane                                             |
 | `POST`/`DELETE /api/meets/:id/watches`                   | Times, and dropping your own                                 |
 | `POST`/`DELETE /api/meets/:id/results`                   | Deciding a lane                                              |
-| `GET`/`POST`/`DELETE /api/teams/:id/coaches`             | Who coaches a team; claiming one nobody coaches              |
-| `POST /api/athletes/:id/link`                            | Say which account a swimmer is. Coaches only                 |
-| `/api/auth/*`, `/api/profile`, `/api/invites`            | Accounts, and links that hand out a job                      |
+| `/api/auth/*`                                            | Accounts and the codes that open them                        |
+| `GET /api/invites?token=`                                | What a link joins, read before anyone has signed in          |
 | `GET /api/timer/meet`                                    | What a scanned phone reads: the meet, as a timer sees it     |
 | `POST /api/meets/:id/timers/:timerId/:event/:heat/:lane` | One lane, one timer — body-less; the cookies are the payload |
 

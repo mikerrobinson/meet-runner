@@ -141,21 +141,6 @@ export async function signOut(everywhere = false): Promise<void> {
   }
 }
 
-/**
- * Take on a team nobody coaches.
- *
- * The only way into a team from outside it, and it only works while the team
- * has no coaches at all — see `claimTeam` on the server. Answers with the
- * fresh session, so the screen that called it can move on.
- */
-export async function claimTeam(teamId: string): Promise<Session> {
-  await request(`/api/teams/${encodeURIComponent(teamId)}/coaches`, {
-    method: "POST",
-    body: JSON.stringify({ claim: true }),
-  });
-  return readSession();
-}
-
 /** Start a team, with yourself coaching it. */
 export async function startTeam(
   name: string,
@@ -182,12 +167,3 @@ export async function inspectInvite(token: string): Promise<InviteInfo> {
   return request(`/api/invites?token=${encodeURIComponent(token)}`);
 }
 
-/** A link that makes whoever opens it a coach of this team. */
-export async function createInvite(
-  teamId: string,
-): Promise<{ token: string; url: string }> {
-  return request("/api/invites", {
-    method: "POST",
-    body: JSON.stringify({ teamId }),
-  });
-}

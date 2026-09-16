@@ -13,9 +13,23 @@ import {
 } from "~/components/ui";
 import { TeamMembers } from "~/components/TeamMembers";
 import { AthleteSheet } from "~/components/AthleteSheet";
-import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
+import {
+  appBaseUrl,
+  currentUser,
+  requireDb,
+  type SyncEnv,
+} from "~/lib/api.server";
 import { teamAccess } from "~/lib/access.server";
 import { publicTeamDetail } from "~/lib/public.server";
+import {
+  addTeamCoach,
+  claimTeam,
+  removeTeamCoach,
+  teamCoaches,
+} from "~/lib/coaches.server";
+import { createInvite, inviteUser, supersedeInvites } from "~/lib/auth.server";
+import { parseContact } from "~/lib/identity";
+import { revealsCodes, sendTeamInvite } from "~/lib/notify.server";
 import { createSeason, enrol, getTeam, updateTeam } from "~/lib/teams.server";
 import { putAthlete } from "~/lib/athletes.server";
 import { downloadFile, parseRosterCsv, toCsv } from "~/lib/csv";
@@ -48,14 +62,35 @@ const TEMPLATE = toCsv([
  */
 export async function loader({ params, request, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env as SyncEnv;
-  if (!env.DB) return { team: null, access: null, swimCounts: {} };
+  if (!env.DB) {
+    return {
+      team: null,
+      access: null,
+      coaches: [],
+      currentSeasonId: null,
+      swimCounts: {},
+    };
+  }
 
   try {
     const user = await currentUser(request, env);
-    const [team, access] = await Promise.all([
+    const [team, access, roll] = await Promise.all([
       publicTeamDetail(env.DB, params.teamId),
       teamAccess(env.DB, params.teamId, user),
+      teamCoaches(env.DB, params.teamId),
     ]);
+
+    /**
+     * Who coaches this team is as public as the team is — it's on the heat
+     * sheet. How to reach them isn't, so the contact goes only to the people
+     * who already have it. That is the one difference from a meet's
+     * administrators: a meet is an event you turn up to, a team is a school
+     * full of children.
+     */
+    const coaches = roll.map((coach) => ({
+      ...coach,
+      contact: access.coach ? coach.contact : null,
+    }));
 
     // Which season the team treats as current is a fact about running the
     // team, not about reading it, so the public projection leaves it out.
@@ -77,13 +112,20 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
     return {
       team,
       access,
+      coaches,
       currentSeasonId: record?.currentSeasonId ?? null,
       swimCounts: Object.fromEntries(
         (swims?.results ?? []).map((row) => [row.id, row.n]),
       ),
     };
   } catch {
-    return { team: null, access: null, currentSeasonId: null, swimCounts: {} };
+    return {
+      team: null,
+      access: null,
+      coaches: [],
+      currentSeasonId: null,
+      swimCounts: {},
+    };
   }
 }
 
@@ -102,14 +144,35 @@ export async function action({ params, request, context }: Route.ActionArgs) {
   const user = await currentUser(request, env);
 
   const access = await teamAccess(db, params.teamId, user);
-  if (!access.coach) {
+  const form = await request.formData();
+  const intent = String(form.get("intent") ?? "roster");
+
+  /**
+   * Taking on a team nobody coaches — the one move made from outside.
+   *
+   * Answered above the check everything else goes through, because passing
+   * that check is exactly what it's asking for. `claimTeam` refuses the moment
+   * anybody is already there, so the opening closes behind whoever walks
+   * through it; being signed in is the only other requirement.
+   */
+  if (intent === "claim") {
+    if (!access.userId) {
+      return { ok: false, error: "Sign in first." };
+    }
+    const claimed = await claimTeam(db, params.teamId, access.userId);
+    return claimed.ok
+      ? { ok: true, standingChanged: true }
+      : { ok: false, error: claimed.reason };
+  }
+
+  if (!access.coach || !access.userId) {
     throw new Response("Only a coach of this team can change that.", {
       status: 403,
     });
   }
-
-  const form = await request.formData();
-  const intent = String(form.get("intent") ?? "roster");
+  // Who is doing it, for the rows that remember who let somebody in. Past the
+  // check above there is always somebody to name.
+  const actor = access.userId;
 
   if (intent === "team") {
     await updateTeam(db, params.teamId, {
@@ -149,6 +212,92 @@ export async function action({ params, request, context }: Route.ActionArgs) {
     return { ok: true };
   }
 
+  /**
+   * Who coaches here.
+   *
+   * The same four moves the meet's administrator list has, behind the same one
+   * check — being in `team_coaches` is the permission, so the guard above is
+   * the whole of it. Stepping down passes it for the same reason removing
+   * somebody else does: you are only in the list if you coach here.
+   */
+  if (intent === "coach-add") {
+    const userId = String(form.get("userId") ?? "");
+    if (!userId) return { ok: false, error: "Which person?" };
+    await addTeamCoach(db, params.teamId, userId, actor);
+    return { ok: true };
+  }
+
+  if (intent === "coach-remove") {
+    const userId = String(form.get("userId") ?? "");
+    const result = await removeTeamCoach(db, params.teamId, userId);
+    // Refusing to remove the last coach is an ordinary answer the card shows,
+    // not a failure — so it comes back as data rather than being thrown.
+    // Stepping down is the only removal that changes the caller's own standing.
+    return result.ok
+      ? { ok: true, standingChanged: userId === actor }
+      : { ok: false, error: result.reason };
+  }
+
+  /**
+   * Somebody who may not have an account yet.
+   *
+   * `inviteUser` returns the existing account when the contact already has
+   * one, so typing an address that turns out to belong to a member makes them
+   * a coach rather than minting a second account for the same person.
+   */
+  if (intent === "coach-invite") {
+    const parsed = parseContact(String(form.get("contact") ?? ""));
+    if (!parsed.ok) return { ok: false, error: parsed.error };
+
+    const name = String(form.get("name") ?? "").trim() || null;
+    const { user: invitee } = await inviteUser(db, parsed.contact, name);
+    await addTeamCoach(db, params.teamId, invitee.id, actor);
+
+    // Resending replaces the outstanding link rather than adding a second.
+    await supersedeInvites(db, {
+      teamId: params.teamId,
+      contact: parsed.contact.value,
+    });
+    const token = await createInvite(
+      db,
+      { teamId: params.teamId, contact: parsed.contact.value },
+      actor,
+    );
+    const link = `${appBaseUrl(request)}sign-in?invite=${encodeURIComponent(token)}`;
+    const team = await getTeam(db, params.teamId);
+    const delivery = await sendTeamInvite(
+      env,
+      parsed.contact,
+      team?.name ?? "a team",
+      link,
+    );
+
+    return {
+      ok: true,
+      sent: delivery.sent,
+      detail: delivery.detail,
+      // Local builds only, exactly as with login codes: without a provider
+      // configured there is otherwise no way to follow your own invite.
+      ...(revealsCodes(env) ? { link } : {}),
+    };
+  }
+
+  /**
+   * A link a coach sends themselves.
+   *
+   * The addressed version is `coach-invite`, where the server does the
+   * sending; this is the one you paste into a group chat. Either way the link
+   * is the credential, so it comes back exactly once — a coach who loses it
+   * makes another rather than looking the old one up.
+   */
+  if (intent === "invite-link") {
+    const token = await createInvite(db, { teamId: params.teamId }, actor);
+    return {
+      ok: true,
+      url: `${appBaseUrl(request)}sign-in?invite=${encodeURIComponent(token)}`,
+    };
+  }
+
   const seasonId = String(form.get("seasonId") ?? "");
   const entries = JSON.parse(
     String(form.get("entries") ?? "[]"),
@@ -181,7 +330,7 @@ export async function action({ params, request, context }: Route.ActionArgs) {
 }
 
 export default function TeamDetail({ loaderData }: Route.ComponentProps) {
-  const { team, access, currentSeasonId } = loaderData;
+  const { team, access, coaches, currentSeasonId } = loaderData;
   const swimCounts = new Map(Object.entries(loaderData.swimCounts));
   const fetcher = useFetcher();
   const { nameOrder } = useViewPrefs();
@@ -566,7 +715,7 @@ export default function TeamDetail({ loaderData }: Route.ComponentProps) {
       {/* Not gated on being a coach: who coaches a team is on every heat
           sheet, and the card shows its own controls to whoever may use them —
           the same way a meet's administrators are listed to everybody. */}
-      <TeamMembers teamId={team.id} />
+      <TeamMembers teamId={team.id} coaches={coaches} access={access} />
 
       {mayEdit && (
         <Card>
