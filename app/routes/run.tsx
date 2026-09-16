@@ -178,7 +178,6 @@ export default function RunMeet() {
   } | null>(null);
   const [view, setView] = useState<"control" | "stopwatch" | null>(null);
   const showing = view ?? (access.admin ? "control" : "stopwatch");
-  console.log(">>>>>>>>>>>>>>", view, access.admin, showing);
 
   const [editingLane, setEditingLane] = useState<number | null>(null);
   const [assigningLane, setAssigningLane] = useState<number | null>(null);
@@ -209,7 +208,8 @@ export default function RunMeet() {
 
   /** The swims in the heat on screen. A lane with nobody in it isn't one. */
   const seeds = useMemo(
-    () => (event && heat !== undefined ? seedsForHeat(detail, event.id, heat) : []),
+    () =>
+      event && heat !== undefined ? seedsForHeat(detail, event.id, heat) : [],
     [detail, event, heat],
   );
   const seedByLane = useMemo(
@@ -218,9 +218,7 @@ export default function RunMeet() {
   );
 
   const running =
-    heat !== undefined &&
-    clock?.heat === heat &&
-    clock?.eventId === event?.id;
+    heat !== undefined && clock?.heat === heat && clock?.eventId === event?.id;
 
   // Derived, not stored: each lane's time comes from the watches on it, so
   // several timers can be recording at once without colliding.
@@ -430,7 +428,10 @@ export default function RunMeet() {
               <LaneTile
                 key={lane}
                 lane={lane}
-                athlete={findAthlete(roster, seedByLane.get(lane)?.athleteId ?? null)}
+                athlete={findAthlete(
+                  roster,
+                  seedByLane.get(lane)?.athleteId ?? null,
+                )}
                 time={timeByLane.get(lane)}
                 stoppedHere={stoppedByMe.has(lane)}
                 running={running}
@@ -628,50 +629,53 @@ export default function RunMeet() {
         />
       )}
 
-      {editingLane !== null && (() => {
-        const seed = seedByLane.get(editingLane);
-        if (!seed) return null;
-        const athlete = findAthlete(roster, seed.athleteId);
-        return (
-          <LaneSheet
-            lane={editingLane}
-            onClose={() => setEditingLane(null)}
-            time={timeByLane.get(editingLane)}
-            swimmerLabel={
-              athlete ? displayName(athlete, nameOrder) : `Lane ${editingLane}`
-            }
-            watches={watchesOn(detail, seed.id).filter(
-              (w) => w.timeMs !== undefined,
-            )}
-            timerId={mine}
-            onSaveTime={(timeMs) => {
-              send({
-                kind: "watch",
-                meetId: meet.id,
-                seedId: seed.id,
-                timerId: mine,
-                userId: access.userId ?? undefined,
-                role: myRole,
-                timeMs,
-                recordedAt: Date.now(),
-              });
-              setEditingLane(null);
-            }}
-            onRemoveWatch={(who) =>
-              send({
-                kind: "drop-watch",
-                meetId: meet.id,
-                seedId: seed.id,
-                timerId: who,
-              })
-            }
-            onRemoveFromLane={() => {
-              send({ kind: "unseed", meetId: meet.id, seedId: seed.id });
-              setEditingLane(null);
-            }}
-          />
-        );
-      })()}
+      {editingLane !== null &&
+        (() => {
+          const seed = seedByLane.get(editingLane);
+          if (!seed) return null;
+          const athlete = findAthlete(roster, seed.athleteId);
+          return (
+            <LaneSheet
+              lane={editingLane}
+              onClose={() => setEditingLane(null)}
+              time={timeByLane.get(editingLane)}
+              swimmerLabel={
+                athlete
+                  ? displayName(athlete, nameOrder)
+                  : `Lane ${editingLane}`
+              }
+              watches={watchesOn(detail, seed.id).filter(
+                (w) => w.timeMs !== undefined,
+              )}
+              timerId={mine}
+              onSaveTime={(timeMs) => {
+                send({
+                  kind: "watch",
+                  meetId: meet.id,
+                  seedId: seed.id,
+                  timerId: mine,
+                  userId: access.userId ?? undefined,
+                  role: myRole,
+                  timeMs,
+                  recordedAt: Date.now(),
+                });
+                setEditingLane(null);
+              }}
+              onRemoveWatch={(who) =>
+                send({
+                  kind: "drop-watch",
+                  meetId: meet.id,
+                  seedId: seed.id,
+                  timerId: who,
+                })
+              }
+              onRemoveFromLane={() => {
+                send({ kind: "unseed", meetId: meet.id, seedId: seed.id });
+                setEditingLane(null);
+              }}
+            />
+          );
+        })()}
     </div>
   );
 }
@@ -770,7 +774,7 @@ function LaneSheet({
 
   return (
     <Sheet open title={`Lane ${lane} · ${swimmerLabel}`} onClose={onClose}>
-      {(
+      {
         <div className="space-y-3">
           <Field
             label="Time"
@@ -861,7 +865,7 @@ function LaneSheet({
             </Button>
           )}
         </div>
-      )}
+      }
     </Sheet>
   );
 }
