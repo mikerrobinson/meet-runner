@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { useFetcher } from "react-router";
 import { Banner, Button, Field, Sheet, TextInput } from "./ui";
-import { request } from "~/lib/http";
 import { exactTeam, rankTeams } from "~/lib/team-search";
 import type { PublicTeam } from "~/lib/public";
 
@@ -29,19 +29,31 @@ export function TeamPicker({
   onPick: (team: PublicTeam) => void;
   onCancel: () => void;
 }) {
-  const [known, setKnown] = useState<PublicTeam[] | null>(null);
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  /** Teams minted here, so the list needn't be re-fetched to show them. */
+  const [minted, setMinted] = useState<PublicTeam[]>([]);
 
+  /**
+   * The list, which is one of the two things left with a URL of its own.
+   *
+   * A search box against every team on the server has to be able to ask
+   * without a page behind it — and this sheet renders inside three different
+   * screens, none of which is about teams.
+   */
+  const list = useFetcher<{ teams: PublicTeam[] }>();
   useEffect(() => {
-    request<{ teams: PublicTeam[] }>("/api/teams")
-      .then((body) => setKnown(body.teams))
-      .catch(() =>
-        setError("Couldn't load the list of teams. You can still create one."),
-      );
+    list.load("/api/teams");
+    // Loading once on mount is the whole body; the fetcher is rebuilt each
+    // render and is not a trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const loaded = list.data?.teams ?? null;
+  const known = loaded && [
+    ...loaded,
+    ...minted.filter((t) => !loaded.some((k) => k.id === t.id)),
+  ];
   const teams = known ?? [];
   const candidates = useMemo(
     () => rankTeams(teams, query, exclude),
@@ -54,10 +66,8 @@ export function TeamPicker({
 
   /** Adopt what the server handed back, so the list needn't be re-fetched. */
   const adopt = (team: PublicTeam) => {
-    setKnown((current) =>
-      current && !current.some((t) => t.id === team.id)
-        ? [...current, team]
-        : current,
+    setMinted((current) =>
+      current.some((t) => t.id === team.id) ? current : [...current, team],
     );
     setCreating(false);
     onPick(team);
@@ -65,7 +75,11 @@ export function TeamPicker({
 
   return (
     <div className="space-y-2">
-      {error && <Banner tone="warn">{error}</Banner>}
+      {list.state === "idle" && !loaded && (
+        <Banner tone="warn">
+          Couldn&rsquo;t load the list of teams. You can still create one.
+        </Banner>
+      )}
 
       <TextInput
         value={query}
@@ -76,7 +90,7 @@ export function TeamPicker({
         autoFocus
       />
 
-      {known === null && !error ? (
+      {known === null && list.state !== "idle" ? (
         <p className="py-2 text-sm text-slate-500">Loading teams…</p>
       ) : (
         <ul className="max-h-56 overflow-y-auto">
@@ -191,31 +205,36 @@ function NewTeamSheet({
 }) {
   const [value, setValue] = useState(name);
   const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  const save = async () => {
+  /**
+   * Submitted to whichever screen this is open on.
+   *
+   * The new-meet sheet and a meet's own page both host the picker, and both
+   * already have an action guarding who may change that meet — so the check
+   * that matters is the one already there, and creating a team needs no
+   * endpoint of its own to re-derive it.
+   */
+  const fetcher = useFetcher<{ ok?: boolean; error?: string; team?: PublicTeam }>();
+  const busy = fetcher.state !== "idle";
+  const error = fetcher.data?.error ?? null;
+
+  // The answer carries the team, whether it was just made or already existed —
+  // so racing somebody twice can't mint a duplicate even from here.
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data?.team) {
+      onCreated(fetcher.data.team);
+    }
+    // The callback is rebuilt each render; the answer is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetcher.state, fetcher.data]);
+
+  const save = () => {
     const trimmed = value.trim();
     if (!trimmed) return;
-    setBusy(true);
-    setError(null);
-    try {
-      // The server hands back the existing team if this name is already one,
-      // so racing somebody twice can't mint a duplicate even from here.
-      const body = await request<{ team: PublicTeam }>("/api/teams", {
-        method: "POST",
-        body: JSON.stringify({ name: trimmed, code: code.trim() || undefined }),
-      });
-      onCreated(body.team);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Couldn't create that team. You may need to sign in.",
-      );
-    } finally {
-      setBusy(false);
-    }
+    fetcher.submit(
+      { intent: "new-team", name: trimmed, code: code.trim() },
+      { method: "post" },
+    );
   };
 
   return (
@@ -255,7 +274,7 @@ function NewTeamSheet({
           size="lg"
           full
           disabled={!value.trim() || busy}
-          onClick={() => void save()}
+          onClick={save}
         >
           {busy ? "Creating…" : "Create team"}
         </Button>

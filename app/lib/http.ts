@@ -1,8 +1,14 @@
 /**
- * Talking to this app's own API.
+ * Where this app lives, and what a call to it can go wrong with.
  *
- * One place that knows where the API is and what credentials to attach, so
- * syncing and signing in can't drift apart on either question.
+ * Everything is served under a basename in production and at the root in dev,
+ * so anything building a URL by hand goes through here.
+ *
+ * This file used to hold a `request` helper too — the one place that knew what
+ * credentials to attach to a call. Nothing is left to attach: the session is
+ * an `HttpOnly` cookie the browser sends by itself, and every screen asks its
+ * own loader rather than an endpoint. What still calls out by hand is the
+ * outbox and the timer, neither of which has a page behind it.
  */
 
 /**
@@ -39,37 +45,4 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
   }
-}
-
-/**
- * A request to this app's own API.
- *
- * Nothing is attached. Who is asking rides in the session cookie, which is
- * `HttpOnly` and sent by the browser on every same-origin request — so there
- * is no credential in this file to forget, and none in `localStorage` for a
- * script on the page to read. Two headers used to be assembled here, a shared
- * "sync token" and a copy of the session; by the end both were empty strings.
- */
-export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(apiUrl(path), {
-      ...init,
-      headers: { "content-type": "application/json", ...init?.headers },
-    });
-  } catch {
-    // No network, DNS failure, request aborted — nothing reached the server.
-    throw new ApiError("Couldn't reach the server", 0);
-  }
-
-  const body = await response.json().catch(() => null);
-
-  if (!response.ok) {
-    const message =
-      (body as { error?: string } | null)?.error ??
-      `Request failed (${response.status})`;
-    throw new ApiError(message, response.status);
-  }
-
-  return body as T;
 }

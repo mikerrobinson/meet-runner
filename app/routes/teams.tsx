@@ -14,7 +14,7 @@ import {
 import { listPublicTeams } from "~/lib/public.server";
 import { useSession } from "~/state/session";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
-import { startTeam } from "~/lib/auth.server";
+import { findOrCreateTeam } from "~/lib/new-team.server";
 import { normalizeTeamCode } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
@@ -49,9 +49,10 @@ export async function loader({ context }: Route.LoaderArgs) {
  * along could take it.
  *
  * A name that's already here is answered with the team that has it rather than
- * a second copy. Two "Horizon"s is the failure this guards against, and it's
- * the same rule `POST /api/teams` follows when a meet is being set up against
- * an opponent.
+ * a second copy — `findOrCreateTeam`, the same rule the meet screens follow
+ * when an opponent is typed in. The difference is only what to do about it:
+ * there it is picked up and raced, here you are told, because somebody on this
+ * page meant to start a team and should find out that theirs already exists.
  */
 export async function action({ request, context }: Route.ActionArgs) {
   const env = context.cloudflare.env as SyncEnv;
@@ -63,26 +64,21 @@ export async function action({ request, context }: Route.ActionArgs) {
   const name = String(form.get("name") ?? "").trim().slice(0, 80);
   if (!name) return { error: "A team needs a name." };
 
-  const existing = await listPublicTeams(db);
-  const clash = existing.find(
-    (team) => team.name.toLowerCase() === name.toLowerCase(),
-  );
-  if (clash) {
-    return {
-      error: clash.claimed
-        ? `${clash.name} is already here. A coach there can add you.`
-        : `${clash.name} is already here, and nobody coaches it yet. Open it and take it on.`,
-      teamId: clash.id,
-    };
-  }
-
-  // The team, its first season and the coach are written together — see
-  // `startTeam`, which exists so a team started here can never be mistaken for
-  // one of the unclaimed ones.
-  const team = await startTeam(db, user.id, {
+  const { team, created } = await findOrCreateTeam(db, {
     name,
     code: String(form.get("code") ?? "") || undefined,
+    by: user.id,
+    coachId: user.id,
   });
+
+  if (!created) {
+    return {
+      error: team.claimed
+        ? `${team.name} is already here. A coach there can add you.`
+        : `${team.name} is already here, and nobody coaches it yet. Open it and take it on.`,
+      teamId: team.id,
+    };
+  }
 
   return redirect(`/teams/${team.id}`);
 }

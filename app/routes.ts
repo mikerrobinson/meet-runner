@@ -67,13 +67,10 @@ export default [
   route("api/teams", "routes/api.teams.ts"),
   route("api/users", "routes/api.users.ts"),
 
-  // What the deck writes. Small, single-row endpoints: the outbox posts one of
-  // these per thing somebody did, so two people working at once never touch
-  // the same row.
-  route("api/meets/:meetId/entries", "routes/api.meet.entries.ts"),
-  route("api/meets/:meetId/seeds", "routes/api.meet.seeds.ts"),
-  route("api/meets/:meetId/watches", "routes/api.meet.watches.ts"),
-  route("api/meets/:meetId/results", "routes/api.meet.results.ts"),
+  // What the deck writes. One row per call, so two people working at once
+  // never touch the same row — and one endpoint, because what arrives is the
+  // outbox's own `Write` rather than a shape invented for the URL.
+  route("api/meets/:meetId/writes", "routes/api.meet.writes.ts"),
 
   // Timers. A meet-scoped grant, not an account.
   // One lane, one timer. The phone posts here and the browser brings whatever

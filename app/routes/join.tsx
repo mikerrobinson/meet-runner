@@ -2,13 +2,44 @@ import { useEffect, useState } from "react";
 import { useFetcher, useNavigate, useSearchParams } from "react-router";
 import type { Route } from "./+types/join";
 import { Banner, Button, Card, Field, SectionTitle, TextInput } from "~/components/ui";
-import { request } from "~/lib/http";
+import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
+import { findOrCreateTeam } from "~/lib/new-team.server";
 import { APP_HOME } from "./home";
 import { describeContact } from "~/lib/identity";
 import { useSession } from "~/state/session";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Find your team · Meet Runner" }];
+}
+
+/**
+ * Starting a team from the one screen where you have none.
+ *
+ * The same rule as everywhere else — a name already here means the team that
+ * has it — which on this screen is a happy answer rather than a refusal: the
+ * person is looking for their school, and being handed it is what they came
+ * for. If nobody coaches it they can take it on from the list above.
+ */
+export async function action({ request, context }: Route.ActionArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  const db = requireDb(env);
+  const user = await currentUser(request, env);
+  if (!user) throw new Response("Sign in to start a team", { status: 403 });
+
+  const name = String((await request.formData()).get("name") ?? "").trim();
+  if (!name) return { ok: false as const, error: "A team needs a name." };
+
+  const { created } = await findOrCreateTeam(db, {
+    name,
+    by: user.id,
+    coachId: user.id,
+  });
+  return created
+    ? { ok: true as const }
+    : {
+        ok: false as const,
+        error: `${name} is already here. If nobody coaches it, take it on above; otherwise a coach there can add you.`,
+      };
 }
 
 /**
@@ -30,7 +61,6 @@ export default function Join() {
   const [params] = useSearchParams();
   const carried = params.get("notice");
 
-  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [starting, setStarting] = useState(false);
@@ -44,6 +74,11 @@ export default function Join() {
    */
   const claiming = useFetcher<{ ok?: boolean; error?: string }>();
   const claimError = claiming.data?.ok === false ? claiming.data.error : null;
+
+  /** Starting one, answered by this screen's own action. */
+  const newTeam = useFetcher<typeof action>();
+  const startError =
+    newTeam.data && !newTeam.data.ok ? newTeam.data.error : null;
 
   /**
    * Leaving, in either direction.
@@ -70,6 +105,11 @@ export default function Join() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [claiming.state, claiming.data]);
 
+  useEffect(() => {
+    if (newTeam.state === "idle" && newTeam.data?.ok) void session.refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newTeam.state, newTeam.data]);
+
   // Only the unclaimed ones can be acted on from here. A team with a coach is
   // theirs to hand out, so it isn't offered.
   const offered = session.joinable.filter((team) => !team.claimed);
@@ -92,23 +132,10 @@ export default function Join() {
     );
   };
 
-  const start = async () => {
-    setBusy("new");
+  /** The server writes the team, its first season and the coach together. */
+  const start = () => {
     setError(null);
-    try {
-      // The server writes the team, its first season and the coach together.
-      await request("/api/teams", {
-        method: "POST",
-        body: JSON.stringify({ name: name.trim() || "My Team", coach: true }),
-      });
-      // Which teams this account coaches has just changed, and that is what
-      // the effect above is waiting on.
-      await session.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't start the team.");
-    } finally {
-      setBusy(null);
-    }
+    newTeam.submit({ name: name.trim() || "My Team" }, { method: "post" });
   };
 
   return (
@@ -121,8 +148,8 @@ export default function Join() {
       </div>
 
       {carried && <Banner tone="warn">{carried}</Banner>}
-      {(error ?? claimError) && (
-        <Banner tone="error">{error ?? claimError}</Banner>
+      {(error ?? claimError ?? startError) && (
+        <Banner tone="error">{error ?? claimError ?? startError}</Banner>
       )}
 
       {offered.length > 0 && (
@@ -155,7 +182,7 @@ export default function Join() {
                 <Button
                   size="sm"
                   variant="primary"
-                  disabled={busy !== null || claiming.state !== "idle"}
+                  disabled={claiming.state !== "idle"}
                   onClick={() => claim(team.teamId)}
                 >
                   This is mine
@@ -186,12 +213,15 @@ export default function Join() {
             <div className="grid grid-cols-2 gap-2">
               <Button
                 variant="primary"
-                disabled={busy !== null}
-                onClick={() => void start()}
+                disabled={newTeam.state !== "idle"}
+                onClick={start}
               >
                 Create
               </Button>
-              <Button disabled={busy !== null} onClick={() => setStarting(false)}>
+              <Button
+                disabled={newTeam.state !== "idle"}
+                onClick={() => setStarting(false)}
+              >
                 Cancel
               </Button>
             </div>

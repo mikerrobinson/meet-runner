@@ -13,6 +13,7 @@ import {
   TextInput,
 } from "~/components/ui";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
+import { findOrCreateTeam } from "~/lib/new-team.server";
 import { coachedTeamsFor } from "~/lib/auth.server";
 import { createMeet, listMeets, type MeetSummary } from "~/lib/meets.server";
 import { addMeetAdmin } from "~/lib/admins.server";
@@ -70,6 +71,26 @@ export async function action({ request, context }: Route.ActionArgs) {
   if (!user) throw new Response("Sign in to create a meet", { status: 403 });
 
   const form = await request.formData();
+
+  /**
+   * A school typed into the picker that isn't on the app yet.
+   *
+   * Minted unclaimed, and handed straight back so the picker can put it in the
+   * list it is showing. `findOrCreateTeam` answers with the existing team if
+   * that name is already one, so racing somebody twice can't produce a second
+   * copy of them even from here.
+   */
+  if (String(form.get("intent")) === "new-team") {
+    const name = String(form.get("name") ?? "").trim();
+    if (!name) return { ok: false, error: "A team needs a name." };
+    const { team } = await findOrCreateTeam(db, {
+      name,
+      code: String(form.get("code") ?? "") || undefined,
+      by: user.id,
+    });
+    return { ok: true, team };
+  }
+
   const type = String(form.get("type") ?? "dual") as MeetType;
   const course = form.get("course");
   const lanes = Number(form.get("laneCount"));

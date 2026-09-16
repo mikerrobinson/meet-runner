@@ -439,16 +439,12 @@ being a store that had to be filled.
 |                                                          |                                                              |
 | -------------------------------------------------------- | ------------------------------------------------------------ |
 | `GET /api/teams`, `GET /api/users`                       | Searching as somebody types, for the team and person pickers |
-| `POST /api/teams`                                        | Start a team you coach, or mint an unclaimed opponent        |
-| `POST`/`DELETE /api/meets/:id/entries`                   | Enter or scratch one swimmer                                 |
-| `POST`/`DELETE /api/meets/:id/seeds`                     | Who is in a lane                                             |
-| `POST`/`DELETE /api/meets/:id/watches`                   | Times, and dropping your own                                 |
-| `POST`/`DELETE /api/meets/:id/results`                   | Deciding a lane                                              |
+| `POST /api/meets/:id/writes`                             | One `Write` off the outbox — an entry, a lane, a time, a call |
 | `GET /api/timer/meet`                                    | What a scanned phone reads: the meet, as a timer sees it     |
 | `POST /api/meets/:id/timers/:timerId/:event/:heat/:lane` | One lane, one timer — body-less; the cookies are the payload |
 
-The four meet-write rows are the outbox's transport (see above) and the last row is
-the timing protocol; the two searches answer a picker as somebody types.
+The writes row is the outbox's transport (see above) and the last row is the timing
+protocol; the two searches answer a picker as somebody types.
 
 Signing in has no endpoint. It is the sign-in screen's own action, and it ends in a
 redirect carrying the session cookie — which is the whole credential. Nothing is kept

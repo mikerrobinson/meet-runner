@@ -22,6 +22,7 @@ import {
   type SyncEnv,
 } from "~/lib/api.server";
 import { addMeetAdmin, meetAdmins, removeMeetAdmin } from "~/lib/admins.server";
+import { findOrCreateTeam } from "~/lib/new-team.server";
 import { activeGrant, issueGrant, revokeGrants } from "~/lib/grants.server";
 import { createInvite, inviteUser, supersedeInvites } from "~/lib/auth.server";
 import { parseContact } from "~/lib/identity";
@@ -135,6 +136,25 @@ export async function action({ params, request, context }: Route.ActionArgs) {
       hostTeamId: teamIds.includes(host) ? host : "",
     });
     return { ok: true };
+  }
+
+  /**
+   * A school typed into the picker that isn't on the app yet.
+   *
+   * Minted unclaimed, and handed straight back so the picker can put it in the
+   * list it is showing. `findOrCreateTeam` answers with the existing team if
+   * that name is already one, so racing somebody twice can't produce a second
+   * copy of them even from here.
+   */
+  if (String(form.get("intent")) === "new-team") {
+    const name = String(form.get("name") ?? "").trim();
+    if (!name) return { ok: false, error: "A team needs a name." };
+    const { team } = await findOrCreateTeam(db, {
+      name,
+      code: String(form.get("code") ?? "") || undefined,
+      by: actor,
+    });
+    return { ok: true, team };
   }
 
   if (intent === "add-event") {

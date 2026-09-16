@@ -1,0 +1,252 @@
+import type { Route } from "./+types/api.meet.writes";
+import {
+  SyncError,
+  currentUser,
+  errorResponse,
+  json,
+  readJson,
+  requireDb,
+  type SyncEnv,
+} from "~/lib/api.server";
+import {
+  mayDecide,
+  mayEnter,
+  mayRecordTime,
+  meetAccess,
+} from "~/lib/access.server";
+import {
+  addEntry,
+  deleteResult,
+  deleteWatch,
+  meetDetail,
+  putResult,
+  putWatch,
+  removeEntry,
+  removeSeed,
+  setSeed,
+} from "~/lib/meets.server";
+import { whyNotEnter } from "~/lib/events";
+import type { Write } from "~/lib/writes";
+
+/**
+ * Everything the deck writes.
+ *
+ *   POST /api/meets/:meetId/writes  <- one `Write`
+ *
+ * The outbox's transport, and deliberately shaped like the outbox rather than
+ * like a REST API. It used to be four endpoints — entries, seeds, watches,
+ * results — each re-deriving who was asking before doing one small thing, and
+ * the queue kept a table translating its own vocabulary into their URLs and
+ * methods. The queue already knows what a change *is*; this speaks the same
+ * union back, so there is nothing in between to keep in step.
+ *
+ * One row per call. That is what lets two coaches fill in their own halves of
+ * a dual meet at the same moment without either writing over the other, and it
+ * is why the queue can retry a single write without replaying a batch.
+ *
+ * **Who may do what is asked once, and then per kind.** `meetAccess` is one
+ * read for the whole request; the rule that follows differs because the moves
+ * genuinely differ — entering a swimmer is a coach's business for their own
+ * team, a watch is evidence any racing coach may add, and deciding a lane is
+ * the administrator's alone.
+ */
+export async function action({ params, request, context }: Route.ActionArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  try {
+    if (request.method !== "POST") throw new SyncError("Use POST", 405);
+
+    const db = requireDb(env);
+    const user = await currentUser(request, env);
+    const access = await meetAccess(db, params.meetId, user);
+    const write = await readJson<Write>(request);
+
+    switch (write.kind) {
+      /**
+       * Entering and scratching.
+       *
+       * The meet's own entry limits are enforced here rather than only greyed
+       * out on the grid — a screen that hasn't heard about a change yet is
+       * exactly when one gets exceeded.
+       */
+      case "entry": {
+        const detail = await meetDetail(db, params.meetId);
+        if (!detail) throw new SyncError("No such meet", 404);
+
+        const teamsOf = (id: string) =>
+          detail.enrollments.filter((e) => e.athleteId === id).map((e) => e.teamId);
+
+        if (
+          !mayEnter(access, write.athleteId, {
+            athletesMayEnter: detail.meet.athletesMayEnter,
+            teamsOf,
+          })
+        ) {
+          throw new SyncError("That swimmer isn't yours to enter.", 403);
+        }
+
+        if (!write.entering) {
+          await removeEntry(db, write.eventId, write.athleteId);
+          return json({ ok: true });
+        }
+
+        const refusal = whyNotEnter(
+          { events: detail.events, entries: detail.entries, limits: detail.meet.limits },
+          write.athleteId,
+          write.eventId,
+        );
+        if (refusal) throw new SyncError(refusal, 400);
+
+        await addEntry(db, {
+          meetId: params.meetId,
+          eventId: write.eventId,
+          athleteId: write.athleteId,
+        });
+        return json({ ok: true });
+      }
+
+      /**
+       * Who is in a lane.
+       *
+       * The coach seeding an event, an administrator correcting the desk and a
+       * timer fixing a name behind the blocks all write this same row, and the
+       * last one wins — because it is one person deciding one thing, not a
+       * vote. Addressed by where the lane is rather than by a row id, because
+       * the seed may not exist yet: naming somebody behind the blocks is
+       * creating the swim, not editing one.
+       */
+      case "seed":
+      case "unseed": {
+        if (!mayRecordTime(access)) {
+          throw new SyncError("Only the teams racing can seed a lane.", 403);
+        }
+        if (write.kind === "unseed") {
+          await removeSeed(db, write.seedId);
+          return json({ ok: true });
+        }
+        if (!Number.isInteger(write.heat) || write.heat < 1) {
+          throw new SyncError("Which heat?", 400);
+        }
+        if (!Number.isInteger(write.lane) || write.lane < 1) {
+          throw new SyncError("Which lane?", 400);
+        }
+        const seed = await setSeed(db, params.meetId, {
+          eventId: write.eventId,
+          heat: write.heat,
+          lane: write.lane,
+          athleteId: write.athleteId,
+        });
+        return json({ seed });
+      }
+
+      /**
+       * Times off a stopwatch.
+       *
+       * A watch is evidence, and there is one row per submitter per lane, so
+       * recording one never overwrites anybody — which is why this is open to
+       * every coach of a racing team rather than to the administrator alone.
+       *
+       * **Who submitted is decided here, not by the caller.** Anyone reaching
+       * this has a session, so the watch is filed under their user id: a coach
+       * keeps one watch per lane whichever iPad they pick up, and no client can
+       * file evidence under somebody else's name. The `timerId` in the body is
+       * only a fallback for callers with no account, and the timing phones do
+       * not come through here at all.
+       */
+      case "watch":
+      case "drop-watch": {
+        if (!mayRecordTime(access)) {
+          throw new SyncError("Only the teams racing can record times.", 403);
+        }
+        const submitter = user?.id ?? write.timerId;
+        if (!submitter) throw new SyncError("Which watch?", 400);
+
+        if (write.kind === "drop-watch") {
+          // You may throw away your own evidence — a false start, a heat
+          // started again. Throwing away somebody else's is a decision, and
+          // belongs at the desk.
+          const whose = write.timerId ?? submitter;
+          if (whose !== submitter && !mayDecide(access)) {
+            throw new SyncError(
+              "Only whoever is running this meet can drop another timer's watch.",
+              403,
+            );
+          }
+          await deleteWatch(db, write.seedId, whose);
+          return json({ ok: true });
+        }
+
+        const timeMs = Number(write.timeMs);
+        const hasTime = Number.isFinite(timeMs) && timeMs > 0;
+        // A watch with neither a time nor a start is nothing at all. With a
+        // start and no time it is a stopwatch that is running, which is a fact
+        // worth keeping — it is how the desk sees a lane being covered.
+        if (!hasTime && !write.startedAt) {
+          throw new SyncError("That isn't a time.", 400);
+        }
+
+        await putWatch(db, params.meetId, {
+          seedId: write.seedId,
+          timerId: submitter,
+          userId: user?.id,
+          role: access.admin ? "admin" : user ? "coach" : "timer",
+          timeMs: hasTime ? Math.round(timeMs) : undefined,
+          recordedAt: Number(write.recordedAt) || Date.now(),
+          startedAt: Number(write.startedAt) || undefined,
+          stoppedAt: Number(write.stoppedAt) || undefined,
+        });
+        return json({ ok: true });
+      }
+
+      /**
+       * Signing a swim off, and taking it back.
+       *
+       * Administrators only, which is the other half of the line watches sit
+       * on: an extra watch never overwrites anybody, but with two schools in
+       * the water a DQ isn't one school's call to make.
+       *
+       * The number comes from the request rather than being worked out here,
+       * because what is recorded is *what the administrator accepted* — the
+       * figure on their screen when they pressed it. Re-deriving it would mean
+       * a watch landing in the same second could sign off a different time
+       * from the one they were looking at.
+       */
+      case "result":
+      case "unresult": {
+        if (!mayDecide(access)) {
+          throw new SyncError("Whoever is running this meet decides a lane.", 403);
+        }
+        if (write.kind === "unresult") {
+          await deleteResult(db, write.seedId);
+          return json({ ok: true });
+        }
+
+        const detail = await meetDetail(db, params.meetId);
+        const seed = detail?.seeds.find((s) => s.id === write.seedId);
+        if (!seed) throw new SyncError("That swim is no longer in the meet", 404);
+
+        const timeMs = Number(write.timeMs);
+        await putResult(db, {
+          seedId: seed.id,
+          meetId: params.meetId,
+          // Copied from the seed rather than the request: an administrator
+          // says what the time was, not whose it was or which event.
+          eventId: seed.eventId,
+          athleteId: seed.athleteId,
+          status:
+            write.status === "DQ" || write.status === "NS" ? write.status : "OK",
+          // A no-show or a disqualification with nothing on the clock is zero,
+          // which is how every screen already reads "no time".
+          timeMs: Number.isFinite(timeMs) && timeMs > 0 ? Math.round(timeMs) : 0,
+          decidedBy: user?.id,
+          decidedAt: Date.now(),
+        });
+        return json({ ok: true });
+      }
+
+      default:
+        throw new SyncError("That isn't something anyone can do.", 400);
+    }
+  } catch (error) {
+    return errorResponse(error);
+  }
+}

@@ -22,71 +22,9 @@
 import { apiUrl } from "./http";
 import { generateId } from "./id";
 import { local } from "./local";
-import type { ResultStatus, WatchRole } from "~/types/meet";
+import type { Write } from "./writes";
 
-/**
- * One thing somebody did.
- *
- * A closed union rather than a free-form request, because the queue has to be
- * replayable from storage a reload later and understandable by the pending
- * overlay — both of which need to know what a write *means*, not just where it
- * was going.
- */
-export type Write =
-  | { kind: "entry"; meetId: string; eventId: string; athleteId: string; entering: boolean }
-  /**
-   * Put somebody in a lane, by where the lane is rather than by a row id.
-   *
-   * Addressed as event/heat/lane because that is what the person doing it can
-   * see — and because the seed may not exist yet, which is the whole point: a
-   * timer naming somebody behind the blocks is creating the swim.
-   */
-  | {
-      kind: "seed";
-      meetId: string;
-      eventId: string;
-      heat: number;
-      lane: number;
-      athleteId: string;
-      /** What the server will call it, so the overlay agrees about the id. */
-      seedId: string;
-    }
-  | { kind: "unseed"; meetId: string; seedId: string }
-  | {
-      kind: "watch";
-      meetId: string;
-      seedId: string;
-      /** Whose watch: a device id, or the user id of whoever is signed in. */
-      timerId: string;
-      /**
-       * The account behind it, and what they are to this meet. Both are sent
-       * so the optimistic overlay ranks the watch the way the server will;
-       * the server records its own answer either way, so neither is taken on
-       * trust.
-       */
-      userId?: string;
-      role: WatchRole;
-      /** Absent for a stopwatch that has started and not been submitted. */
-      timeMs?: number;
-      recordedAt: number;
-      startedAt?: number;
-      stoppedAt?: number;
-    }
-  | { kind: "drop-watch"; meetId: string; seedId: string; timerId: string }
-  /**
-   * Sign a swim off, or take the sign-off back.
-   *
-   * There is no half-way: a result exists or it doesn't, and the status is
-   * chosen as part of accepting it rather than recorded separately beforehand.
-   */
-  | {
-      kind: "result";
-      meetId: string;
-      seedId: string;
-      status: ResultStatus;
-      timeMs: number;
-    }
-  | { kind: "unresult"; meetId: string; seedId: string }
+export type { Write } from "./writes";
 
 export interface Queued {
   id: string;
@@ -200,53 +138,6 @@ function supersedes(next: Write, old: Write): boolean {
 
 /* ------------------------------------------------------------------ sending */
 
-interface Endpoint {
-  url: string;
-  method: string;
-  body?: unknown;
-}
-
-/** Where a write goes, and what it says when it gets there. */
-function endpointFor(item: Write): Endpoint {
-  const base = `/api/meets/${encodeURIComponent(item.meetId)}`;
-  switch (item.kind) {
-    case "entry":
-      return {
-        url: `${base}/entries`,
-        method: item.entering ? "POST" : "DELETE",
-        body: { eventId: item.eventId, athleteId: item.athleteId },
-      };
-    case "seed":
-      return {
-        url: `${base}/seeds`,
-        method: "POST",
-        body: item,
-      };
-    case "unseed":
-      return {
-        url: `${base}/seeds`,
-        method: "DELETE",
-        body: { seedId: item.seedId },
-      };
-    case "watch":
-      return { url: `${base}/watches`, method: "POST", body: item };
-    case "drop-watch":
-      return {
-        url: `${base}/watches`,
-        method: "DELETE",
-        body: { seedId: item.seedId, timerId: item.timerId },
-      };
-    case "result":
-      return { url: `${base}/results`, method: "POST", body: item };
-    case "unresult":
-      return {
-        url: `${base}/results`,
-        method: "DELETE",
-        body: { seedId: item.seedId },
-      };
-  }
-}
-
 /**
  * Whether it is worth trying again.
  *
@@ -281,19 +172,26 @@ export async function flush(): Promise<void> {
   try {
     while (state.pending.length > 0) {
       const head = state.pending[0];
-      const { url, method, body } = endpointFor(head.write);
 
       let status = 0;
       let message = "No signal";
       try {
+        // The write goes as itself. There used to be a table here turning each
+        // kind into a URL and a method and a body shaped for it, which meant
+        // the queue's vocabulary and the server's had to be kept in step by
+        // hand; the endpoint now takes the `Write`.
+        //
         // Who is asking rides in the session cookie, which the browser
         // attaches by itself — there is nothing to read out of storage here,
         // and so nothing to be missing when storage is refused.
-        const response = await fetch(apiUrl(url), {
-          method,
-          headers: { "content-type": "application/json" },
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
+        const response = await fetch(
+          apiUrl(`/api/meets/${encodeURIComponent(head.write.meetId)}/writes`),
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(head.write),
+          },
+        );
         status = response.status;
         if (!response.ok) {
           const parsed = (await response.json().catch(() => null)) as
