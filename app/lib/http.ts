@@ -5,7 +5,7 @@
  * syncing and signing in can't drift apart on either question.
  */
 
-import { loadSessionToken, loadSyncToken } from "./storage";
+import { loadSessionToken } from "./storage";
 
 /**
  * Resolve an API path against the router basename, so the same code works at
@@ -46,12 +46,12 @@ export class ApiError extends Error {
 /**
  * A request with whatever this device can prove about itself attached.
  *
- * Both credentials go along when they exist: the session says who you are, and
- * the older shared token says the worker will talk to you at all. They answer
- * different questions, and a device mid-transition may need both.
+ * The session token, and nothing else. There used to be a second, shared
+ * "sync token" sent alongside it from the days when the worker gated the whole
+ * API on one secret; nothing has written one since accounts arrived, so every
+ * request was carrying an empty header.
  */
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const syncToken = loadSyncToken();
   const session = loadSessionToken();
 
   let response: Response;
@@ -60,7 +60,6 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       ...init,
       headers: {
         "content-type": "application/json",
-        ...(syncToken ? { "x-sync-token": syncToken } : {}),
         ...(session ? { authorization: `Bearer ${session}` } : {}),
         ...init?.headers,
       },

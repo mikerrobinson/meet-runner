@@ -15,13 +15,24 @@ import { MeetTeams } from "~/components/MeetTeams";
 import { MeetAdmins } from "~/components/MeetAdmins";
 import { downloadFile, resultsToCsv } from "~/lib/csv";
 import { eventClosed, recordedCount } from "~/lib/timing";
-import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
+import {
+  appBaseUrl,
+  currentUser,
+  requireDb,
+  type SyncEnv,
+} from "~/lib/api.server";
+import { addMeetAdmin, meetAdmins, removeMeetAdmin } from "~/lib/admins.server";
+import { activeGrant, issueGrant, revokeGrants } from "~/lib/grants.server";
+import { createInvite, inviteUser, supersedeInvites } from "~/lib/auth.server";
+import { parseContact } from "~/lib/identity";
+import { revealsCodes, sendMeetInvite } from "~/lib/notify.server";
 import { mayEditMeet } from "~/lib/access";
 import { meetAccess } from "~/lib/access.server";
 import {
   addEvent,
   addEventsToMeet,
   deleteMeet,
+  getMeet,
   removeEvent,
   setEventOrder,
   updateMeet,
@@ -45,6 +56,31 @@ import {
 } from "~/types/meet";
 
 /**
+ * The two things on this page that aren't in the meet document: who runs it,
+ * and whether a timing code is live.
+ *
+ * Loaded here rather than fetched by the cards that show them. Each used to
+ * hold its own list behind a `useEffect`, which cost two round trips after the
+ * page had already rendered and left two more copies of "loading / working /
+ * that didn't work" to keep honest. The meet itself still comes from
+ * `meet-layout`, which is the one read every screen under a meet shares.
+ */
+export async function loader({ params, request, context }: Route.LoaderArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  const db = requireDb(env);
+  const user = await currentUser(request, env);
+
+  const [admins, grant] = await Promise.all([
+    meetAdmins(db, params.meetId),
+    // Whether a sheet is live and when it dies — never the token itself.
+    // That is handed over exactly once, by the action that mints it.
+    user ? activeGrant(db, params.meetId) : null,
+  ]);
+
+  return { admins, grant };
+}
+
+/**
  * Everything that changes a meet, behind one check.
  *
  * `mayEditMeet` is asked here, against the same request that loaded the rows —
@@ -58,9 +94,13 @@ export async function action({ params, request, context }: Route.ActionArgs) {
   const db = requireDb(env);
   const user = await currentUser(request, env);
   const access = await meetAccess(db, params.meetId, user);
-  if (!mayEditMeet(access)) {
+  if (!mayEditMeet(access) || !access.userId) {
     throw new Response("Whoever is running this meet decides that.", { status: 403 });
   }
+  // Who is doing it, recorded against the rows that remember who let somebody
+  // in. Pulled out here because `mayEditMeet` is `access.admin`, which nobody
+  // signed out can be — so past this line there is always somebody to name.
+  const actor = access.userId;
 
   const form = await request.formData();
   const intent = String(form.get("intent") ?? "");
@@ -135,6 +175,92 @@ export async function action({ params, request, context }: Route.ActionArgs) {
     return { ok: true };
   }
 
+  /**
+   * Who runs this meet, and the timing code — both behind the check above and
+   * no other.
+   *
+   * `mayEditMeet` is `access.admin`, which is the row in `meet_admins` that
+   * the two endpoints this replaced each looked up a second time for
+   * themselves. Stepping down passes it for the same reason it always did:
+   * you are only ever in that list if you are an administrator.
+   */
+  if (intent === "admin-add") {
+    const userId = String(form.get("userId") ?? "");
+    if (!userId) return { ok: false, error: "Which person?" };
+    await addMeetAdmin(db, params.meetId, userId, actor);
+    return { ok: true };
+  }
+
+  if (intent === "admin-remove") {
+    const userId = String(form.get("userId") ?? "");
+    const result = await removeMeetAdmin(db, params.meetId, userId);
+    // Refusing to remove the last one is an ordinary answer the card shows,
+    // not a failure — so it comes back as data rather than being thrown.
+    return result.ok ? { ok: true } : { ok: false, error: result.reason };
+  }
+
+  /**
+   * Somebody who may not have an account yet.
+   *
+   * `inviteUser` returns the existing account when the contact already has
+   * one, so typing an address that turns out to belong to a member appoints
+   * them rather than minting a second account for the same person.
+   */
+  if (intent === "admin-invite") {
+    const parsed = parseContact(String(form.get("contact") ?? ""));
+    if (!parsed.ok) return { ok: false, error: parsed.error };
+
+    const name = String(form.get("name") ?? "").trim() || null;
+    const { user: invitee } = await inviteUser(db, parsed.contact, name);
+    await addMeetAdmin(db, params.meetId, invitee.id, actor);
+
+    // Resending replaces the outstanding link rather than adding a second.
+    await supersedeInvites(db, {
+      meetId: params.meetId,
+      contact: parsed.contact.value,
+    });
+    const token = await createInvite(
+      db,
+      { meetId: params.meetId, contact: parsed.contact.value },
+      actor,
+    );
+    const link = `${appBaseUrl(request)}sign-in?invite=${encodeURIComponent(token)}`;
+    const delivery = await sendMeetInvite(env, parsed.contact, link);
+
+    return {
+      ok: true,
+      sent: delivery.sent,
+      detail: delivery.detail,
+      // Local builds only, exactly as with login codes: without a provider
+      // configured there is otherwise no way to follow your own invite.
+      ...(revealsCodes(env) ? { link } : {}),
+    };
+  }
+
+  /**
+   * The QR code a timer scans.
+   *
+   * The meet's own date is read here rather than accepted from the form: a
+   * screen may ask for a code, it doesn't get to say when the code expires.
+   * Issuing is also how you revoke — a coach who thinks a sheet has gone
+   * walkabout taps the same button and prints a new one — which is why there
+   * is no separate rotate. The link comes back exactly once.
+   */
+  if (intent === "grant-create") {
+    const meet = await getMeet(db, params.meetId);
+    if (!meet) return { ok: false, error: "No such meet" };
+    const { token, expiresAt } = await issueGrant(db, {
+      id: meet.id,
+      date: meet.date,
+    });
+    return { ok: true, url: `${appBaseUrl(request)}t/${token}`, expiresAt };
+  }
+
+  if (intent === "grant-revoke") {
+    await revokeGrants(db, params.meetId);
+    return { ok: true };
+  }
+
   if (intent === "delete") {
     await deleteMeet(db, params.meetId);
     return redirect("/meets");
@@ -143,7 +269,8 @@ export async function action({ params, request, context }: Route.ActionArgs) {
   return { ok: false };
 }
 
-export default function MeetInfo() {
+export default function MeetInfo({ loaderData }: Route.ComponentProps) {
+  const { admins, grant } = loaderData;
   const { detail, access } = useMeet();
   const { meet, events, entries, seeds } = detail;
   const [editing, setEditing] = useState(false);
@@ -214,11 +341,11 @@ export default function MeetInfo() {
 
       {/* Directly under who's racing, because they answer adjacent questions —
           which teams are in this, and who among everyone here decides it. */}
-      <MeetAdmins meetId={meet.id} />
+      <MeetAdmins admins={admins} youRunThis={access.admin} />
 
       <EventList editing={editing} />
 
-      {mayEdit && <TimerAccess meet={meet} />}
+      {mayEdit && <TimerAccess grant={grant} />}
 
       <Card>
         <SectionTitle>Export</SectionTitle>

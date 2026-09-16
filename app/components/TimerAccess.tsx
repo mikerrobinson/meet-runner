@@ -1,8 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
+import { useFetcher } from "react-router";
 import { Banner, Button, Card, SectionTitle } from "./ui";
 import { QrCode } from "./QrCode";
-import { request } from "~/lib/http";
-import type { Meet } from "~/types/meet";
+
+interface GrantResult {
+  ok?: boolean;
+  error?: string;
+  /** The scannable link. Handed over exactly once, by the action that mints it. */
+  url?: string;
+  expiresAt?: number;
+}
 
 /**
  * The coach's end of the timing QR code.
@@ -13,63 +20,34 @@ import type { Meet } from "~/types/meet";
  * than burying it.
  *
  * The link is shown once. Making another retires the old one, which is also
- * how you revoke a sheet that's gone walkabout.
+ * how you revoke a sheet that's gone walkabout — and it is shown from the
+ * action's own answer rather than held anywhere, which is what keeps "once"
+ * true: navigate away and the only copy left is the one you printed.
+ *
+ * Whether a code is currently live arrives with the page; only minting and
+ * revoking are submissions.
  */
-export function TimerAccess({ meet }: { meet: Meet }) {
-  const [live, setLive] = useState<{ expiresAt: number } | null>(null);
-  const [url, setUrl] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export function TimerAccess({
+  grant,
+}: {
+  grant: { expiresAt: number } | null;
+}) {
+  const fetcher = useFetcher<GrantResult>();
   const [copied, setCopied] = useState(false);
 
-  const check = useCallback(() => {
-    request<{ grant: { expiresAt: number } | null }>(
-      `/api/timer/grant?meetId=${encodeURIComponent(meet.id)}`,
-    )
-      .then((body) => setLive(body.grant))
-      .catch(() => setLive(null));
-  }, [meet.id]);
+  const busy = fetcher.state !== "idle";
+  const error = fetcher.data?.error ?? null;
 
-  useEffect(check, [check]);
+  // The freshly minted link, if one was made on this visit. `grant` is the
+  // standing fact — that a code exists and when it dies — and survives the
+  // revalidation that follows; the URL deliberately does not.
+  const url = fetcher.data?.url ?? null;
+  const expiresAt = fetcher.data?.expiresAt ?? grant?.expiresAt;
 
-  const run = async (work: () => Promise<void>) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await work();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't work.");
-    } finally {
-      setBusy(false);
-    }
+  const submit = (intent: string) => {
+    setCopied(false);
+    fetcher.submit({ intent }, { method: "post" });
   };
-
-  const create = () =>
-    run(async () => {
-      const body = await request<{ url: string; expiresAt: number }>(
-        "/api/timer/grant",
-        {
-          method: "POST",
-          body: JSON.stringify({
-            meetId: meet.id,
-            date: meet.date,
-          }),
-        },
-      );
-      setUrl(body.url);
-      setLive({ expiresAt: body.expiresAt });
-      setCopied(false);
-    });
-
-  const revoke = () =>
-    run(async () => {
-      await request("/api/timer/grant", {
-        method: "DELETE",
-        body: JSON.stringify({ meetId: meet.id }),
-      });
-      setUrl(null);
-      setLive(null);
-    });
 
   return (
     <Card className="print:border-0">
@@ -92,7 +70,7 @@ export function TimerAccess({ meet }: { meet: Meet }) {
           <Banner tone="warn">
             Anyone who scans this can record times for this meet, so treat the
             printout like a key. It stops working on{" "}
-            {new Date(live?.expiresAt ?? Date.now()).toLocaleDateString()}.
+            {new Date(expiresAt ?? Date.now()).toLocaleDateString()}.
           </Banner>
           <div className="grid grid-cols-2 gap-2 print:hidden">
             <Button
@@ -108,16 +86,24 @@ export function TimerAccess({ meet }: { meet: Meet }) {
       ) : (
         <>
           <p className="text-sm text-slate-600 dark:text-slate-300">
-            {live
+            {grant
               ? "A timing code is already out for this meet. Making a new one stops the old one working."
               : "Print a code for the timing table. Timers scan it, pick their lane, and start — no account, nothing to install."}
           </p>
           <div className="mt-3 flex gap-2">
-            <Button variant="primary" disabled={busy} onClick={() => void create()}>
-              {live ? "Replace the code" : "Make a timing code"}
+            <Button
+              variant="primary"
+              disabled={busy}
+              onClick={() => submit("grant-create")}
+            >
+              {grant ? "Replace the code" : "Make a timing code"}
             </Button>
-            {live && (
-              <Button variant="danger" disabled={busy} onClick={() => void revoke()}>
+            {grant && (
+              <Button
+                variant="danger"
+                disabled={busy}
+                onClick={() => submit("grant-revoke")}
+              >
                 Turn it off
               </Button>
             )}

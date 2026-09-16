@@ -31,7 +31,7 @@ import { revealsCodes, sendTeamInvite } from "~/lib/notify.server";
  *   POST   /api/teams/:teamId/coaches { claim: true }    -> take on a team nobody coaches
  *   DELETE /api/teams/:teamId/coaches { userId }         -> take it back, or step down
  *
- * The same shape as `/api/meets/:meetId/admins`, deliberately: a team has as
+ * The same shape as the meet's own administrator list, deliberately: a team has as
  * many coaches as it needs, only a coach can add one, and it cannot go down to
  * none. Both invite forms end the same way — a row in `team_coaches` and a
  * link in the post — and the difference is only whether the account had to be

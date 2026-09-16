@@ -79,13 +79,15 @@ export async function readJson<T>(request: Request): Promise<T> {
  *
  * This ends up in an emailed link, so it must not be something a caller can
  * choose — otherwise asking for a code to someone else's address would be a
- * way to send them a link to your own site. The API path is a known suffix, so
- * removing it leaves the base: `/projects/meet-runner/` in production and `/`
- * in dev, with no config to keep in step.
+ * way to send them a link to your own site. Only the origin comes from the
+ * request; the path under it is the router's own basename, the same value
+ * `root.tsx` builds its icon and manifest links from.
+ *
+ * It used to find the base by cutting `/api/` off the pathname, which was true
+ * only while every link was minted by an endpoint under `/api/`. An invitation
+ * sent from a screen's own action is posted to that screen's URL, and the
+ * trick would have quietly produced a link to the domain root.
  */
 export function appBaseUrl(request: Request): string {
-  const url = new URL(request.url);
-  const cut = url.pathname.lastIndexOf("/api/");
-  const base = cut >= 0 ? url.pathname.slice(0, cut) : "";
-  return `${url.origin}${base}/`;
+  return `${new URL(request.url).origin}${import.meta.env.BASE_URL}`;
 }

@@ -57,14 +57,11 @@ export default [
 
   ]),
 
-  // Reading. Open, because a meet is a public event — the heat sheet is handed
-  // out at the door. Sync is for working a deck; this is for everyone else.
+  // Lists of people, and searching for one. The screens that show a team or a
+  // meet load it from their own loader; these are what the cards on those
+  // screens ask for as somebody types.
   route("api/teams", "routes/api.teams.ts"),
-  route("api/teams/:teamId", "routes/api.public.team.ts"),
   route("api/teams/:teamId/coaches", "routes/api.team.coaches.ts"),
-  route("api/meets", "routes/api.public.meets.ts"),
-  route("api/meets/:meetId", "routes/api.public.meet.ts"),
-  route("api/meets/:meetId/admins", "routes/api.meet.admins.ts"),
 
   // What the deck writes. Small, single-row endpoints: the outbox posts one of
   // these per thing somebody did, so two people working at once never touch
@@ -73,9 +70,6 @@ export default [
   route("api/meets/:meetId/seeds", "routes/api.meet.seeds.ts"),
   route("api/meets/:meetId/watches", "routes/api.meet.watches.ts"),
   route("api/meets/:meetId/results", "routes/api.meet.results.ts"),
-  route("api/athletes", "routes/api.public.athletes.ts"),
-  route("api/athletes/:athleteId", "routes/api.public.athlete.ts"),
-  route("api/users/:userId", "routes/api.public.user.ts"),
 
   // Accounts, and the invitations that hand out a job.
   route("api/auth/start", "routes/api.auth.start.ts"),
@@ -94,6 +88,5 @@ export default [
     "routes/api.timer.lane.ts",
   ),
 
-  route("api/timer/grant", "routes/api.timer.grant.ts"),
   route("api/timer/meet", "routes/api.timer.meet.ts"),
 ] satisfies RouteConfig;

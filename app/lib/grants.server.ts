@@ -27,8 +27,28 @@ const SCHEMA = [
 
 let ready = false;
 
+/**
+ * Make the store, and clear out the shape it used to have.
+ *
+ * A grant used to carry a `team_id`, from when a timing code was issued under
+ * the host team's authority. Scoping it to the meet alone — which is what a
+ * timer behind lane 4 actually needs, whichever school is in the water — left
+ * that column both meaningless and `NOT NULL`, so a table made before the
+ * change refuses every insert made after it. `CREATE TABLE IF NOT EXISTS`
+ * cannot fix that, because the table does exist.
+ *
+ * Dropped rather than altered, because there is nothing in it worth keeping: a
+ * grant expires the day after its meet, and the recovery is the one a coach
+ * already knows — tap the button, print a new sheet.
+ */
 export async function ensureGrantStore(db: D1Database): Promise<void> {
   if (ready) return;
+  const columns = await db
+    .prepare("PRAGMA table_info(meet_grants)")
+    .all<{ name: string }>();
+  if (columns.results.some((column) => column.name === "team_id")) {
+    await db.prepare("DROP TABLE meet_grants").run();
+  }
   for (const statement of SCHEMA) await db.prepare(statement).run();
   ready = true;
 }

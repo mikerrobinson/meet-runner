@@ -1,7 +1,8 @@
 /**
- * Device-local preferences. The meet and team documents live in IndexedDB
- * (see `db.ts`); everything here is deliberately per-device and is never
- * synced or exported.
+ * Device-local preferences: how this person likes names written, how their
+ * stopwatch lays out its buttons, where they have got to in a meet. The meet
+ * itself lives on the server and arrives through a loader; everything here is
+ * deliberately per-device and is never sent anywhere.
  */
 
 import { A_YEAR, readCookie, writeCookie } from "./cookies";
@@ -13,8 +14,6 @@ import {
   type Progress,
 } from "~/types/meet";
 
-const AUTO_SYNC_KEY = "meet-runner:auto-sync";
-const TOKEN_KEY = "meet-runner:sync-token";
 const SESSION_KEY = "meet-runner:session";
 const LANE_LAYOUT_KEY = "meet-runner:lane-layout";
 const TIMER_ID_KEY = "meet-runner:timer-id";
@@ -29,30 +28,6 @@ const TIMER_ID_KEY = "meet-runner:timer-id";
  */
 const TIMER_ID_COOKIE = "mr_timer_id";
 const PROGRESS_PREFIX = "meet-runner:progress:";
-
-/**
- * Whether this device pushes on its own. A device/network preference rather
- * than a property of the meet, so it lives outside the document — otherwise
- * switching it off here would switch it off on every other device too, and
- * the change itself would trigger one last push to say so.
- */
-export function loadAutoSync(): boolean {
-  return local.get(AUTO_SYNC_KEY) !== "off";
-}
-
-export function saveAutoSync(enabled: boolean): void {
-  local.set(AUTO_SYNC_KEY, enabled ? "on" : "off");
-}
-
-/** The sync token lives outside the meet doc so it never lands in an export. */
-export function loadSyncToken(): string {
-  return local.get(TOKEN_KEY) ?? "";
-}
-
-export function saveSyncToken(token: string): void {
-  if (token) local.set(TOKEN_KEY, token);
-  else local.remove(TOKEN_KEY);
-}
 
 /**
  * Proof of who is signed in on this device.

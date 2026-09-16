@@ -1,17 +1,20 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+import { useFetcher } from "react-router";
 import { Banner, Button, Card, SectionTitle } from "./ui";
 import { PersonPicker } from "./PersonPicker";
-import { request } from "~/lib/http";
+import type { MeetAdmin } from "~/lib/admins.server";
 
-interface Admin {
-  userId: string;
-  contact: string;
-  name: string | null;
-  pending: boolean;
-}
-
-interface AddResult {
-  admins: Admin[];
+/**
+ * What the meet's action answers with, whichever intent was used.
+ *
+ * Deliberately one loose shape rather than the action's own union: this card
+ * shares the action with the lineup, the teams and the timing code, so typing
+ * it from `typeof action` would mean naming every one of those results here
+ * to read the two fields that concern it.
+ */
+interface AdminResult {
+  ok?: boolean;
+  error?: string;
   sent?: boolean;
   detail?: string;
   /** Local builds only, so an invite can be followed with no provider set up. */
@@ -30,64 +33,42 @@ interface AddResult {
  * The list is the relationship, the same way `MeetTeams` is: rows with a way
  * to add and a way to remove, and no notion of a single owner. A meet can have
  * as many administrators as it needs and cannot go down to none.
+ *
+ * Nothing is fetched here. The rows arrive with the page and the writes go to
+ * the meet's own action, so the controls and the check behind them are asked
+ * of the same request — and `youRunThis` is `access.admin`, the very row being
+ * listed, rather than a second opinion from a second endpoint.
  */
-export function MeetAdmins({ meetId }: { meetId: string }) {
-  const [admins, setAdmins] = useState<Admin[] | null>(null);
-  const [youRunThis, setYouRunThis] = useState(false);
+export function MeetAdmins({
+  admins,
+  youRunThis,
+}: {
+  admins: MeetAdmin[];
+  youRunThis: boolean;
+}) {
+  const fetcher = useFetcher<AdminResult>();
   const [adding, setAdding] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
-  const path = `/api/meets/${encodeURIComponent(meetId)}/admins`;
+  const busy = fetcher.state !== "idle";
+  const result = fetcher.data;
+  const error = result?.error ?? null;
 
-  const load = useCallback(() => {
-    request<{ admins: Admin[]; youRunThis: boolean }>(path)
-      .then((body) => {
-        setAdmins(body.admins);
-        setYouRunThis(body.youRunThis);
-      })
-      .catch(() => setAdmins([]));
-  }, [path]);
+  // The sheet closes on the answer, not on the tap. Closing optimistically
+  // would hide the one place an invitation that couldn't be sent gets to say
+  // so, which on a build with no provider configured is every invitation.
+  useEffect(() => {
+    if (fetcher.state === "idle" && result?.ok) setAdding(false);
+  }, [fetcher.state, result]);
 
-  useEffect(load, [load]);
+  const notice =
+    result?.link
+      ? `Invitation ready. No provider is configured, so open it yourself: ${result.link}`
+      : result?.sent === false
+        ? `They're on the list, but nothing was sent. ${result.detail ?? ""}`.trim()
+        : null;
 
-  const remove = async (userId: string) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const body = await request<{ admins: Admin[] }>(path, {
-        method: "DELETE",
-        body: JSON.stringify({ userId }),
-      });
-      setAdmins(body.admins);
-      // Stepping down is allowed, and it takes the controls with it.
-      load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't work.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const add = async (body: Record<string, unknown>) => {
-    const result = await request<AddResult>(path, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    setAdmins(result.admins);
-    setAdding(false);
-    setError(null);
-    setNotice(
-      result.link
-        ? `Invitation ready. No provider is configured, so open it yourself: ${result.link}`
-        : result.sent === false
-          ? `They're on the list, but nothing was sent. ${result.detail ?? ""}`.trim()
-          : null,
-    );
-  };
-
-  if (admins === null) return null;
+  const submit = (fields: Record<string, string>) =>
+    fetcher.submit(fields, { method: "post" });
 
   return (
     <Card>
@@ -103,7 +84,7 @@ export function MeetAdmins({ meetId }: { meetId: string }) {
         Running this meet
       </SectionTitle>
 
-      {error && (
+      {error && !adding && (
         <div className="mb-3">
           <Banner tone="error">{error}</Banner>
         </div>
@@ -140,7 +121,9 @@ export function MeetAdmins({ meetId }: { meetId: string }) {
                   size="sm"
                   variant="ghost"
                   disabled={busy}
-                  onClick={() => void remove(admin.userId)}
+                  onClick={() =>
+                    submit({ intent: "admin-remove", userId: admin.userId })
+                  }
                 >
                   Remove
                 </Button>
@@ -162,8 +145,14 @@ export function MeetAdmins({ meetId }: { meetId: string }) {
           inviteTitle="Invite an admin"
           inviteHint="We'll send a link that signs them in and opens this meet."
           exclude={admins.map((a) => a.userId)}
-          onAppoint={(user) => add({ userId: user.userId })}
-          onInvite={(contact, name) => add({ contact, name })}
+          busy={busy}
+          error={error}
+          onAppoint={(user) =>
+            submit({ intent: "admin-add", userId: user.userId })
+          }
+          onInvite={(contact, name) =>
+            submit({ intent: "admin-invite", contact, ...(name ? { name } : {}) })
+          }
           onClose={() => setAdding(false)}
         />
       )}

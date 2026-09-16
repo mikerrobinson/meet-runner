@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
+import { useFetcher } from "react-router";
 import { Banner, Button, Field, Sheet, TextInput } from "./ui";
-import { request } from "~/lib/http";
 
 export interface DirectoryUser {
   userId: string;
@@ -33,6 +33,8 @@ export function PersonPicker({
   exclude,
   onAppoint,
   onInvite,
+  busy = false,
+  error = null,
   onClose,
 }: {
   title: string;
@@ -41,63 +43,53 @@ export function PersonPicker({
   inviteHint?: string;
   exclude: string[];
   /**
-   * Both may throw; the message is shown here and the sheet stays open.
-   *
    * The whole person is handed over rather than an id, so a caller that wants
    * to show who was picked doesn't have to read back what the list already
    * said.
    */
-  onAppoint: (user: DirectoryUser) => Promise<void>;
+  onAppoint: (user: DirectoryUser) => void;
   /**
    * Left off when this picker can't make an account. Linking a swimmer is the
    * case: inviting somebody is how you hand out a job, and the only job a team
    * has to hand out is coaching it — which is not what naming a roster row's
    * account means.
    */
-  onInvite?: (contact: string, name?: string) => Promise<void>;
+  onInvite?: (contact: string, name?: string) => void;
+  /** Whoever owns the submission says whether it is in flight and how it went. */
+  busy?: boolean;
+  error?: string | null;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  const [found, setFound] = useState<DirectoryUser[] | null>(null);
-  const [searching, setSearching] = useState(false);
   const [inviting, setInviting] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
+  /**
+   * The directory search, which is the one thing here that really is a fetch.
+   *
+   * A fetcher rather than a bare request: it carries its own `state`, so the
+   * "Searching…" line is the router's answer rather than a third boolean kept
+   * in step by hand.
+   */
+  const search = useFetcher<{ users: DirectoryUser[] }>();
   const typed = query.trim();
 
   // Debounced, because this fires per keystroke against a table that will
   // outgrow whatever it's being searched from.
   useEffect(() => {
-    if (typed.length < 2) {
-      setFound(null);
-      return;
-    }
-    setSearching(true);
+    if (typed.length < 2) return;
     const timer = setTimeout(() => {
-      request<{ users: DirectoryUser[] }>(
-        `/api/users?q=${encodeURIComponent(typed)}`,
-      )
-        .then((body) => setFound(body.users))
-        .catch(() => setFound([]))
-        .finally(() => setSearching(false));
+      search.load(`/api/users?q=${encodeURIComponent(typed)}`);
     }, 250);
     return () => clearTimeout(timer);
+    // The loader identity changes every render; what should re-run a search
+    // is what was typed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [typed]);
 
-  const candidates = (found ?? []).filter((u) => !exclude.includes(u.userId));
-
-  const appoint = async (user: DirectoryUser) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await onAppoint(user);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "That didn't work.");
-    } finally {
-      setBusy(false);
-    }
-  };
+  const searching = search.state !== "idle";
+  const candidates = (typed.length < 2 ? [] : (search.data?.users ?? [])).filter(
+    (u) => !exclude.includes(u.userId),
+  );
 
   return (
     <Sheet open title={title} onClose={onClose}>
@@ -133,7 +125,7 @@ export function PersonPicker({
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => void appoint(user)}
+                  onClick={() => onAppoint(user)}
                   className="flex w-full items-center justify-between gap-2 border-b border-slate-100 py-2 text-left dark:border-slate-900"
                 >
                   <span className="min-w-0">
@@ -175,6 +167,8 @@ export function PersonPicker({
           // to, so it carries over rather than being typed twice.
           initial={typed}
           onInvite={onInvite}
+          busy={busy}
+          error={error}
           onClose={() => setInviting(false)}
         />
       )}
@@ -198,12 +192,16 @@ function InviteSheet({
   hint,
   initial,
   onInvite,
+  busy,
+  error,
   onClose,
 }: {
   title: string;
   hint: string;
   initial: string;
-  onInvite: (contact: string, name?: string) => Promise<void>;
+  onInvite: (contact: string, name?: string) => void;
+  busy: boolean;
+  error: string | null;
   onClose: () => void;
 }) {
   // Whatever was being searched for is a contact if it looks like one, and a
@@ -211,20 +209,10 @@ function InviteSheet({
   const looksLikeContact = /[@\d]/.test(initial);
   const [name, setName] = useState(looksLikeContact ? "" : initial);
   const [contact, setContact] = useState(looksLikeContact ? initial : "");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  const save = async () => {
+  const save = () => {
     if (!contact.trim()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await onInvite(contact.trim(), name.trim() || undefined);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't invite them.");
-    } finally {
-      setBusy(false);
-    }
+    onInvite(contact.trim(), name.trim() || undefined);
   };
 
   return (
@@ -257,7 +245,7 @@ function InviteSheet({
           full
           variant="primary"
           disabled={busy || !contact.trim()}
-          onClick={() => void save()}
+          onClick={save}
         >
           {busy ? "Sending…" : "Send invitation"}
         </Button>

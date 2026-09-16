@@ -422,27 +422,37 @@ it on the grid, and carries no times.
 
 ---
 
-## API
+## What has a URL of its own
 
-UI and API mirror each other, with one query and one projection behind both.
+Screens are served by their own loaders, straight from the projections in
+`public.server.ts` — a page is a query, not a fetch against an endpoint that then
+runs the same query. So there is no read API mirroring the UI, and the list below is
+only what genuinely has to be addressable from somewhere other than the page that
+shows it.
+
+There used to be six more: `GET /api/meets`, `/api/meets/:id`, `/api/teams/:id`,
+`/api/athletes`, `/api/athletes/:id` and `/api/users/:id`. Every one called the same
+`public.server.ts` function the corresponding loader already called, and nothing in
+the app ever fetched them — they were the shape left behind when the client stopped
+being a store that had to be filled.
 
 |                                                          |                                                              |
 | -------------------------------------------------------- | ------------------------------------------------------------ |
-| `GET /api/meets`, `/api/meets/:id`                       | Every meet; one meet with its results                        |
-| `GET /api/teams`, `/api/teams/:id`                       | Every team; one team's seasons and roster                    |
+| `GET /api/teams`, `GET /api/users`                       | Searching as somebody types, for the team and person pickers |
 | `POST /api/teams`                                        | Start a team you coach, or mint an unclaimed opponent        |
-| `GET /api/athletes`, `/api/athletes/:id`                 | People, and one person's history                             |
-| `GET /api/users/:id`                                     | Somebody's own dashboard — only ever their own               |
 | `POST`/`DELETE /api/meets/:id/entries`                   | Enter or scratch one swimmer                                 |
-| `POST`/`DELETE /api/meets/:id/seats`                     | Who is in a lane                                             |
+| `POST`/`DELETE /api/meets/:id/seeds`                     | Who is in a lane                                             |
 | `POST`/`DELETE /api/meets/:id/watches`                   | Times, and dropping your own                                 |
-| `POST`/`DELETE /api/meets/:id/calls`                     | Deciding a lane                                              |
-| `GET`/`POST`/`DELETE /api/meets/:id/admins`              | Who runs a meet                                              |
+| `POST`/`DELETE /api/meets/:id/results`                   | Deciding a lane                                              |
 | `GET`/`POST`/`DELETE /api/teams/:id/coaches`             | Who coaches a team; claiming one nobody coaches              |
 | `POST /api/athletes/:id/link`                            | Say which account a swimmer is. Coaches only                 |
-| `/api/auth/*`, `/api/invites`                            | Accounts, and links that hand out a job                      |
-| `/api/timer/grant`, `/timer/meet`                        | The QR-code timing path                                      |
+| `/api/auth/*`, `/api/profile`, `/api/invites`            | Accounts, and links that hand out a job                      |
+| `GET /api/timer/meet`                                    | What a scanned phone reads: the meet, as a timer sees it     |
 | `POST /api/meets/:id/timers/:timerId/:event/:heat/:lane` | One lane, one timer — body-less; the cookies are the payload |
+
+The four meet-write rows are the outbox's transport (see above) and the last row is
+the timing protocol; the rest are on their way into the actions of the screens that
+use them.
 
 ### Who may do what
 

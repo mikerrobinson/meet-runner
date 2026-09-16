@@ -1,6 +1,5 @@
 import type { Route } from "./+types/api.users";
 import {
-  SyncError,
   errorResponse,
   json,
   requireDb,
