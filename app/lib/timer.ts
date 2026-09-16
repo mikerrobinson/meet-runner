@@ -13,7 +13,6 @@
 import { apiUrl, ApiError, appBasePath } from "./http";
 import { A_WEEK, readCookie } from "./cookies";
 import { splitTypedName } from "./timer-messages";
-import { local } from "./local";
 import { generateId } from "./id";
 import type { Athlete, MeetEvent, Seed, Watch } from "~/types/meet";
 
@@ -88,7 +87,9 @@ export function runningOrder(events: MeetEvent[], seeds: Seed[]): Stop[] {
   const order: Stop[] = [];
   for (const event of events) {
     const forEvent = seeds.filter((seed) => seed.eventId === event.id);
-    const heats = [...new Set(forEvent.map((s) => s.heat))].sort((a, b) => a - b);
+    const heats = [...new Set(forEvent.map((s) => s.heat))].sort(
+      (a, b) => a - b,
+    );
     heats.forEach((heat, index) => {
       order.push({
         event,
@@ -103,31 +104,6 @@ export function runningOrder(events: MeetEvent[], seeds: Seed[]): Stop[] {
   }
   return order;
 }
-
-/**
- * Throw away the token the build before last kept in localStorage.
- *
- * Grants live in an HttpOnly cookie now, so a copy sitting in storage is a
- * working credential that nothing reads and any script on the page could —
- * the exact thing moving to a cookie was meant to stop. Phones that timed a
- * meet on the old build still have one until they are told otherwise, and it
- * can go once none do.
- */
-export function forgetLegacyGrant(): void {
-  local.remove("meet-runner:timer-grant");
-}
-
-/* ------------------------------------------------------------------ queue */
-
-/**
- * The queue moved out, into cookies — see `timer-queue.ts`.
- *
- * It used to live in localStorage here, which every other device in this app
- * can rely on and a timer's phone cannot: the browser a camera app opens may
- * be a private window or a webview with site storage switched off. What is
- * left in this file is the snapshot and the running order, which are read
- * from the server on every poll and so need keeping nowhere.
- */
 
 /* ------------------------------------------------------------------ wire */
 
@@ -154,7 +130,8 @@ async function timerFetch(path: string, init?: RequestInit): Promise<unknown> {
   const body = await response.json().catch(() => null);
   if (!response.ok) {
     throw new ApiError(
-      (body as { error?: string } | null)?.error ?? `Failed (${response.status})`,
+      (body as { error?: string } | null)?.error ??
+        `Failed (${response.status})`,
       response.status,
     );
   }

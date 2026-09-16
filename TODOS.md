@@ -18,18 +18,75 @@ come back, and this device owes the outbox nothing. Verified on a real meet:
 a watch written straight into D1 appeared on the deck screen five seconds
 later with nothing touching the page.
 
-What's still open is the push version — **a Durable Object per meet**, one
-object holding a meet's rows and fanning changes out over a socket. The write
-endpoints are already small and single-row, which is the shape a DO wants.
-Worth it when a meet has enough phones on it that 3s of polling per device
-stops being free; not before.
+What's still open is the push version. Talked through 2026-09-16, and the
+conclusion was that **a Durable Object per meet is the right end state and the
+wrong next step**. Staged below, cheapest first.
+
+**What it costs today.** `useLiveData` revalidates the whole matched loader
+chain, and `entries`, `results` and `run` all nest under `meet-layout.tsx`
+(`routes.ts:56-61`), whose loader runs `meetDetail` + `meetAccess` — about nine
+whole-table selects returning the entire meet document. Twelve phones is
+roughly 4 req/s and ~36 D1 queries/sec. Nobody has measured a real meet yet,
+and that measurement is what should decide whether any of this is worth doing.
+
+**Step one — a monotonic `version` (or `updated_at`) on `meets`**, bumped by
+every write in `api.meet.writes.ts`. There is no such column today, and it is
+the prerequisite for every other step. Then `GET /api/meets/:meetId/version`,
+one indexed single-row read, polled every 3s, with `revalidate()` called only
+when it moves. Roughly thirty lines and no new infrastructure, and it keeps the
+property the whole app leans on: loaders stay the only read path. Between heats
+a poll costs one row; during a heat it costs what it costs now.
+
+**Step two, if sub-second is ever actually wanted — the DO as a doorbell, not a
+store.** The write endpoint pokes the meet's object, the object broadcasts
+`version: N`, clients revalidate. That is the *same client contract as step
+one*, push instead of pull, so building step one builds the client half of
+this. D1 stays the source of truth and there is no delta reducer — which is the
+point: `writes.ts` already names three places the `Write` union has to mean the
+same thing, and a socket carrying row deltas would make it four, the fourth
+having to agree with both `meetDetail`'s shaping and `applyPending`'s overlay.
+
+**Step three — moving meet rows into the DO — is a separate decision** and not
+obviously ever worth it. Reach for it only for something polling cannot do at
+all: an authoritative race clock shared across phones, presence ("lane 4's
+timer is connected"), or single-writer ordering. None of those are requirements
+today.
+
+Writes stay POSTs through the outbox at every stage. A socket is a bad
+transport for something that has to survive a locked phone.
+
+**Why not plain HTTP caching and ETags?** Considered and set aside, for the
+loader path at least. To emit an ETag you have to know whether anything
+changed, so a body-hash ETag runs all nine queries and then throws the response
+away — it saves bytes, which was never the cost. A *cheap* ETag has to derive
+from a version column, so it needs step one regardless and is then just the
+version carried in a header. Three things make it the worse carrier here: RR7
+single-fetch bundles parent and leaf loaders into one `.data` response, so one
+ETag must span `meetDetail`, `meetAccess` and every loader later added to that
+chain — the same drift `writes.ts` is written to prevent; returning 304 through
+the turbo-stream encoding depends on React Router's internal fetch
+participating in the browser HTTP cache, which is unverified and would want a
+spike before anything rides on it; and a 304 still completes the revalidation
+cycle, handing back fresh object identities, so every lane tile on `run.tsx`
+re-renders every 3s anyway. The version check skips the render as well as the
+request.
+
+Where ETags *would* fit cleanly is the plain fetch endpoints — `api.timer.meet.ts`,
+`api.teams.ts` — which have no single-fetch encoding and no revalidation cycle.
+
+One hazard either way: these responses are permission-scoped (`meetAccess`,
+`entry_visibility`). Any caching headers here must be `private, no-cache`,
+never `public`. Getting that wrong serves one coach's entry view to another,
+and it hides well, because it only appears with a warm cache.
 
 One thing to watch on a deck first: the deck stopwatch treats a lane as
 stopped if *any* time arrives on it after START (`run.tsx`, `allStopped`), so a
 coach timing two of six lanes isn't left waiting on the four the phones cover.
 That branch could never fire mid-race before, because the loader didn't
 refresh. Now it can. It is what the code intends — but it has never actually
-happened during a race, so watch the first heat it does.
+happened during a race, so watch the first heat it does. Version-gating the
+poll changes *when* a refresh lands, not whether one does, so it doesn't make
+this any safer.
 
 ### 2. The stopwatch screen has had the least use
 

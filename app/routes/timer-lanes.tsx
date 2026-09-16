@@ -28,11 +28,12 @@ export default function TimerLanes({ params }: Route.ComponentProps) {
   useEffect(() => {
     // Phones that timed a meet on the build before the grant became a cookie
     // still have the old token sitting in localStorage. Nothing reads it.
-    forgetLegacyGrant();
     fetchSnapshot(params.timerId)
       .then(setSnapshot)
       .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : "Couldn't load the meet."),
+        setError(
+          err instanceof Error ? err.message : "Couldn't load the meet.",
+        ),
       );
   }, [params.timerId]);
 
