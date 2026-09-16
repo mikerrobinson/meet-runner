@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link } from "react-router";
 import { useSession } from "~/state/session";
 
 /** Up to two letters from a name, or the first of a contact. */
@@ -23,7 +23,6 @@ function initials(name: string | null, contact: string): string {
  */
 export function AccountMenu() {
   const session = useSession();
-  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
 
@@ -104,7 +103,9 @@ export function AccountMenu() {
             role="menuitem"
             onClick={() => {
               setOpen(false);
-              void session.signOut().then(() => navigate("/sign-in"));
+              // Where it lands is the route's own answer — it redirects, so
+              // there is no second opinion about it here.
+              session.signOut();
             }}
             className="block w-full px-4 py-2.5 text-left text-sm text-red-600 hover:bg-slate-50 dark:hover:bg-slate-800"
           >

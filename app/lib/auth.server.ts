@@ -612,9 +612,11 @@ export function cookieToken(request: Request): string | null {
 /**
  * How the session cookie is written and cleared.
  *
- * `HttpOnly` because no script needs to read it — the client keeps its own
- * copy in localStorage for the header path. `Secure` everywhere but localhost,
- * which has no https to be secure on.
+ * The whole credential, now that nothing keeps a second copy. `HttpOnly`
+ * because no script needs to read it — and because a token no script can read
+ * is one no script on the page can leak, which is what a copy in localStorage
+ * could never be. `Secure` everywhere but localhost, which has no https to be
+ * secure on.
  */
 export function sessionCookie(
   token: string | null,

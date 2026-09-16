@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { useFetcher, useLocation, useNavigate } from "react-router";
+import { useFetcher, useNavigate, useSearchParams } from "react-router";
 import type { Route } from "./+types/join";
 import { Banner, Button, Card, Field, SectionTitle, TextInput } from "~/components/ui";
-import { startTeam } from "~/lib/auth";
+import { request } from "~/lib/http";
 import { APP_HOME } from "./home";
 import { describeContact } from "~/lib/identity";
 import { useSession } from "~/state/session";
@@ -27,7 +27,8 @@ export function meta({}: Route.MetaArgs) {
 export default function Join() {
   const session = useSession();
   const navigate = useNavigate();
-  const location = useLocation() as { state?: { notice?: string } };
+  const [params] = useSearchParams();
+  const carried = params.get("notice");
 
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +97,13 @@ export default function Join() {
     setError(null);
     try {
       // The server writes the team, its first season and the coach together.
-      session.adopt((await startTeam(name.trim() || "My Team")).session);
+      await request("/api/teams", {
+        method: "POST",
+        body: JSON.stringify({ name: name.trim() || "My Team", coach: true }),
+      });
+      // Which teams this account coaches has just changed, and that is what
+      // the effect above is waiting on.
+      await session.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't start the team.");
     } finally {
@@ -113,7 +120,7 @@ export default function Join() {
         </p>
       </div>
 
-      {location.state?.notice && <Banner tone="warn">{location.state.notice}</Banner>}
+      {carried && <Banner tone="warn">{carried}</Banner>}
       {(error ?? claimError) && (
         <Banner tone="error">{error ?? claimError}</Banner>
       )}

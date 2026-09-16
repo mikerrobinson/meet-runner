@@ -5,8 +5,6 @@
  * syncing and signing in can't drift apart on either question.
  */
 
-import { loadSessionToken } from "./storage";
-
 /**
  * Resolve an API path against the router basename, so the same code works at
  * `/` in dev and `/projects/meet-runner/` in production.
@@ -44,25 +42,20 @@ export class ApiError extends Error {
 }
 
 /**
- * A request with whatever this device can prove about itself attached.
+ * A request to this app's own API.
  *
- * The session token, and nothing else. There used to be a second, shared
- * "sync token" sent alongside it from the days when the worker gated the whole
- * API on one secret; nothing has written one since accounts arrived, so every
- * request was carrying an empty header.
+ * Nothing is attached. Who is asking rides in the session cookie, which is
+ * `HttpOnly` and sent by the browser on every same-origin request — so there
+ * is no credential in this file to forget, and none in `localStorage` for a
+ * script on the page to read. Two headers used to be assembled here, a shared
+ * "sync token" and a copy of the session; by the end both were empty strings.
  */
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const session = loadSessionToken();
-
   let response: Response;
   try {
     response = await fetch(apiUrl(path), {
       ...init,
-      headers: {
-        "content-type": "application/json",
-        ...(session ? { authorization: `Bearer ${session}` } : {}),
-        ...init?.headers,
-      },
+      headers: { "content-type": "application/json", ...init?.headers },
     });
   } catch {
     // No network, DNS failure, request aborted — nothing reached the server.

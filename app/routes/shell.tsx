@@ -7,41 +7,12 @@ import {
   useParams,
   useRouteLoaderData,
 } from "react-router";
-import type { Route } from "./+types/shell";
 import { AccountMenu } from "~/components/AccountMenu";
 import { useViewPrefs } from "~/state/view-prefs";
 import { useOutbox } from "~/state/outbox";
-import { currentUser, type SyncEnv } from "~/lib/api.server";
-import { teamsCoachedBy } from "~/lib/coaches.server";
-import { getTeam } from "~/lib/teams.server";
-import { ensureSchema } from "~/lib/schema.server";
+import { useSession } from "~/state/session";
 import { LANE_LAYOUTS, meetSubtitle, type LaneLayout } from "~/types/meet";
 import type { loader as meetLoader } from "./meet-layout";
-
-/**
- * The chrome, and what it needs to draw itself.
- *
- * Which team's name sits in the header, and how many swimmers are on it. That
- * is all — the screens under here load their own data. It used to wait on a
- * client store reading IndexedDB before anything could render at all, which is
- * why there were three separate "Loading…" states and a wedged-storage
- * message; a server-rendered page has none of those states to be in.
- */
-export async function loader({ request, context }: Route.LoaderArgs) {
-  const env = context.cloudflare.env as SyncEnv;
-  if (!env.DB) return { team: null };
-
-  const user = await currentUser(request, env);
-  if (!user) return { team: null };
-
-  await ensureSchema(env.DB);
-  const coached = await teamsCoachedBy(env.DB, user.id);
-  const teamId =
-    coached.find((id) => id === user.lastTeamId) ?? coached[0];
-  if (!teamId) return { team: null };
-
-  return { team: await getTeam(env.DB, teamId) };
-}
 
 interface Tab {
   to: string;
@@ -202,15 +173,24 @@ function layoutOptions(
   }));
 }
 
-export default function Shell({ loaderData }: Route.ComponentProps) {
+/**
+ * The chrome, and what it needs to draw itself.
+ *
+ * No loader of its own. The one thing it wanted — whose name sits in the
+ * header — is the team the session already says is open, worked out once on
+ * the root route instead of a second time here. The screens under this load
+ * their own data.
+ */
+export default function Shell() {
   const location = useLocation();
   const navigation = useNavigation();
   const { laneLayout, setLaneLayout } = useViewPrefs();
   const outbox = useOutbox();
   const params = useParams();
+  const session = useSession();
   const meetData = useRouteLoaderData<typeof meetLoader>("routes/meet-layout");
   const openMeet = meetData?.detail?.meet ?? null;
-  const team = loaderData.team;
+  const team = session.teams.find((t) => t.teamId === session.openTeamId) ?? null;
 
   const tabs = params.meetId ? meetTabs(params.meetId) : TOP_TABS;
 

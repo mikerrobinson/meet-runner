@@ -11,6 +11,10 @@ export default [
   route("sign-in", "routes/sign-in.tsx"),
   route("join", "routes/join.tsx"),
 
+  // Ending a session, which is the one account move reachable from every page
+  // rather than from a screen of its own.
+  route("session", "routes/session.ts"),
+
   /**
    * The timer's whole world: a scanned link, a lane, and the stopwatch.
    *
@@ -61,6 +65,7 @@ export default [
   // meet load it from their own loader; these are what the cards on those
   // screens ask for as somebody types.
   route("api/teams", "routes/api.teams.ts"),
+  route("api/users", "routes/api.users.ts"),
 
   // What the deck writes. Small, single-row endpoints: the outbox posts one of
   // these per thing somebody did, so two people working at once never touch
@@ -69,13 +74,6 @@ export default [
   route("api/meets/:meetId/seeds", "routes/api.meet.seeds.ts"),
   route("api/meets/:meetId/watches", "routes/api.meet.watches.ts"),
   route("api/meets/:meetId/results", "routes/api.meet.results.ts"),
-
-  // Accounts, and the invitations that hand out a job.
-  route("api/auth/start", "routes/api.auth.start.ts"),
-  route("api/auth/verify", "routes/api.auth.verify.ts"),
-  route("api/auth/session", "routes/api.auth.session.ts"),
-  route("api/users", "routes/api.users.ts"),
-  route("api/invites", "routes/api.invites.ts"),
 
   // Timers. A meet-scoped grant, not an account.
   // One lane, one timer. The phone posts here and the browser brings whatever

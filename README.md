@@ -444,14 +444,17 @@ being a store that had to be filled.
 | `POST`/`DELETE /api/meets/:id/seeds`                     | Who is in a lane                                             |
 | `POST`/`DELETE /api/meets/:id/watches`                   | Times, and dropping your own                                 |
 | `POST`/`DELETE /api/meets/:id/results`                   | Deciding a lane                                              |
-| `/api/auth/*`                                            | Accounts and the codes that open them                        |
-| `GET /api/invites?token=`                                | What a link joins, read before anyone has signed in          |
 | `GET /api/timer/meet`                                    | What a scanned phone reads: the meet, as a timer sees it     |
 | `POST /api/meets/:id/timers/:timerId/:event/:heat/:lane` | One lane, one timer — body-less; the cookies are the payload |
 
 The four meet-write rows are the outbox's transport (see above) and the last row is
-the timing protocol; the rest are on their way into the actions of the screens that
-use them.
+the timing protocol; the two searches answer a picker as somebody types.
+
+Signing in has no endpoint. It is the sign-in screen's own action, and it ends in a
+redirect carrying the session cookie — which is the whole credential. Nothing is kept
+in `localStorage`: the token used to live there as well, so that a header could be
+attached to every `fetch`, and by the end both the header and the copy were doing
+nothing the `HttpOnly` cookie wasn't already doing.
 
 ### Who may do what
 

@@ -8,10 +8,37 @@ import {
 } from "react-router";
 
 import type { Route } from "./+types/root";
-import { SessionProvider } from "./state/session";
 import { ViewPrefsProvider } from "./state/view-prefs";
 import { OutboxProvider } from "./state/outbox";
+import { currentUser, type SyncEnv } from "./lib/api.server";
+import { sessionPayload } from "./lib/auth.server";
+import { SIGNED_OUT } from "./state/session";
 import "./app.css";
+
+/**
+ * Who is signed in, decided once for the whole app.
+ *
+ * The session cookie is `HttpOnly` and sent with every request, so the server
+ * already knows this on the way in — there is nothing for the browser to ask
+ * afterwards. It used to ask anyway: a provider fetched `/api/auth/session` on
+ * every boot, cached the answer in localStorage against an offline load, and
+ * carried a "stale" flag to say which of the two you were looking at. All of
+ * that was paying for a round trip the server had already made.
+ *
+ * On the root route rather than the shell, because signing in and the timer's
+ * screens live outside the shell and still need to know.
+ */
+export async function loader({ request, context }: Route.LoaderArgs) {
+  const env = context.cloudflare.env as SyncEnv;
+  if (!env.DB) return { session: SIGNED_OUT };
+
+  const user = await currentUser(request, env);
+  // A phone with no cookie — every timer, and every first visit — costs
+  // nothing here: there is no token to look up.
+  if (!user) return { session: SIGNED_OUT };
+
+  return { session: await sessionPayload(env.DB, user) };
+}
 
 /**
  * Assets in `public/` are served under the router basename, so home-screen
@@ -70,22 +97,21 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   /**
-   * Three providers, and all of them are about this device rather than the
-   * data. `SessionProvider` is who is signed in here, `ViewPrefsProvider` is
-   * how they like to look at things, and `OutboxProvider` is what this device
-   * has said and not yet been acknowledged for.
+   * Two providers, and both are about this device rather than the data.
+   * `ViewPrefsProvider` is how this person likes to look at things, and
+   * `OutboxProvider` is what this device has said and not yet been
+   * acknowledged for.
    *
-   * Everything else arrives through loaders, which is why there is no store to
-   * wrap the app in any more.
+   * Who is signed in used to be a third. It isn't device state — it's a fact
+   * the server established before this page was rendered — so it comes down
+   * with the page like everything else.
    */
   return (
-    <SessionProvider>
-      <ViewPrefsProvider>
-        <OutboxProvider>
-          <Outlet />
-        </OutboxProvider>
-      </ViewPrefsProvider>
-    </SessionProvider>
+    <ViewPrefsProvider>
+      <OutboxProvider>
+        <Outlet />
+      </OutboxProvider>
+    </ViewPrefsProvider>
   );
 }
 

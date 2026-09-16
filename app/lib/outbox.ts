@@ -21,7 +21,6 @@
 
 import { apiUrl } from "./http";
 import { generateId } from "./id";
-import { loadSessionToken } from "./storage";
 import { local } from "./local";
 import type { ResultStatus, WatchRole } from "~/types/meet";
 
@@ -287,13 +286,12 @@ export async function flush(): Promise<void> {
       let status = 0;
       let message = "No signal";
       try {
-        const token = loadSessionToken();
+        // Who is asking rides in the session cookie, which the browser
+        // attaches by itself — there is nothing to read out of storage here,
+        // and so nothing to be missing when storage is refused.
         const response = await fetch(apiUrl(url), {
           method,
-          headers: {
-            "content-type": "application/json",
-            ...(token ? { authorization: `Bearer ${token}` } : {}),
-          },
+          headers: { "content-type": "application/json" },
           body: body === undefined ? undefined : JSON.stringify(body),
         });
         status = response.status;
