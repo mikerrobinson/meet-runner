@@ -6,7 +6,7 @@
  * it happened on:
  *
  *   submit=1789413369235,30000
- *   Path=/…/api/meets/{meetId}/timers/{timerId}/{event}/{heat}/{lane}
+ *   Path=/…/api/meets/{meetId}/timer/{event}/{heat}/{lane}
  *
  * Which makes the addressing free. A cookie is identified by name, domain and
  * path, so pressing submit twice on the same lane overwrites rather than

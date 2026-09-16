@@ -272,4 +272,41 @@ eq(
   eq(resultFor({ results: [result("s1", 1)] }, "s2"), undefined, "and results likewise");
 }
 
+/* ------------------------------------------------ a lane nobody has named */
+
+/**
+ * A time may exist before the swimmer does.
+ *
+ * A timer who never taps a name still times the race, and the watch is filed
+ * against a swim with an empty `athleteId` rather than refused — so everything
+ * that reads a time has to work on one. The name arrives later, from the desk,
+ * onto the same row.
+ */
+{
+  const unnamed = seed("s9", 1, 5, "");
+  eq(
+    swimTime(
+      { seeds: [unnamed], watches: [watch("s9", "d-1", 27_140)], results: [] },
+      "s9",
+    ),
+    { timeMs: 27_140, method: "single", watchCount: 1, status: "OK", official: false, from: "timer" },
+    "an unnamed lane's watch still proposes a time",
+  );
+  eq(
+    recordedCount({ watches: [watch("s9", "d-1", 27_140)], results: [] }),
+    1,
+    "and it counts as a time the meet has recorded",
+  );
+  eq(
+    laneProgress({ watches: [watch("s9", "d-1", 27_140)] }, "s9"),
+    "complete",
+    "and the desk sees the lane as covered",
+  );
+  eq(
+    seedsForHeat({ seeds: [unnamed] }, EVENT, 1).length,
+    1,
+    "the swim is in its heat like any other",
+  );
+}
+
 done();

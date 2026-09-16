@@ -164,7 +164,11 @@ export default function Results() {
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-semibold">
-                          {athlete ? athleteName(athlete) : "(removed)"}
+                          {athlete
+                            ? athleteName(athlete)
+                            : seed.athleteId
+                              ? "(removed)"
+                              : "(no name — lane " + seed.lane + ")"}
                         </span>
                         {/* Team first: in a dual meet the question this
                             screen answers is which school scored, and the lane

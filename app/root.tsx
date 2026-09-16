@@ -1,5 +1,6 @@
 import {
   isRouteErrorResponse,
+  type ShouldRevalidateFunctionArgs,
   Links,
   Meta,
   Outlet,
@@ -11,6 +12,7 @@ import type { Route } from "./+types/root";
 import { ViewPrefsProvider } from "./state/view-prefs";
 import { OutboxProvider } from "./state/outbox";
 import { currentUser, type SyncEnv } from "./lib/api.server";
+import { isTimingPath } from "./lib/timer-path";
 import { sessionPayload } from "./lib/auth.server";
 import { SIGNED_OUT } from "./state/session";
 import "./app.css";
@@ -38,6 +40,37 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   if (!user) return { session: SIGNED_OUT };
 
   return { session: await sessionPayload(env.DB, user) };
+}
+
+/**
+ * Don't ask again while somebody is timing.
+ *
+ * React Router revalidates every loader in the matched chain on every client
+ * navigation, and this one is at the root of all of them — so moving from one
+ * heat to the next fired a request for the session. Out of signal that request
+ * fails, and a failed revalidation fails the *navigation*: a volunteer who had
+ * just queued a time and tapped through to the next heat landed on the error
+ * page instead, with the time safely in a cookie and no way back to the
+ * stopwatch. It was the one screen in the app written to work with no wifi at
+ * all, undone by the one loader it didn't know it had.
+ *
+ * With nothing left in the chain that needs calling, React Router makes no
+ * request at all, and heat-to-heat navigation costs nothing and cannot fail.
+ *
+ * Safe because of what this loader answers: who is signed in. Nobody signs in
+ * or out by walking down the pool — the timing screens have no account behind
+ * them in the first place — and arriving at or leaving them is a fresh
+ * document load, which reads the session again regardless.
+ */
+export function shouldRevalidate({
+  currentUrl,
+  nextUrl,
+  defaultShouldRevalidate,
+}: ShouldRevalidateFunctionArgs) {
+  if (isTimingPath(currentUrl.pathname) && isTimingPath(nextUrl.pathname)) {
+    return false;
+  }
+  return defaultShouldRevalidate;
 }
 
 /**

@@ -6,8 +6,20 @@ import {
   requireDb,
   type SyncEnv,
 } from "~/lib/api.server";
-import { grantFor, grantToken } from "~/lib/grants.server";
-import { meetDetail, putWatch, seedAt, setSeed } from "~/lib/meets.server";
+import {
+  appBaseOf,
+  deviceCookie,
+  existingDeviceId,
+  grantFor,
+  grantToken,
+} from "~/lib/grants.server";
+import {
+  ensureLane,
+  meetDetail,
+  putWatch,
+  seedAt,
+  setSeed,
+} from "~/lib/meets.server";
 import { putAthlete } from "~/lib/athletes.server";
 import { enrolVisitor } from "~/lib/teams.server";
 import { generateId } from "~/lib/id";
@@ -24,7 +36,7 @@ import {
 /**
  * One lane, one timer, everything they have to say about it.
  *
- *   POST /api/meets/{meetId}/timers/{timerId}/{event}/{heat}/{lane}
+ *   POST /api/meets/{meetId}/timer/{event}/{heat}/{lane}
  *
  * There is no request body. What the phone has to say arrives as cookies the
  * browser attached because their path matches this URL — `seat`, `start`,
@@ -67,8 +79,22 @@ export async function action({ params, request, context }: Route.ActionArgs) {
       throw new SyncError("That code isn't for this meet.", 403);
     }
 
-    const timerId = String(params.timerId ?? "").slice(0, 40);
-    if (!timerId) throw new SyncError("Which device?", 400);
+    /**
+     * Which phone this is, from the cookie rather than from the URL.
+     *
+     * It was a segment of the path until it wasn't needed there: watches are
+     * keyed by it, so being wrong about it means a second watch on a lane this
+     * device already timed — and a URL segment is only ever what the sender
+     * typed, while the cookie was set by the server that minted the id.
+     *
+     * Minting one here should never happen: this request already carries a
+     * grant cookie, and the device cookie was set beside it at the same path
+     * in the same response. If it somehow has, the answer is *not* to refuse —
+     * a 4xx makes the phone drop the time — but to take one and set it, so
+     * that at most this one request is filed under an id of its own.
+     */
+    const known = existingDeviceId(request);
+    const timerId = known ?? `d-${Math.random().toString(36).slice(2, 10)}`;
 
     const messages = readMessages(request);
     if (messages.size === 0) return json({ applied: 0 });
@@ -152,22 +178,28 @@ export async function action({ params, request, context }: Route.ActionArgs) {
 
     if (start || stop || submit) {
       /**
-       * Nothing can be filed against a lane nobody is in.
+       * A time for a lane nobody has named makes the lane.
        *
-       * A watch belongs to a swim, and a swim is somebody in a lane — so a
-       * time arriving before a name has nowhere to go. The timing screen asks
-       * who is in the lane before it offers a stopwatch, so in practice the
-       * `seat` message is in this same request or an earlier one; refusing is
-       * what happens when it genuinely isn't.
+       * This used to refuse with a 409, and the phone — which drops 4xx so one
+       * message the server will never accept can't block every lane behind it
+       * — threw the time away without saying so. The race had been swum, timed
+       * and submitted, and the evidence was destroyed because nobody tapped a
+       * name: which is exactly the step a volunteer watching the water is
+       * likeliest to skip, and the one thing that can still be put right
+       * afterwards when the swim itself cannot be re-run.
        *
-       * A 4xx, so the phone drops it and says so rather than retrying a
-       * message the server will never accept.
+       * So the swim is created with nobody in it and the watch hangs off that.
+       * `setSeed` keeps this row's id when a name finally arrives — from the
+       * blocks a heat later, or from the desk assigning the lane — so the time
+       * is already attached to the swim it belongs to and there is nothing to
+       * reconcile by hand.
        */
       if (!seed) {
-        throw new SyncError(
-          "Say who is in this lane before sending a time for it.",
-          409,
-        );
+        seed = await ensureLane(db, grant.meetId, {
+          eventId: event.id,
+          heat: heatNo,
+          lane,
+        });
       }
 
       /**
@@ -209,6 +241,12 @@ export async function action({ params, request, context }: Route.ActionArgs) {
     // headers and so can only hold one `set-cookie`. Clearing four cookies
     // needs four of them.
     const headers = clearHeaders(request, messages.keys());
+    if (!known) {
+      headers.append(
+        "set-cookie",
+        deviceCookie(timerId, request, appBaseOf(request, "/api/")),
+      );
+    }
     headers.set("content-type", "application/json");
     return new Response(JSON.stringify({ applied }), { headers });
   } catch (error) {

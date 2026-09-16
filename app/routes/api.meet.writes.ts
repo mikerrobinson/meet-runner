@@ -129,6 +129,11 @@ export async function action({ params, request, context }: Route.ActionArgs) {
         if (!Number.isInteger(write.lane) || write.lane < 1) {
           throw new SyncError("Which lane?", 400);
         }
+        // An empty athlete id is how a seed says "nobody has named this lane
+        // yet", and only a time arriving for an unnamed lane may create one.
+        // A seeding write means to put somebody somewhere, so a blank here is
+        // a bug on the way in rather than a lane to be emptied.
+        if (!write.athleteId) throw new SyncError("Which swimmer?", 400);
         const seed = await setSeed(db, params.meetId, {
           eventId: write.eventId,
           heat: write.heat,

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import type { Route } from "./+types/timer-lanes";
-import { fetchSnapshot, forgetLegacyGrant, type Snapshot } from "~/lib/timer";
+import { fetchSnapshot, type Snapshot } from "~/lib/timer";
 import { firstStopPath } from "~/lib/timer-path";
 
 export function meta({}: Route.MetaArgs) {
@@ -26,16 +26,14 @@ export default function TimerLanes({ params }: Route.ComponentProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Phones that timed a meet on the build before the grant became a cookie
-    // still have the old token sitting in localStorage. Nothing reads it.
-    fetchSnapshot(params.timerId)
+    fetchSnapshot()
       .then(setSnapshot)
       .catch((err: unknown) =>
         setError(
           err instanceof Error ? err.message : "Couldn't load the meet.",
         ),
       );
-  }, [params.timerId]);
+  }, []);
 
   if (error) {
     return (
@@ -71,7 +69,7 @@ export default function TimerLanes({ params }: Route.ComponentProps) {
           (lane) => (
             <Link
               key={lane}
-              to={firstStopPath(snapshot, params.meetId, params.timerId, lane)}
+              to={firstStopPath(snapshot, params.meetId, lane)}
               className="flex min-h-24 touch-manipulation items-center justify-center rounded-2xl border-2 border-slate-300 text-4xl font-bold active:bg-blue-600 active:text-white dark:border-slate-700"
             >
               {lane}

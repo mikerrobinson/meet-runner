@@ -2,18 +2,25 @@ import { data, redirect } from "react-router";
 import type { Route } from "./+types/timer-claim";
 import { requireDb, type SyncEnv } from "~/lib/api.server";
 import {
+  appBaseOf,
   deviceCookie,
   deviceId,
   grantCookie,
   grantFor,
 } from "~/lib/grants.server";
+import { timerPath } from "~/lib/timer-path";
 
 /**
  * What a scanned QR code lands on, and never renders.
  *
  * Two jobs, both done on the server during a redirect: trade the token in the
- * URL for a cookie, and work out who this phone is. Then send it to its own
- * address — `/meets/{meetId}/timers/{timerId}` — where it picks a lane.
+ * URL for a cookie, and work out who this phone is. Then send it to the
+ * meet's lane picker — `/meets/{meetId}/timer`.
+ *
+ * Both answers leave as cookies. The device id used to leave in the redirect
+ * itself, as a segment of every timing URL after it; it doesn't need to, and
+ * a URL is a worse place to keep it than the cookie that was being set
+ * alongside it anyway.
  *
  * There is no component here and nothing to hydrate. The browser follows a
  * 302 and arrives already carrying the credential, which is what makes timing
@@ -36,16 +43,12 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
   /**
    * The app's own base, read off the URL we were reached at.
    *
-   * `/t/` is a known suffix, so removing it leaves the base — `/` in dev and
-   * `/projects/meet-runner/` in production, with no config to keep in step.
-   *
    * It scopes the cookies, and *only* the cookies. The redirect below is a
    * bare path because the framework prefixes the basename itself on the way
    * out; building an absolute one here as well produced a `Location` of
    * `/projects/meet-runner/projects/meet-runner/…`.
    */
-  const { pathname } = new URL(request.url);
-  const base = pathname.slice(0, pathname.lastIndexOf("/t/") + 1);
+  const base = appBaseOf(request, "/t/");
 
   const headers = new Headers();
   headers.append(
@@ -70,7 +73,7 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
   const device = deviceId(request);
   headers.append("set-cookie", deviceCookie(device, request, base));
 
-  return redirect(`/meets/${grant.meetId}/timers/${device}`, { headers });
+  return redirect(timerPath(grant.meetId), { headers });
 }
 
 export default function TimerClaim() {

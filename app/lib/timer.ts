@@ -21,42 +21,36 @@ import type { Athlete, MeetEvent, Seed, Watch } from "~/types/meet";
  *
  * Which lane, which event, which heat and which meet all used to be cookies.
  * They are in the URL now — every timing page is
- * `/meets/{meetId}/timers/{timerId}/{event}/{heat}/{lane}` — so the address
- * bar is the only record of where a timer is standing, the back button works,
- * and a reloaded phone comes back exactly where it was without having
- * remembered anything.
+ * `/meets/{meetId}/timer/{event}/{heat}/{lane}` — so the address bar is the
+ * only record of where a timer is standing, the back button works, and a
+ * reloaded phone comes back exactly where it was without having remembered
+ * anything.
  *
  * What the URL can't say is how far somebody has *been*, which is what stops
  * them wandering back into a heat whose sheet has already gone to the desk.
- * One number, scoped by its own path to this meet and this device, so a
- * different meet starts clean without anything having to notice.
+ * One number, scoped by its own path to this meet, so a different meet starts
+ * clean without anything having to notice. A browser is one device, so there
+ * is nobody else's progress it could be confused with.
  */
 const FURTHEST_COOKIE = "mr_timer_done";
 
-function furthestPath(meetId: string, timerId: string): string {
-  return (
-    `${appBasePath()}meets/${encodeURIComponent(meetId)}` +
-    `/timers/${encodeURIComponent(timerId)}`
-  );
+function furthestPath(meetId: string): string {
+  return `${appBasePath()}meets/${encodeURIComponent(meetId)}/timer`;
 }
 
 /** The furthest heat submitted, as an index into the running order. */
-export function loadFurthest(meetId: string, timerId: string): number {
+export function loadFurthest(): number {
   const raw = readCookie(FURTHEST_COOKIE);
   const value = Number(raw);
   return raw !== null && Number.isInteger(value) && value >= 0 ? value : -1;
 }
 
-export function saveFurthest(
-  meetId: string,
-  timerId: string,
-  index: number,
-): void {
+export function saveFurthest(meetId: string, index: number): void {
   if (typeof document === "undefined") return;
   const secure = location.protocol === "https:" ? "; Secure" : "";
   document.cookie =
     `${FURTHEST_COOKIE}=${index}` +
-    `; Path=${furthestPath(meetId, timerId)}; SameSite=Lax` +
+    `; Path=${furthestPath(meetId)}; SameSite=Lax` +
     `; Max-Age=${A_WEEK}${secure}`;
 }
 
@@ -175,10 +169,13 @@ export interface Snapshot {
   mine: Watch[];
 }
 
-export function fetchSnapshot(timerId: string): Promise<Snapshot> {
-  return timerFetch(
-    `/api/timer/meet?timerId=${encodeURIComponent(timerId)}`,
-  ) as Promise<Snapshot>;
+/**
+ * Nothing is passed. Both halves of "which meet, and whose watches" are
+ * cookies the browser attaches by itself — the grant says which meet, and the
+ * device cookie says which phone's own times to mark as already sent.
+ */
+export function fetchSnapshot(): Promise<Snapshot> {
+  return timerFetch(`/api/timer/meet`) as Promise<Snapshot>;
 }
 
 /**

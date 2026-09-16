@@ -416,6 +416,14 @@ export interface Seed {
   heat: number;
   /** Which lane, 1-based. */
   lane: number;
+  /**
+   * Who is in it — or `""`, meaning nobody has said yet.
+   *
+   * An empty lane and an unnamed one are different things: the first has no
+   * row at all, the second has a swim somebody timed before the name was
+   * settled. Only a time arriving for a lane nobody has named creates one,
+   * and it stops being empty the moment anybody says who was there.
+   */
   athleteId: string;
   /** What they are expected to swim, when anybody knows. Nothing reads it yet. */
   seedTimeMs?: number;

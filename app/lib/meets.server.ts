@@ -308,7 +308,11 @@ export async function meetDetail(
   // roster — a swimmer nobody has entered yet still has to be pickable.
   const wanted = new Set<string>();
   for (const list of Object.values(entryMap)) for (const id of list) wanted.add(id);
-  for (const seed of seeds.results) wanted.add(seed.athlete_id);
+  // Skipping the lanes nobody has named yet, whose `athlete_id` is empty —
+  // there is no such person to fetch.
+  for (const seed of seeds.results) {
+    if (seed.athlete_id) wanted.add(seed.athlete_id);
+  }
 
   const holes = teamIds.map(() => "?").join(", ");
   const [teams, rosters] = await Promise.all([
@@ -718,6 +722,54 @@ export async function seedAt(
     .bind(eventId, heat, lane)
     .first<SeedRow>();
   return row ? seedFrom(row) : null;
+}
+
+/**
+ * The swim in a lane, made to exist because something was timed against it.
+ *
+ * A watch belongs to a swim, and a swim is a lane in a heat before it is
+ * anybody in particular. Behind the blocks the name is often the last thing
+ * settled: the volunteer is watching the water, the heat goes off, and who
+ * was in lane 4 gets sorted out afterwards. So a time for a lane nobody has
+ * named creates the lane rather than being refused, with no athlete on it.
+ *
+ * Nothing else about the row is touched if it is already there — this never
+ * moves anybody or un-names a lane — and `setSeed` keeps this id when a name
+ * finally arrives, so the watch is already hanging off the right swim.
+ */
+export async function ensureLane(
+  db: D1Database,
+  meetId: string,
+  place: { eventId: string; heat: number; lane: number },
+): Promise<Seed> {
+  await ensureSchema(db);
+
+  const existing = await seedAt(db, place.eventId, place.heat, place.lane);
+  if (existing) return existing;
+
+  const id = generateId();
+  await db
+    .prepare(
+      `INSERT INTO seeds (id, meet_id, event_id, heat, lane, athlete_id)
+       VALUES (?, ?, ?, ?, ?, '')
+       ON CONFLICT(event_id, heat, lane) DO NOTHING`,
+    )
+    .bind(id, meetId, place.eventId, place.heat, place.lane)
+    .run();
+
+  // Re-read rather than trusting the insert: two timers on the same lane can
+  // both arrive here, and the one that lost has to come away with the id that
+  // won — otherwise their watches would hang off two different swims.
+  return (
+    (await seedAt(db, place.eventId, place.heat, place.lane)) ?? {
+      id,
+      meetId,
+      eventId: place.eventId,
+      heat: place.heat,
+      lane: place.lane,
+      athleteId: "",
+    }
+  );
 }
 
 /** Take somebody out of a lane. Their watches go with the swim. */

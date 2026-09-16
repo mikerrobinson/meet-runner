@@ -99,7 +99,7 @@ It needs the one absolute time in the app. Everywhere else a phone's clock is
 trusted only to order that phone's own actions, because a time is a difference
 between two readings of one clock and is right however wrong the clock is. A
 running stopwatch measures a phone's start against the _desk's_ now, so
-`/api/meets/…/timers/…` translates the phone's timestamps onto the server's on
+`/api/meets/…/timer/…` translates the phone's timestamps onto the server's on
 the way in: the message says when the thumb landed and arrives at a known
 moment, and `start` is flushed instantly, so the difference is the phone's error
 plus a network hop. A phone ninety seconds fast lands within one.
@@ -193,24 +193,42 @@ legacy localStorage → a value held in the module, so it is stable for as long 
 the tab is open even when nothing can be persisted at all.
 
 **Where a timer is standing is the URL, not the device.** Every timing page is
-`/meets/{meetId}/timers/{timerId}/{event}/{heat}/{lane}` — the same shape as the
-endpoint it posts to. So changing heats is a link, going back a heat is the back
-button, a reloaded phone comes back exactly where it was having remembered
-nothing, and a volunteer can be read their position down the pool when something
-has gone wrong. The lane, the heat, the event and the meet were four cookies
-before this; they are the address now.
+`/meets/{meetId}/timer/{event}/{heat}/{lane}` — the same shape as the endpoint
+it posts to. So changing heats is a link, going back a heat is the back button,
+a reloaded phone comes back exactly where it was having remembered nothing, and
+a volunteer can be read their position down the pool when something has gone
+wrong. The lane, the heat, the event and the meet were four cookies before this;
+they are the address now.
 
-The device's id is minted by the server when the code is scanned, so it is in
-that address from the first screen — and re-used when the phone already has one,
-because a volunteer scanning again after lunch must come back as the _same_
-timer. Watches are keyed by it, and several on a lane are averaged, so a device
-that forgets doesn't just duplicate a time, it moves the one the desk reads.
+**Who the phone is, though, is _not_ in the URL.** It was, as
+`/timers/{timerId}/…`, and it never earned the segment: the device id is minted
+by the server when the code is scanned and kept in a cookie that rides every
+request afterwards, the server has to read that cookie to be sure of it — a
+segment is only ever what the sender typed — and nobody on a deck can use it.
+So where somebody is standing is the address, and who they are is a credential,
+and credentials travel in cookies here.
+
+It is re-used whenever the phone already has one, because a volunteer scanning
+again after lunch must come back as the _same_ timer. Watches are keyed by it,
+and several on a lane are averaged, so a device that forgets doesn't just
+duplicate a time, it moves the one the desk reads.
 
 The one thing left on the device is how far this timer has _been_: the URL says
 where they are, not the furthest they have got, and going back into a heat whose
 sheet has already reached the desk is what that stops. One number, in a cookie
-pathed to this meet and this device, so a different meet starts clean without
-anything having to notice.
+pathed to this meet, so a different meet starts clean without anything having to
+notice.
+
+**Nothing in that chain has a loader, and `root.tsx` opts out of its own.**
+React Router revalidates every loader in the matched chain on each client
+navigation, and the session loader at the root of the app is in every chain —
+so walking to the next heat fired a network request, and out of signal the
+failed revalidation failed the *navigation*: a time safely queued in a cookie,
+and the phone on an error page instead of the next heat. `shouldRevalidate`
+returns `false` between timing paths, which leaves nothing to call, and React
+Router then makes no request at all. Heat-to-heat movement is free and cannot
+fail. (A *reload* out of signal still can't work — that's a document request —
+and a service worker is the only answer to that one.)
 
 **A timer's outbox is cookies; everybody else's is localStorage.** They face
 different problems. A coach signs in on their own iPad and can be expected to
@@ -223,7 +241,7 @@ Each message is a cookie **named for the action** and **pathed to the lane**:
 
 ```
 submit=1789413369235,30000
-Path=/…/api/meets/{meetId}/timers/{timerId}/{event}/{heat}/{lane}
+Path=/…/api/meets/{meetId}/timer/{event}/{heat}/{lane}
 ```
 
 which makes three things free. _Addressing_: nothing in the value repeats what
@@ -388,8 +406,8 @@ title · view options · status · profile.
 | `/teams`, `/teams/:id` | Every team, and starting one; one team's roster, seasons, meets, coaches — and for a coach of it: CSV import, add by hand, renaming, seasons, invites, export |
 | `/profile` | The account: name, ways to sign in, signing out, and this device's display preferences |
 | `/athletes`, `/users/:id` | Browsing — open to anyone, no account |
-| `/meets/:id/timers/:timerId` | The volunteer picks a lane, reached by QR code, no account |
-| `/meets/:id/timers/:timerId/:event/:heat/:lane` | Their stopwatch, addressed like the endpoint behind it |
+| `/meets/:id/timer` | The volunteer picks a lane, reached by QR code, no account |
+| `/meets/:id/timer/:event/:heat/:lane` | Their stopwatch, addressed like the endpoint behind it |
 
 **The control desk** shows every watch on a lane as its own chip, because a
 single slow thumb is obvious side by side and invisible once averaged — and
@@ -441,7 +459,7 @@ being a store that had to be filled.
 | `GET /api/teams`, `GET /api/users`                       | Searching as somebody types, for the team and person pickers |
 | `POST /api/meets/:id/writes`                             | One `Write` off the outbox — an entry, a lane, a time, a call |
 | `GET /api/timer/meet`                                    | What a scanned phone reads: the meet, as a timer sees it     |
-| `POST /api/meets/:id/timers/:timerId/:event/:heat/:lane` | One lane, one timer — body-less; the cookies are the payload |
+| `POST /api/meets/:id/timer/:event/:heat/:lane`           | One lane, one timer — body-less; the cookies are the payload |
 
 The writes row is the outbox's transport (see above) and the last row is the timing
 protocol; the two searches answer a picker as somebody types.

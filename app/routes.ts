@@ -26,10 +26,15 @@ export default [
    * reloads comes back exactly where it was without having remembered
    * anything. It is also what a volunteer can be read down the pool — "you're
    * on event seven, heat one, lane three" — when something has gone wrong.
+   *
+   * Which phone it is has no segment of its own. It is a cookie, set when the
+   * code was scanned and attached to every request after that, and the server
+   * reads it there rather than from the URL — where it would only ever be
+   * whatever the URL claimed.
    */
   route("t/:token", "routes/timer-claim.tsx"),
-  route("meets/:meetId/timers/:timerId", "routes/timer-lanes.tsx"),
-  route("meets/:meetId/timers/:timerId/:event/:heat/:lane", "routes/timer.tsx"),
+  route("meets/:meetId/timer", "routes/timer-lanes.tsx"),
+  route("meets/:meetId/timer/:event/:heat/:lane", "routes/timer.tsx"),
 
   layout("routes/shell.tsx", [
     index("routes/home.tsx"),
@@ -76,7 +81,7 @@ export default [
   // One lane, one timer. The phone posts here and the browser brings whatever
   // that lane still owes along with it, as cookies scoped to this very path.
   route(
-    "api/meets/:meetId/timers/:timerId/:event/:heat/:lane",
+    "api/meets/:meetId/timer/:event/:heat/:lane",
     "routes/api.timer.lane.ts",
   ),
 

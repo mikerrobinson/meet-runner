@@ -199,34 +199,61 @@ export function grantCookie(
 export const DEVICE_COOKIE = "mr_timer_id";
 
 /**
+ * Who this phone says it is, if it has been here before.
+ *
+ * `null` for a browser carrying no device cookie, which the callers treat as
+ * something to put right rather than as an answer — see `deviceId`.
+ */
+export function existingDeviceId(request: Request): string | null {
+  const jar = request.headers.get("cookie") ?? "";
+  for (const part of jar.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === DEVICE_COOKIE && rest.length) {
+      const existing = decodeURIComponent(rest.join("=")).trim();
+      if (/^[A-Za-z0-9_-]{1,40}$/.test(existing)) return existing;
+    }
+  }
+  return null;
+}
+
+/**
  * Who this phone is when it takes a time.
  *
- * Minted at the moment the code is scanned, so it is in the URL from the very
- * first screen — every timing page is `/meets/{meetId}/timers/{timerId}/…`,
- * and the device's identity is part of its address rather than something the
- * page has to remember and attach.
+ * Minted at the moment the code is scanned and kept in a cookie from then on,
+ * so it rides every request by itself. It used to be a segment of the URL as
+ * well — `/meets/{meetId}/timers/{timerId}/…` — which meant the identity a
+ * watch was filed under was whatever the address bar said, while the cookie
+ * that actually travels with the phone sat there unread.
  *
- * Re-used when the phone already has one. A volunteer who scans again after
- * lunch, or whose tab reloaded, must come back as the *same* timer: watches
- * are keyed by it, so a device that forgets files a second watch on a lane it
- * already timed, and since several watches on a lane are averaged, that moves
- * the time the desk reads.
+ * Re-used whenever the phone already has one, which is the whole point. A
+ * volunteer who scans again after lunch, or whose tab reloaded, must come back
+ * as the *same* timer: watches are keyed by it, so a device that forgets files
+ * a second watch on a lane it already timed, and since several watches on a
+ * lane are averaged, that moves the time the desk reads. Every caller that
+ * mints one here sets the cookie on the way out for that reason.
  *
  * Not `HttpOnly` — the coach's own deck stopwatch reads the same cookie for
  * the same purpose, and it identifies a device rather than authorising one.
  * The grant is the credential, and that one no script can touch.
  */
 export function deviceId(request: Request): string {
-  const jar = request.headers.get("cookie") ?? "";
-  for (const part of jar.split(";")) {
-    const [name, ...rest] = part.trim().split("=");
-    if (name === DEVICE_COOKIE && rest.length) {
-      const existing = decodeURIComponent(rest.join("=")).trim();
-      // URL-safe, because it is about to become part of one.
-      if (/^[A-Za-z0-9_-]{1,40}$/.test(existing)) return existing;
-    }
-  }
-  return `d-${Math.random().toString(36).slice(2, 10)}`;
+  // URL-safe, for the sake of anything that still puts it in one.
+  return existingDeviceId(request) ?? `d-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * The app's own base path, taken from the URL a request arrived on.
+ *
+ * `/` in dev and `/projects/meet-runner/` in production, with no config to
+ * keep in step — the caller passes the known suffix it was reached at and
+ * what's left in front of it is the base. It is what scopes the cookies, so
+ * getting it wrong means a second cookie of the same name at a different path
+ * and a device that answers to two ids.
+ */
+export function appBaseOf(request: Request, suffix: string): string {
+  const { pathname } = new URL(request.url);
+  const at = pathname.lastIndexOf(suffix);
+  return at < 0 ? "/" : pathname.slice(0, at + 1);
 }
 
 export function deviceCookie(

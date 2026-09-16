@@ -14,10 +14,9 @@ import {
   type Snapshot,
   type TimerAthlete,
 } from "~/lib/timer";
-import { stopPath } from "~/lib/timer-path";
+import { stopPath, timerPath } from "~/lib/timer-path";
 import { eventName } from "~/types/meet";
 import {
-  clearOverflow,
   enqueueSeat,
   enqueueStart,
   enqueueStop,
@@ -63,7 +62,6 @@ export default function Timer({ params }: Route.ComponentProps) {
    * *is* the position.
    */
   const meetId = params.meetId;
-  const timerId = params.timerId;
   const lane = Number(params.lane);
   const eventNo = Number(params.event);
   const heatNo = Number(params.heat);
@@ -85,6 +83,7 @@ export default function Timer({ params }: Route.ComponentProps) {
   const [retiming, setRetiming] = useState(false);
   const [waiting, setWaiting] = useState(0);
   const [stuck, setStuck] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
 
   /**
    * What this phone still owes, and whether it has stopped being a blip.
@@ -95,11 +94,16 @@ export default function Timer({ params }: Route.ComponentProps) {
    * reached, and no amount of waiting fixes that. Only that second one earns
    * a colour, because a timer glancing down mid-heat should see nothing
    * unless something is genuinely wrong.
+   *
+   * `rejected` is the other one that earns it: a message the server refused
+   * outright is dropped rather than retried, so a time can be gone for good,
+   * and the one person who can do anything about it is standing here.
    */
   const refreshQueue = () => {
     const state = queueState();
     setWaiting(state.pending.length);
     setStuck(state.overflow);
+    setRefused(state.rejected);
   };
 
   // Who this timer says is in the lane, per heat, before it's been submitted.
@@ -117,18 +121,18 @@ export default function Timer({ params }: Route.ComponentProps) {
       // not a guess from storage — the token is in an HttpOnly cookie and
       // nothing here can see it. A phone without one gets a 401 and the
       // message that goes with it.
-      setSnapshot(await fetchSnapshot(timerId));
+      setSnapshot(await fetchSnapshot());
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't load the meet.");
     }
-  }, [timerId]);
+  }, []);
 
   useEffect(() => {
-    setFurthest(loadFurthest(meetId, timerId));
+    setFurthest(loadFurthest());
     refreshQueue();
     void load();
-  }, [load, meetId, timerId]);
+  }, [load, meetId]);
 
   // Anything stuck in the outbox goes out when the signal comes back, and when
   // the phone is picked up again. Neither is guaranteed to happen, which is why
@@ -136,7 +140,7 @@ export default function Timer({ params }: Route.ComponentProps) {
   useEffect(() => {
     const drain = () => {
       if (!meetId) return;
-      void flushQueue(meetId, timerId).then(refreshQueue);
+      void flushQueue(meetId).then(refreshQueue);
     };
     window.addEventListener("online", drain);
     document.addEventListener("visibilitychange", drain);
@@ -146,7 +150,7 @@ export default function Timer({ params }: Route.ComponentProps) {
       document.removeEventListener("visibilitychange", drain);
       clearInterval(timer);
     };
-  }, [meetId, timerId]);
+  }, [meetId]);
 
   /**
    * Pick up what everyone else has changed.
@@ -192,6 +196,23 @@ export default function Timer({ params }: Route.ComponentProps) {
       if (frame.current !== null) cancelAnimationFrame(frame.current);
     };
   }, [startedAt]);
+
+  /**
+   * A clock belongs to the race it was started for.
+   *
+   * Moving to another heat changes this route's params rather than matching a
+   * different route, so React keeps the component and everything above would
+   * otherwise follow the timer down the pool. It did: STOP, then ›, and heat 2
+   * opened showing heat 1's time above a live Submit that would have filed it
+   * against the new lane.
+   */
+  useEffect(() => {
+    setStartedAt(null);
+    setStopped(null);
+    setElapsed(0);
+    setRetiming(false);
+    setPicking(false);
+  }, [eventNo, heatNo, lane]);
 
   /* ----------------------------------------------------------------- state */
 
@@ -259,14 +280,13 @@ export default function Timer({ params }: Route.ComponentProps) {
   /**
    * Move to another heat by going to its page.
    *
-   * The clock isn't carried across and doesn't need clearing: a different heat
-   * is a different URL, so this screen remounts and the stopwatch starts from
-   * nothing. Which is the honest behaviour anyway — a running clock belongs to
-   * the race it was started for.
+   * The clock is cleared on the way, by the effect above rather than here, so
+   * that every arrival at a heat behaves the same whether it came from these
+   * arrows, from Submit, or from the back button.
    */
   const move = (to: number) => {
     const target = order[Math.max(floor, Math.min(order.length - 1, to))];
-    if (target) navigate(stopPath(meetId, timerId, target, lane));
+    if (target) navigate(stopPath(meetId, target, lane));
   };
 
   /**
@@ -293,7 +313,7 @@ export default function Timer({ params }: Route.ComponentProps) {
         )
       : 0;
 
-    enqueueSeat(meetId, timerId, where, {
+    enqueueSeat(meetId, where, {
       team: teamIndex,
       ...(newcomer
         ? { name: `${newcomer.firstName} ${newcomer.lastName}`.trim() }
@@ -301,7 +321,7 @@ export default function Timer({ params }: Route.ComponentProps) {
     });
 
     refreshQueue();
-    void flushQueue(meetId, timerId).then(() => {
+    void flushQueue(meetId).then(() => {
       refreshQueue();
       // Straight back for the corrected lineup, so the name on screen is the
       // one everybody else is now looking at.
@@ -316,7 +336,7 @@ export default function Timer({ params }: Route.ComponentProps) {
     // something the server works out from whether a start and a stop came
     // through for this lane — it doesn't have to be asserted here, and a
     // phone that was offline through the race still submits the same message.
-    enqueueSubmit(meetId, timerId, where, stopped.ms);
+    enqueueSubmit(meetId, where, stopped.ms);
 
     // How far this device has got. The only thing about a timer's progress
     // that is still device state — the URL says where they *are*, not the
@@ -324,13 +344,13 @@ export default function Timer({ params }: Route.ComponentProps) {
     // this exists to prevent.
     const reached = Math.max(furthest, stopIndex);
     setFurthest(reached);
-    saveFurthest(meetId, timerId, reached);
+    saveFurthest(meetId, reached);
 
-    // Clear the clock before moving. Usually the next heat is a different URL
-    // and this screen remounts anyway — but on the last heat of the meet there
-    // is nowhere further to go, the URL doesn't change, nothing remounts, and
-    // without this the time just submitted stays on screen above a Submit
-    // button offering to send it again.
+    // Clear the clock before moving. Usually the navigation below does it, by
+    // changing the heat in the URL — but on the last heat of the meet there is
+    // nowhere further to go, nothing in the address changes, and without this
+    // the time just submitted stays on screen above a Submit button offering
+    // to send it again.
     setStartedAt(null);
     setStopped(null);
     setElapsed(0);
@@ -338,13 +358,13 @@ export default function Timer({ params }: Route.ComponentProps) {
 
     // On to the next heat, which is the next page.
     const next = order[Math.min(order.length - 1, stopIndex + 1)];
-    if (next) navigate(stopPath(meetId, timerId, next, lane));
+    if (next) navigate(stopPath(meetId, next, lane));
 
     // A failure here is not worth reporting: the time is already in a cookie
     // addressed to the lane it belongs to, the header says how many are
     // waiting, and the next attempt is twenty seconds away. What matters is
     // that the screen has already moved on to the next heat.
-    await flushQueue(meetId, timerId);
+    await flushQueue(meetId);
     refreshQueue();
   };
 
@@ -391,6 +411,15 @@ export default function Timer({ params }: Route.ComponentProps) {
   const running = startedAt !== null && !stopped;
   const inEvent = new Set(snapshot.entries[stop.event.id] ?? []);
 
+  /**
+   * The one line that is allowed to be red.
+   *
+   * Both of these mean a time is not coming back on its own, which is the only
+   * thing worth interrupting somebody mid-heat for. A queue that is merely
+   * waiting says so in grey and is none of their business.
+   */
+  const alarm = stuck ? "not saving — find signal" : refused;
+
   return (
     <main className="flex min-h-screen flex-col bg-slate-50 dark:bg-slate-950">
       {/* Where we are. Small: it's context, not the job. */}
@@ -408,13 +437,11 @@ export default function Timer({ params }: Route.ComponentProps) {
           <p className="truncate text-sm font-bold">{eventName(stop.event)}</p>
           <p
             className={`text-xs ${
-              stuck ? "font-bold text-red-600" : "text-slate-500"
+              alarm ? "font-bold text-red-600" : "text-slate-500"
             }`}
           >
             Heat {stop.number} of {stop.of}
-            {stuck
-              ? " · not saving — find signal"
-              : waiting > 0 && ` · ${waiting} to send`}
+            {alarm ? ` · ${alarm}` : waiting > 0 && ` · ${waiting} to send`}
           </p>
         </div>
         <Button
@@ -435,7 +462,7 @@ export default function Timer({ params }: Route.ComponentProps) {
               same thing. A timer swapping ends of the pool mid-meet is the
               case it exists for. */}
           <Link
-            to={`/meets/${meetId}/timers/${timerId}`}
+            to={timerPath(meetId)}
             className={`flex w-full touch-manipulation items-center justify-between rounded-2xl bg-white px-4 py-3 text-left dark:bg-slate-900 ${
               running ? "pointer-events-none opacity-60" : ""
             }`}
@@ -529,7 +556,7 @@ export default function Timer({ params }: Route.ComponentProps) {
                 setStopped({ ms: at - (startedAt ?? at), at });
                 // Queued, not sent: the thumb has more to do and the race
                 // isn't over for everyone. It goes up with the submit.
-                if (where && meetId) enqueueStop(meetId, timerId, where, at);
+                if (where && meetId) enqueueStop(meetId, where, at);
                 refreshQueue();
               }}
             >
@@ -550,8 +577,8 @@ export default function Timer({ params }: Route.ComponentProps) {
                 // wants to see five lanes armed and a sixth not *before* the
                 // gun, which is the only moment anything can be done about it.
                 if (where && meetId) {
-                  enqueueStart(meetId, timerId, where, at);
-                  void flushQueue(meetId, timerId).then(refreshQueue);
+                  enqueueStart(meetId, where, at);
+                  void flushQueue(meetId).then(refreshQueue);
                 }
               }}
             >

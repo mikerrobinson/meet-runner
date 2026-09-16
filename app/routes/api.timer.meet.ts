@@ -6,13 +6,17 @@ import {
   requireDb,
   type SyncEnv,
 } from "~/lib/api.server";
-import { grantFor, grantToken } from "~/lib/grants.server";
+import { deviceId, grantFor, grantToken } from "~/lib/grants.server";
 import { timerSnapshot } from "~/lib/timer.server";
 
 /**
  * Everything a timer's phone needs, and nothing more.
  *
- *   GET /api/timer/meet?timerId=… -> one meet's running order, lanes, names
+ *   GET /api/timer/meet -> one meet's running order, lanes, names
+ *
+ * Nothing is asked for. The grant cookie says which meet, and the device
+ * cookie says which phone — so `mine` comes back as this phone's own watches
+ * without the page having to know its own name.
  *
  * The grant token is the whole credential; there is no account behind it. A
  * dead or rotated token is a 403 rather than a redirect to sign in, because a
@@ -38,10 +42,10 @@ export async function loader({ request, context }: Route.LoaderArgs) {
       throw new SyncError("This timing link has expired. Scan the code again.", 403);
     }
 
-    const timerId = new URL(request.url).searchParams.get("timerId") ?? "";
-    if (!timerId) throw new SyncError("Which device?", 400);
-
-    const snapshot = await timerSnapshot(db, grant, timerId);
+    // A browser with no device cookie gets a throwaway id, and so an empty
+    // `mine`. That is the honest answer — a phone the server has never seen
+    // has taken no times — and this is a read, so nothing is filed under it.
+    const snapshot = await timerSnapshot(db, grant, deviceId(request));
     if (!snapshot) throw new SyncError("That meet is no longer on the server", 404);
 
     return json(snapshot);

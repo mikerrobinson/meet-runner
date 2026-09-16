@@ -598,9 +598,14 @@ function LaneRow({
           <span className="block font-medium">
             {athlete ? displayName(athlete, nameOrder) : "— assign —"}
           </span>
-          {!seed && running.length > 0 && (
+          {/* A lane somebody timed without saying who was in it. The row is
+              here because a watch is, so the time is safe — what's missing is
+              the name, and this is the desk where it gets put right. */}
+          {seed && !athlete && (
             <span className="block text-xs text-amber-700 dark:text-amber-400">
-              a stopwatch running on an empty lane
+              {timed.length > 0
+                ? "timed, nobody named — tap to assign"
+                : "a stopwatch running on a lane with no name"}
             </span>
           )}
         </button>

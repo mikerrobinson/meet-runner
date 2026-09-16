@@ -62,9 +62,21 @@ export interface QueueState {
   pending: LaneRef[];
   /** Set when something could not be stored at all. Needs a person. */
   overflow: boolean;
+  /**
+   * Why something was thrown away, if anything was.
+   *
+   * A refusal the server has already understood is dropped rather than
+   * retried (see `flushQueue`), which means a message is gone for good — and
+   * on this screen that message is somebody's race. It used to happen in
+   * silence: the submit button moved on to the next heat and nothing anywhere
+   * said the time hadn't landed. Sticky, like `overflow`, because nothing the
+   * phone does later brings it back.
+   */
+  rejected: string | null;
 }
 
 let overflow = false;
+let rejected: string | null = null;
 
 /* ------------------------------------------------------------------ paths */
 
@@ -74,10 +86,9 @@ let overflow = false;
  * a cookie whose path is a character off the request path is simply never
  * sent, and nothing anywhere would say so.
  */
-export function lanePath(meetId: string, timerId: string, at: LaneRef): string {
+export function lanePath(meetId: string, at: LaneRef): string {
   return (
-    `${appBasePath()}api/meets/${encodeURIComponent(meetId)}` +
-    `/timers/${encodeURIComponent(timerId)}` +
+    `${appBasePath()}api/meets/${encodeURIComponent(meetId)}/timer` +
     `/${at.event}/${at.heat}/${at.lane}`
   );
 }
@@ -113,11 +124,7 @@ function forget(at: LaneRef): void {
 }
 
 export function queueState(): QueueState {
-  return { pending: readIndex(), overflow };
-}
-
-export function clearOverflow(): void {
-  overflow = false;
+  return { pending: readIndex(), overflow, rejected };
 }
 
 /* --------------------------------------------------------------- enqueuing */
@@ -132,13 +139,12 @@ export function clearOverflow(): void {
  */
 function put(
   meetId: string,
-  timerId: string,
   at: LaneRef,
   action: string,
   value: string,
 ): void {
   if (typeof document === "undefined") return;
-  const path = lanePath(meetId, timerId, at);
+  const path = lanePath(meetId, at);
 
   if (encodeURIComponent(value).length > MAX_VALUE) {
     // Nothing sensible to truncate — half a time is not a time.
@@ -156,11 +162,10 @@ function put(
 
 export function enqueueSeat(
   meetId: string,
-  timerId: string,
   at: LaneRef,
   seat: { team: number; athleteId?: string; name?: string },
 ): void {
-  put(meetId, timerId, at, "seat", formatSeat({
+  put(meetId, at, "seat", formatSeat({
     at: Date.now(),
     team: seat.team,
     athleteId: seat.athleteId ?? "",
@@ -170,29 +175,26 @@ export function enqueueSeat(
 
 export function enqueueStart(
   meetId: string,
-  timerId: string,
   at: LaneRef,
   startedAt: number,
 ): void {
-  put(meetId, timerId, at, "start", formatStart({ at: Date.now(), startedAt }));
+  put(meetId, at, "start", formatStart({ at: Date.now(), startedAt }));
 }
 
 export function enqueueStop(
   meetId: string,
-  timerId: string,
   at: LaneRef,
   stoppedAt: number,
 ): void {
-  put(meetId, timerId, at, "stop", formatStop({ at: Date.now(), stoppedAt }));
+  put(meetId, at, "stop", formatStop({ at: Date.now(), stoppedAt }));
 }
 
 export function enqueueSubmit(
   meetId: string,
-  timerId: string,
   at: LaneRef,
   elapsedMs: number,
 ): void {
-  put(meetId, timerId, at, "submit", formatSubmit({ at: Date.now(), elapsedMs }));
+  put(meetId, at, "submit", formatSubmit({ at: Date.now(), elapsedMs }));
 }
 
 /* ---------------------------------------------------------------- sending */
@@ -211,7 +213,6 @@ export function enqueueSubmit(
  */
 export async function flushQueue(
   meetId: string,
-  timerId: string,
 ): Promise<{ sent: number; error?: string }> {
   const pending = readIndex();
   if (pending.length === 0) return { sent: 0 };
@@ -221,7 +222,7 @@ export async function flushQueue(
 
   for (const at of pending) {
     try {
-      const response = await fetch(lanePath(meetId, timerId, at), {
+      const response = await fetch(lanePath(meetId, at), {
         method: "POST",
         // Same-origin, so the cookies ride along without being asked.
         credentials: "same-origin",
@@ -243,6 +244,7 @@ export async function flushQueue(
       // this lane will block every one behind it forever. Drop it, and say so.
       if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
         forget(at);
+        rejected = error;
       }
       break;
     } catch {
