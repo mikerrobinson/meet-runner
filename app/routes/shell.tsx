@@ -146,6 +146,23 @@ function genderOptions(pathname: string, current: string): ToggleOption[] {
 }
 
 /**
+ * By event / Team Scores for the results screen. Rides on a search param, the
+ * same way the registration grid's gender filter does, so the screen needn't
+ * share state with the chrome.
+ */
+function resultsViewOptions(pathname: string, current: string): ToggleOption[] {
+  return [
+    { value: "event", label: "By event", param: null },
+    { value: "scores", label: "Team Scores", param: "scores" },
+  ].map((option) => ({
+    value: option.value,
+    label: option.label,
+    active: current === option.value,
+    to: option.param ? `${pathname}?view=${option.param}` : pathname,
+  }));
+}
+
+/**
  * How the stopwatch arranges its lane buttons. A single column in pool order
  * suits watching from the side; the grid suits standing at the end. It's a
  * device preference, so it carries to the next meet.
@@ -229,9 +246,14 @@ export default function Shell() {
   // order beside the heat.
   const fullWidth = onRegistration || location.pathname.endsWith("/run");
   const onRun = location.pathname.endsWith("/run");
+  const onResults = location.pathname.endsWith("/results");
   const rawGender = new URLSearchParams(location.search).get("g");
   const genderParam =
     rawGender === "f" || rawGender === "m" ? rawGender : "all";
+  const resultsView =
+    new URLSearchParams(location.search).get("view") === "scores"
+      ? "scores"
+      : "event";
 
   const toggles = onRegistration ? (
     <HeaderToggles
@@ -242,6 +264,11 @@ export default function Shell() {
     <HeaderToggles
       label="Stopwatch button layout"
       options={layoutOptions(openMeet.laneCount, laneLayout, setLaneLayout)}
+    />
+  ) : onResults ? (
+    <HeaderToggles
+      label="Results view"
+      options={resultsViewOptions(location.pathname, resultsView)}
     />
   ) : null;
 

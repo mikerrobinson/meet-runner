@@ -35,7 +35,7 @@ import type { LaneRef } from "~/lib/timer-messages";
  * watching for — a name corrected behind the blocks — matters in the minute
  * before a race and not at all afterwards.
  */
-const SNAPSHOT_POLL_MS = 3000;
+const SNAPSHOT_POLL_MS = 10000;
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Timing · Swim Starts" }];
