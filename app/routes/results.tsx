@@ -11,7 +11,7 @@ import { useLiveData } from "~/hooks/use-live-data";
 import { eventName, athleteName, type Seed } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Results · Meet Runner" }];
+  return [{ title: "Results · Swim Starts" }];
 }
 
 export default function Results() {
@@ -155,10 +155,7 @@ export default function Results() {
                     ? teamsById.get(enrollment.teamId)
                     : undefined;
                   return (
-                    <li
-                      key={seed.id}
-                      className="flex items-center gap-3 py-2"
-                    >
+                    <li key={seed.id} className="flex items-center gap-3 py-2">
                       <span className="w-6 text-center text-sm font-bold text-slate-400">
                         {time.status === "OK" ? place + 1 : "—"}
                       </span>

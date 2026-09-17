@@ -41,7 +41,7 @@ export interface OutboxState {
   sending: boolean;
 }
 
-const KEY = "meet-runner:outbox";
+const KEY = "swim-starts:outbox";
 
 /* ----------------------------------------------------------------- storage */
 
@@ -105,7 +105,7 @@ function supersedes(next: Write, old: Write): boolean {
   switch (next.kind) {
     case "entry":
       return (
-        (old.kind === "entry") &&
+        old.kind === "entry" &&
         old.eventId === next.eventId &&
         old.athleteId === next.athleteId
       );
@@ -194,9 +194,9 @@ export async function flush(): Promise<void> {
         );
         status = response.status;
         if (!response.ok) {
-          const parsed = (await response.json().catch(() => null)) as
-            | { error?: string }
-            | null;
+          const parsed = (await response.json().catch(() => null)) as {
+            error?: string;
+          } | null;
           message = parsed?.error ?? `Failed (${status})`;
         }
       } catch {

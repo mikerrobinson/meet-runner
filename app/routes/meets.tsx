@@ -37,7 +37,7 @@ import {
 } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Meets · Meet Runner" }];
+  return [{ title: "Meets · Swim Starts" }];
 }
 
 type Filter = "upcoming" | "complete" | "all";

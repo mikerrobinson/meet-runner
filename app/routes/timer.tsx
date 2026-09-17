@@ -38,7 +38,7 @@ import type { LaneRef } from "~/lib/timer-messages";
 const SNAPSHOT_POLL_MS = 3000;
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Timing · Meet Runner" }];
+  return [{ title: "Timing · Swim Starts" }];
 }
 
 /**
@@ -633,88 +633,92 @@ export default function Timer({ params }: Route.ComponentProps) {
           />
         ) : (
           <>
-          <div className="py-6 text-center">
-            <p className="font-mono text-6xl font-bold tabular-nums">
-              {stopped ? formatTime(stopped.ms) : formatClock(elapsed)}
-            </p>
-            {alreadyTimed && !stopped && startedAt === null && (
-              <p className="mt-2 text-sm text-slate-500">
-                Sent {sentLabel} for this heat.
-                {retiming && " Timing again replaces it."}
+            <div className="py-6 text-center">
+              <p className="font-mono text-6xl font-bold tabular-nums">
+                {stopped ? formatTime(stopped.ms) : formatClock(elapsed)}
               </p>
-            )}
-          </div>
+              {alreadyTimed && !stopped && startedAt === null && (
+                <p className="mt-2 text-sm text-slate-500">
+                  Sent {sentLabel} for this heat.
+                  {retiming && " Timing again replaces it."}
+                </p>
+              )}
+            </div>
 
-          <div className="space-y-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-            {stopped ? (
-              <div className="grid grid-cols-3 gap-2">
-                <Button
-                  size="xl"
-                  variant="success"
-                  className="col-span-2"
-                  onClick={() => void submit([stopped.ms])}
-                >
-                  Submit
-                </Button>
-                <Button
-                  size="xl"
-                  onClick={() => {
-                    setStopped(null);
-                    setStartedAt(null);
-                    setElapsed(0);
-                  }}
-                >
-                  Redo
-                </Button>
-              </div>
-            ) : alreadyTimed && !retiming ? (
-              /* This heat is done, and says so where the button would be.
+            <div className="space-y-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+              {stopped ? (
+                <div className="grid grid-cols-3 gap-2">
+                  <Button
+                    size="xl"
+                    variant="success"
+                    className="col-span-2"
+                    onClick={() => void submit([stopped.ms])}
+                  >
+                    Submit
+                  </Button>
+                  <Button
+                    size="xl"
+                    onClick={() => {
+                      setStopped(null);
+                      setStartedAt(null);
+                      setElapsed(0);
+                    }}
+                  >
+                    Redo
+                  </Button>
+                </div>
+              ) : alreadyTimed && !retiming ? (
+                /* This heat is done, and says so where the button would be.
                  A green START here invites re-timing a heat whose sheet has
                  already gone to the desk — and reads identically to the heat in
                  front of you, which is the one that matters. */
-              <>
+                <>
+                  <Button
+                    size="xl"
+                    variant="success"
+                    full
+                    disabled
+                    className="min-h-32 text-4xl"
+                  >
+                    Submitted
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    full
+                    onClick={() => setRetiming(true)}
+                  >
+                    Time it again
+                  </Button>
+                </>
+              ) : running ? (
+                <Button
+                  size="xl"
+                  variant="danger"
+                  full
+                  className="min-h-32 text-4xl"
+                  onClick={() => {
+                    const at = Date.now();
+                    setStopped({ ms: at - (startedAt ?? at), at });
+                    // Queued, not sent: the thumb has more to do and the race
+                    // isn't over for everyone. It goes up with the submit.
+                    if (where && meetId) enqueueStop(meetId, where, at);
+                    refreshQueue();
+                  }}
+                >
+                  STOP
+                </Button>
+              ) : (
                 <Button
                   size="xl"
                   variant="success"
                   full
-                  disabled
                   className="min-h-32 text-4xl"
+                  onClick={arm}
                 >
-                  Submitted
+                  START
                 </Button>
-                <Button variant="ghost" full onClick={() => setRetiming(true)}>
-                  Time it again
-                </Button>
-              </>
-            ) : running ? (
-              <Button
-                size="xl"
-                variant="danger"
-                full
-                className="min-h-32 text-4xl"
-                onClick={() => {
-                  const at = Date.now();
-                  setStopped({ ms: at - (startedAt ?? at), at });
-                  // Queued, not sent: the thumb has more to do and the race
-                  // isn't over for everyone. It goes up with the submit.
-                  if (where && meetId) enqueueStop(meetId, where, at);
-                  refreshQueue();
-                }}
-              >
-                STOP
-              </Button>
-            ) : (
-              <Button
-                size="xl"
-                variant="success"
-                full
-                className="min-h-32 text-4xl"
-                onClick={arm}
-              >
-                START
-              </Button>
-            )}
-          </div>
+              )}
+            </div>
           </>
         )}
       </div>
@@ -744,7 +748,6 @@ export default function Timer({ params }: Route.ComponentProps) {
     </main>
   );
 }
-
 
 /**
  * The lane's sheet: a column per watch, and one submit for all of them.

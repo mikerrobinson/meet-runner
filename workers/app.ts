@@ -9,7 +9,7 @@ declare module "react-router" {
   }
 }
 
-const BASE_PATH = "/projects/meet-runner";
+const BASE_PATH = "/";
 
 const requestHandler = createRequestHandler(
   () => import("virtual:react-router/server-build"),

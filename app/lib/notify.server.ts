@@ -13,7 +13,7 @@ import type { Contact } from "./identity";
 export interface NotifyEnv {
   /** Email, via Resend. */
   RESEND_API_KEY?: string;
-  /** Verified sender, e.g. `Meet Runner <meets@example.com>`. */
+  /** Verified sender, e.g. `Swim Starts <meets@swimstarts.com>`. */
   AUTH_FROM_EMAIL?: string;
   /** Text messages, via Twilio. */
   TWILIO_ACCOUNT_SID?: string;
@@ -49,7 +49,8 @@ export async function sendLoginCode(
   link: string,
 ): Promise<Delivery> {
   try {
-    if (contact.kind === "email") return await sendEmail(env, contact.value, code, link);
+    if (contact.kind === "email")
+      return await sendEmail(env, contact.value, code, link);
     return await sendSms(env, contact.value, code);
   } catch (error) {
     const detail = error instanceof Error ? error.message : "Delivery failed";
@@ -84,9 +85,9 @@ async function sendEmail(
     body: JSON.stringify({
       from: env.AUTH_FROM_EMAIL,
       to: address,
-      subject: `${code} is your Meet Runner code`,
+      subject: `${code} is your Swim Starts code`,
       text: [
-        `Your Meet Runner sign-in code is ${code}.`,
+        `Your Swim Starts sign-in code is ${code}.`,
         "",
         `Or open this link on the device you're signing in on:`,
         link,
@@ -98,15 +99,30 @@ async function sendEmail(
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`Resend refused the message (${response.status}) ${body}`.trim());
+    throw new Error(
+      `Resend refused the message (${response.status}) ${body}`.trim(),
+    );
   }
   return { sent: true, detail: "Emailed" };
 }
 
-async function sendSms(env: NotifyEnv, number: string, code: string): Promise<Delivery> {
-  const { TWILIO_ACCOUNT_SID: sid, TWILIO_AUTH_TOKEN: token, TWILIO_FROM: from } = env;
+async function sendSms(
+  env: NotifyEnv,
+  number: string,
+  code: string,
+): Promise<Delivery> {
+  const {
+    TWILIO_ACCOUNT_SID: sid,
+    TWILIO_AUTH_TOKEN: token,
+    TWILIO_FROM: from,
+  } = env;
   if (!sid || !token || !from) {
-    return logOnly("phone", number, code, "TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM");
+    return logOnly(
+      "phone",
+      number,
+      code,
+      "TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM",
+    );
   }
 
   // No link here on purpose: a URL in a text is what makes it look like the
@@ -122,14 +138,16 @@ async function sendSms(env: NotifyEnv, number: string, code: string): Promise<De
       body: new URLSearchParams({
         To: number,
         From: from,
-        Body: `${code} is your Meet Runner code. It expires in ten minutes.`,
+        Body: `${code} is your Swim Starts code. It expires in ten minutes.`,
       }),
     },
   );
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`Twilio refused the message (${response.status}) ${body}`.trim());
+    throw new Error(
+      `Twilio refused the message (${response.status}) ${body}`.trim(),
+    );
   }
   return { sent: true, detail: "Texted" };
 }
@@ -160,7 +178,7 @@ export function sendMeetInvite(
 ): Promise<Delivery> {
   return sendInvite(env, contact, link, {
     subject: "You've been asked to run a meet",
-    opening: "You've been asked to help run a meet on Meet Runner.",
+    opening: "You've been asked to help run a meet on Swim Starts.",
     kind: "meet invitation",
   });
 }
@@ -180,7 +198,7 @@ export function sendTeamInvite(
 ): Promise<Delivery> {
   return sendInvite(env, contact, link, {
     subject: `You've been added as a coach of ${teamName}`,
-    opening: `You've been added as a coach of ${teamName} on Meet Runner.`,
+    opening: `You've been added as a coach of ${teamName} on Swim Starts.`,
     kind: "team invitation",
   });
 }
@@ -226,12 +244,18 @@ async function sendInvite(
       });
       if (!response.ok) {
         const body = await response.text().catch(() => "");
-        throw new Error(`Resend refused the message (${response.status}) ${body}`.trim());
+        throw new Error(
+          `Resend refused the message (${response.status}) ${body}`.trim(),
+        );
       }
       return { sent: true, detail: "Emailed" };
     }
 
-    const { TWILIO_ACCOUNT_SID: sid, TWILIO_AUTH_TOKEN: token, TWILIO_FROM: from } = env;
+    const {
+      TWILIO_ACCOUNT_SID: sid,
+      TWILIO_AUTH_TOKEN: token,
+      TWILIO_FROM: from,
+    } = env;
     if (!sid || !token || !from) {
       return logOnlyLink(
         "phone",
@@ -258,12 +282,17 @@ async function sendInvite(
     );
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      throw new Error(`Twilio refused the message (${response.status}) ${body}`.trim());
+      throw new Error(
+        `Twilio refused the message (${response.status}) ${body}`.trim(),
+      );
     }
     return { sent: true, detail: "Texted" };
   } catch (error) {
     const detail = error instanceof Error ? error.message : "Delivery failed";
-    console.error(`Could not send a ${message.kind} to ${contact.value}:`, detail);
+    console.error(
+      `Could not send a ${message.kind} to ${contact.value}:`,
+      detail,
+    );
     return { sent: false, detail };
   }
 }

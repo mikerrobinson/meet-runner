@@ -57,7 +57,7 @@ import {
 } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Run Meet · Meet Runner" }];
+  return [{ title: "Run Meet · Swim Starts" }];
 }
 
 /** How an official time was arrived at, for the lane sheet. */

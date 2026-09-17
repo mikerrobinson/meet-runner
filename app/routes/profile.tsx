@@ -26,7 +26,7 @@ import { useSession } from "~/state/session";
 import { useViewPrefs } from "~/state/view-prefs";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Profile · Meet Runner" }];
+  return [{ title: "Profile · Swim Starts" }];
 }
 
 /** Your name and your contacts, or null when nobody is signed in. */
@@ -64,12 +64,22 @@ export async function action({ request, context }: Route.ActionArgs) {
   const intent = String(form.get("intent") ?? "");
 
   if (intent === "rename") {
-    await setAccountName(db, user.id, String(form.get("name") ?? "").trim().slice(0, 80));
+    await setAccountName(
+      db,
+      user.id,
+      String(form.get("name") ?? "")
+        .trim()
+        .slice(0, 80),
+    );
     return { ok: true, renamed: true };
   }
 
   if (intent === "contact-remove") {
-    const result = await removeIdentity(db, user.id, String(form.get("contact") ?? ""));
+    const result = await removeIdentity(
+      db,
+      user.id,
+      String(form.get("contact") ?? ""),
+    );
     return result.ok ? { ok: true } : { ok: false, error: result.reason };
   }
 
@@ -107,7 +117,11 @@ export async function action({ request, context }: Route.ActionArgs) {
     // `consumeLoginCode`, not `verifyChallenge`: the code proves you can read
     // the contact, and nothing more. Verifying here would mint an account for
     // the new contact, which would then own it and refuse the attach below.
-    const spent = await consumeLoginCode(db, parsed.contact, String(form.get("code") ?? ""));
+    const spent = await consumeLoginCode(
+      db,
+      parsed.contact,
+      String(form.get("code") ?? ""),
+    );
     if (!spent.ok) {
       return { ok: false, error: "That code didn't work. Ask for a new one." };
     }
@@ -155,7 +169,8 @@ export default function ProfileScreen({ loaderData }: Route.ComponentProps) {
 
   const busy = fetcher.state !== "idle";
   const result = fetcher.data;
-  const error = result?.ok === false ? (result.error ?? "That didn't work.") : null;
+  const error =
+    result?.ok === false ? (result.error ?? "That didn't work.") : null;
 
   /**
    * What just happened, said in a banner.
@@ -239,7 +254,10 @@ export default function ProfileScreen({ loaderData }: Route.ComponentProps) {
           better, and says plainly which it is. */}
       <Card>
         <SectionTitle>Preferences</SectionTitle>
-        <Field label="Names" hint="How names are written and sorted on this device.">
+        <Field
+          label="Names"
+          hint="How names are written and sorted on this device."
+        >
           <Segmented
             value={nameOrder}
             onChange={(next) => setNameOrder(next as "first" | "last")}

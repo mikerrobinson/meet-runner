@@ -39,7 +39,7 @@ import { useViewPrefs } from "~/state/view-prefs";
 import { meetTypeLabel, todayIso } from "~/types/meet";
 
 export function meta({ data }: Route.MetaArgs) {
-  return [{ title: `${data?.team?.name ?? "Team"} · Meet Runner` }];
+  return [{ title: `${data?.team?.name ?? "Team"} · Swim Starts` }];
 }
 
 const TEMPLATE = toCsv([
@@ -424,7 +424,6 @@ export default function TeamDetail({ loaderData }: Route.ComponentProps) {
             {team.meets.length} meet{team.meets.length === 1 ? "" : "s"}
           </p>
         </div>
-
       </Card>
 
       <Card>

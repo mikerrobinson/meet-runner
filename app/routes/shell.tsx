@@ -190,7 +190,8 @@ export default function Shell() {
   const session = useSession();
   const meetData = useRouteLoaderData<typeof meetLoader>("routes/meet-layout");
   const openMeet = meetData?.detail?.meet ?? null;
-  const team = session.teams.find((t) => t.teamId === session.openTeamId) ?? null;
+  const team =
+    session.teams.find((t) => t.teamId === session.openTeamId) ?? null;
 
   const tabs = params.meetId ? meetTabs(params.meetId) : TOP_TABS;
 
@@ -205,7 +206,10 @@ export default function Shell() {
    */
   const waiting = outbox.pending.length;
   const status: { text: string; tone: string } | null = outbox.error
-    ? { text: "Not saved", tone: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200" }
+    ? {
+        text: "Not saved",
+        tone: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200",
+      }
     : waiting > 0
       ? {
           text: `${waiting} to send`,
@@ -226,7 +230,8 @@ export default function Shell() {
   const fullWidth = onRegistration || location.pathname.endsWith("/run");
   const onRun = location.pathname.endsWith("/run");
   const rawGender = new URLSearchParams(location.search).get("g");
-  const genderParam = rawGender === "f" || rawGender === "m" ? rawGender : "all";
+  const genderParam =
+    rawGender === "f" || rawGender === "m" ? rawGender : "all";
 
   const toggles = onRegistration ? (
     <HeaderToggles
@@ -236,15 +241,11 @@ export default function Shell() {
   ) : onRun && openMeet ? (
     <HeaderToggles
       label="Stopwatch button layout"
-      options={layoutOptions(
-        openMeet.laneCount,
-        laneLayout,
-        setLaneLayout,
-      )}
+      options={layoutOptions(openMeet.laneCount, laneLayout, setLaneLayout)}
     />
   ) : null;
 
-  const title = openMeet?.name ?? team?.name ?? "Meet Runner";
+  const title = openMeet?.name ?? team?.name ?? "Swim Starts";
   const subtitle = onRegistration
     ? undefined
     : openMeet
@@ -268,7 +269,9 @@ export default function Shell() {
           } ${fullWidth ? "max-w-none" : "max-w-3xl"}`}
         >
           <div className="min-w-0">
-            <h1 className="truncate text-base font-bold leading-tight">{title}</h1>
+            <h1 className="truncate text-base font-bold leading-tight">
+              {title}
+            </h1>
             {subtitle && (
               <p className="truncate text-xs text-slate-500 dark:text-slate-400">
                 {subtitle}
@@ -313,7 +316,8 @@ export default function Shell() {
           {tabs.map((tab) => {
             // The back arrow points at the meet list, which would otherwise
             // light up as the active tab while you're inside a meet.
-            const isBackLink = params.meetId !== undefined && tab.to === "/meets";
+            const isBackLink =
+              params.meetId !== undefined && tab.to === "/meets";
             return (
               <NavLink
                 key={tab.to}
@@ -339,4 +343,3 @@ export default function Shell() {
     </div>
   );
 }
-

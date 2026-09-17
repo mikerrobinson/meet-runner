@@ -5,7 +5,7 @@ import { listPublicAthletes } from "~/lib/public.server";
 import type { SyncEnv } from "~/lib/api.server";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Athletes · Meet Runner" }];
+  return [{ title: "Athletes · Swim Starts" }];
 }
 
 /**
@@ -39,7 +39,6 @@ export default function Athletes({ loaderData }: Route.ComponentProps) {
 
   return (
     <div className="space-y-4">
-
       <Card>
         <SectionTitle>Athletes ({athletes.length})</SectionTitle>
 

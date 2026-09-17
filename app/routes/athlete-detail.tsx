@@ -3,7 +3,13 @@ import { Link, useFetcher } from "react-router";
 import type { Route } from "./+types/athlete-detail";
 import { AthleteSheet } from "~/components/AthleteSheet";
 import { AthleteAccount } from "~/components/AthleteAccount";
-import { Banner, Button, Card, EmptyState, SectionTitle } from "~/components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  EmptyState,
+  SectionTitle,
+} from "~/components/ui";
 import { formatTime } from "~/lib/time";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
 import { teamAccess } from "~/lib/access.server";
@@ -21,7 +27,7 @@ import { ensureSchema } from "~/lib/schema.server";
 import { ageOn, athleteName, todayIso, type Gender } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Athlete · Meet Runner" }];
+  return [{ title: "Athlete · Swim Starts" }];
 }
 
 /**
@@ -37,7 +43,14 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
   await ensureSchema(db);
 
   const detail = await publicAthleteDetail(db, params.athleteId);
-  if (!detail) return { detail: null, access: null, enrollment: null, season: null, teamId: null };
+  if (!detail)
+    return {
+      detail: null,
+      access: null,
+      enrollment: null,
+      season: null,
+      teamId: null,
+    };
 
   const user = await currentUser(request, env);
 
@@ -96,7 +109,9 @@ export async function action({ params, request, context }: Route.ActionArgs) {
   const teamId = String(form.get("teamId") ?? "");
   const access = await teamAccess(db, teamId, user);
   if (!access.coach) {
-    throw new Response("Only a coach of this team can change that.", { status: 403 });
+    throw new Response("Only a coach of this team can change that.", {
+      status: 403,
+    });
   }
 
   const intent = String(form.get("intent") ?? "");
@@ -139,7 +154,8 @@ export async function action({ params, request, context }: Route.ActionArgs) {
       if (held && held.id !== params.athleteId) {
         return {
           ok: false,
-          error: `That account is already ${held.firstName} ${held.lastName}.`.trim(),
+          error:
+            `That account is already ${held.firstName} ${held.lastName}.`.trim(),
         };
       }
     }

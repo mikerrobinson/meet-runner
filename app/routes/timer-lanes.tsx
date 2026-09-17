@@ -11,7 +11,7 @@ import {
 import { firstStopPath } from "~/lib/timer-path";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Timing · Meet Runner" }];
+  return [{ title: "Timing · Swim Starts" }];
 }
 
 /**
@@ -104,7 +104,10 @@ export default function TimerLanes({ params }: Route.ComponentProps) {
           <div className="grid grid-cols-2 gap-2">
             {(
               [
-                ["clipboard", `I have the sheet for ${snapshot.meet.timersPerLane} watches`],
+                [
+                  "clipboard",
+                  `I have the sheet for ${snapshot.meet.timersPerLane} watches`,
+                ],
                 ["own", "Just my own watch"],
               ] as Array<[TimerRole, string]>
             ).map(([value, label]) => (

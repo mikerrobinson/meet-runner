@@ -1,4 +1,4 @@
-# Meet Runner
+# Swim Starts
 
 An app for running a high-school swim meet from a pool deck: rosters that carry
 across seasons, a schedule of meets, an entries grid, and the timing itself —
@@ -223,11 +223,11 @@ notice.
 React Router revalidates every loader in the matched chain on each client
 navigation, and the session loader at the root of the app is in every chain —
 so walking to the next heat fired a network request, and out of signal the
-failed revalidation failed the *navigation*: a time safely queued in a cookie,
+failed revalidation failed the _navigation_: a time safely queued in a cookie,
 and the phone on an error page instead of the next heat. `shouldRevalidate`
 returns `false` between timing paths, which leaves nothing to call, and React
 Router then makes no request at all. Heat-to-heat movement is free and cannot
-fail. (A *reload* out of signal still can't work — that's a document request —
+fail. (A _reload_ out of signal still can't work — that's a document request —
 and a service worker is the only answer to that one.)
 
 **A timer's outbox is cookies; everybody else's is localStorage.** They face
@@ -454,12 +454,12 @@ There used to be six more: `GET /api/meets`, `/api/meets/:id`, `/api/teams/:id`,
 the app ever fetched them — they were the shape left behind when the client stopped
 being a store that had to be filled.
 
-|                                                          |                                                              |
-| -------------------------------------------------------- | ------------------------------------------------------------ |
-| `GET /api/teams`, `GET /api/users`                       | Searching as somebody types, for the team and person pickers |
-| `POST /api/meets/:id/writes`                             | One `Write` off the outbox — an entry, a lane, a time, a call |
-| `GET /api/timer/meet`                                    | What a scanned phone reads: the meet, as a timer sees it     |
-| `POST /api/meets/:id/timer/:event/:heat/:lane`           | One lane, one timer — body-less; the cookies are the payload |
+|                                                |                                                               |
+| ---------------------------------------------- | ------------------------------------------------------------- |
+| `GET /api/teams`, `GET /api/users`             | Searching as somebody types, for the team and person pickers  |
+| `POST /api/meets/:id/writes`                   | One `Write` off the outbox — an entry, a lane, a time, a call |
+| `GET /api/timer/meet`                          | What a scanned phone reads: the meet, as a timer sees it      |
+| `POST /api/meets/:id/timer/:event/:heat/:lane` | One lane, one timer — body-less; the cookies are the payload  |
 
 The writes row is the outbox's transport (see above) and the last row is the timing
 protocol; the two searches answer a picker as somebody types.
@@ -484,14 +484,14 @@ makes the account and sends the link that proves the contact; and neither can
 go down to nobody, so removing the last one is refused rather than leaving a
 thing nobody can run.
 
-A team is the one that can *start* empty, because every school typed in as an
+A team is the one that can _start_ empty, because every school typed in as an
 opponent is a team nobody has signed in to. That's what unclaimed means, and
 it's the only time somebody can add themselves.
 
 This replaced a `memberships` table carrying five roles and two standings.
 Only "is this person a coach" ever changed what the code did; the rest
 described relationships that live somewhere truer — a swimmer is on a team
-because they're *enrolled* in one of its seasons, and their account is tied to
+because they're _enrolled_ in one of its seasons, and their account is tied to
 them by `athletes.user_id`. Asking to join and being approved went with it:
 getting onto a team that has a coach is the coach's move, exactly as it is for
 a meet.
@@ -513,7 +513,7 @@ is a decision, and with two schools in the water it isn't one school's to make.
 
 ```sh
 npm install
-npm run dev          # http://localhost:5173/projects/meet-runner/
+npm run dev          # http://localhost:5173/
 npm run typecheck
 npm test
 npm run build
@@ -535,7 +535,7 @@ and must never be set on a deployed worker.
    of `REPLACE_WITH_D1_DATABASE_ID`:
 
    ```sh
-   npx wrangler d1 create meet-runner
+   npx wrangler d1 create swim-starts
    ```
 
 2. Codes have to reach people somehow. A channel with nothing configured logs
@@ -544,7 +544,7 @@ and must never be set on a deployed worker.
 
    ```sh
    npx wrangler secret put RESEND_API_KEY     # email
-   npx wrangler secret put AUTH_FROM_EMAIL    # e.g. Meet Runner <meets@example.com>
+   npx wrangler secret put AUTH_FROM_EMAIL    # e.g. Swim Starts <meets@swimstarts.com>
    npx wrangler secret put TWILIO_ACCOUNT_SID # text messages
    npx wrangler secret put TWILIO_AUTH_TOKEN
    npx wrangler secret put TWILIO_FROM        # the sending number, in E.164

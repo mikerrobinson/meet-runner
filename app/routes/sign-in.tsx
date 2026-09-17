@@ -28,7 +28,7 @@ import { revealsCodes, sendLoginCode } from "~/lib/notify.server";
 import { APP_HOME } from "./home";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Sign in · Meet Runner" }];
+  return [{ title: "Sign in · Swim Starts" }];
 }
 
 /**
@@ -97,7 +97,12 @@ export async function action({ request, context }: Route.ActionArgs) {
     const link = `${appBaseUrl(request)}sign-in?contact=${encodeURIComponent(
       parsed.contact.value,
     )}&code=${started.code}`;
-    const delivery = await sendLoginCode(env, parsed.contact, started.code, link);
+    const delivery = await sendLoginCode(
+      env,
+      parsed.contact,
+      started.code,
+      link,
+    );
 
     return {
       ok: true as const,
@@ -117,7 +122,8 @@ export async function action({ request, context }: Route.ActionArgs) {
     parsed.contact,
     String(form.get("code") ?? ""),
   );
-  if (!result.ok) return { ok: false as const, error: messageFor(result.check) };
+  if (!result.ok)
+    return { ok: false as const, error: messageFor(result.check) };
 
   /**
    * An invitation is redeemed in the same request rather than after it.
@@ -249,7 +255,7 @@ export default function SignIn({ loaderData }: Route.ComponentProps) {
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center p-6">
       <div className="mb-6 text-center">
-        <h1 className="text-2xl font-bold">Meet Runner</h1>
+        <h1 className="text-2xl font-bold">Swim Starts</h1>
         <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
           {invited === null
             ? "Sign in with your email or mobile number."
@@ -262,8 +268,8 @@ export default function SignIn({ loaderData }: Route.ComponentProps) {
       {inviteError && (
         <div className="mb-4">
           <Banner tone="warn">
-            {inviteError} You can still sign in — you&rsquo;ll just need
-            whoever sent it to invite you again.
+            {inviteError} You can still sign in — you&rsquo;ll just need whoever
+            sent it to invite you again.
           </Banner>
         </div>
       )}

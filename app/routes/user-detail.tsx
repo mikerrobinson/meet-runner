@@ -8,7 +8,7 @@ import { meetTypeLabel } from "~/types/meet";
 import type { SyncEnv } from "~/lib/api.server";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "You · Meet Runner" }];
+  return [{ title: "You · Swim Starts" }];
 }
 
 /**

@@ -96,15 +96,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
             screenshot of the page as the icon. */}
         <link rel="manifest" href={`${base}manifest.webmanifest`} />
         <link rel="apple-touch-icon" href={`${base}icon-180.png`} />
-        <link rel="icon" type="image/png" sizes="192x192" href={`${base}icon-192.png`} />
+        <link
+          rel="icon"
+          type="image/png"
+          sizes="192x192"
+          href={`${base}icon-192.png`}
+        />
         <link rel="icon" href={`${base}favicon.ico`} sizes="any" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
-        <meta name="apple-mobile-web-app-title" content="Meet Runner" />
+        <meta name="apple-mobile-web-app-title" content="Swim Starts" />
         {/* "default" keeps the web view below the status bar, so the layout
             needs no special case; the status bar picks up theme-color. */}
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="mobile-web-app-capable" content="yes" />
-        <meta name="application-name" content="Meet Runner" />
+        <meta name="application-name" content="Swim Starts" />
 
         <meta
           name="theme-color"

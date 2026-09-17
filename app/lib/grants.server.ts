@@ -238,13 +238,15 @@ export function existingDeviceId(request: Request): string | null {
  */
 export function deviceId(request: Request): string {
   // URL-safe, for the sake of anything that still puts it in one.
-  return existingDeviceId(request) ?? `d-${Math.random().toString(36).slice(2, 10)}`;
+  return (
+    existingDeviceId(request) ?? `d-${Math.random().toString(36).slice(2, 10)}`
+  );
 }
 
 /**
  * The app's own base path, taken from the URL a request arrived on.
  *
- * `/` in dev and `/projects/meet-runner/` in production, with no config to
+ * `/` in dev and `/` in production, with no config to
  * keep in step — the caller passes the known suffix it was reached at and
  * what's left in front of it is the base. It is what scopes the cookies, so
  * getting it wrong means a second cookie of the same name at a different path

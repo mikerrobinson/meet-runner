@@ -1,25 +1,25 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "meet-runner",
+  "name": "swim-starts",
   "compatibility_date": "2025-04-04",
   "main": "./workers/app.ts",
   "assets": {
     "binding": "ASSETS",
   },
-  "routes": [
-    {
-      "pattern": "mikerobinson.dev/projects/meet-runner*",
-      "zone_name": "mikerobinson.dev",
-    },
-  ],
+  // "routes": [
+  //   {
+  //     "pattern": "swimstarts.com/*",
+  //     "zone_name": "swimstarts.com",
+  //   },
+  // ],
   // Server-side backup of meets. `wrangler dev` spins up a local copy
-  // automatically; before deploying, run `npx wrangler d1 create meet-runner`
+  // automatically; before deploying, run `npx wrangler d1 create swim-starts`
   // and paste the returned id below. The app works fully offline without it —
   // only the sync buttons go quiet.
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "meet-runner",
+      "database_name": "swim-starts",
       "database_id": "a2368661-bd05-41e8-b9d4-7a6e85816c7e",
     },
   ],

@@ -18,7 +18,7 @@ import { findOrCreateTeam } from "~/lib/new-team.server";
 import { normalizeTeamCode } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Teams · Meet Runner" }];
+  return [{ title: "Teams · Swim Starts" }];
 }
 
 /**
@@ -61,7 +61,9 @@ export async function action({ request, context }: Route.ActionArgs) {
   if (!user) throw new Response("Sign in to start a team", { status: 403 });
 
   const form = await request.formData();
-  const name = String(form.get("name") ?? "").trim().slice(0, 80);
+  const name = String(form.get("name") ?? "")
+    .trim()
+    .slice(0, 80);
   if (!name) return { error: "A team needs a name." };
 
   const { team, created } = await findOrCreateTeam(db, {
@@ -83,7 +85,10 @@ export async function action({ request, context }: Route.ActionArgs) {
   return redirect(`/teams/${team.id}`);
 }
 
-export default function Teams({ loaderData, actionData }: Route.ComponentProps) {
+export default function Teams({
+  loaderData,
+  actionData,
+}: Route.ComponentProps) {
   const { teams, offline } = loaderData;
   // Which of these are yours is which ones you coach — the page is a directory
   // of everyone's teams, and "yours" is just a heading on it.
@@ -96,7 +101,6 @@ export default function Teams({ loaderData, actionData }: Route.ComponentProps) 
 
   return (
     <div className="space-y-4">
-
       {/* Yours, once you're signed in — empty included, because that's where
           the button to start one lives and a coach with no team yet is
           exactly who needs it. */}
@@ -133,16 +137,18 @@ export default function Teams({ loaderData, actionData }: Route.ComponentProps) 
 
       <Card>
         <SectionTitle>
-          {ours.length > 0 ? `Other teams (${others.length})` : `Teams (${teams.length})`}
+          {ours.length > 0
+            ? `Other teams (${others.length})`
+            : `Teams (${teams.length})`}
         </SectionTitle>
 
         {others.length === 0 ? (
-          <EmptyState title={offline ? "Can't reach the server" : "No other teams yet"}>
-            {
-              offline
-                ? "This list lives on the server. Your own team and meets keep working without it."
-                : "A team appears here once someone races it — including opponents typed in while setting up a meet."
-            }
+          <EmptyState
+            title={offline ? "Can't reach the server" : "No other teams yet"}
+          >
+            {offline
+              ? "This list lives on the server. Your own team and meets keep working without it."
+              : "A team appears here once someone races it — including opponents typed in while setting up a meet."}
           </EmptyState>
         ) : (
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -193,7 +199,10 @@ function NewTeamSheet({
             {teamId && (
               <>
                 {" "}
-                <Link to={`/teams/${teamId}`} className="font-semibold underline">
+                <Link
+                  to={`/teams/${teamId}`}
+                  className="font-semibold underline"
+                >
                   Open it
                 </Link>
               </>
@@ -280,8 +289,8 @@ function TeamRow({
             )}
           </span>
           <span className="block text-xs text-slate-500">
-            {team.athletes} athlete{team.athletes === 1 ? "" : "s"} · {team.meets}{" "}
-            meet{team.meets === 1 ? "" : "s"}
+            {team.athletes} athlete{team.athletes === 1 ? "" : "s"} ·{" "}
+            {team.meets} meet{team.meets === 1 ? "" : "s"}
           </span>
         </span>
         <span aria-hidden className="shrink-0 text-slate-400">

@@ -13,7 +13,7 @@
 
 /**
  * Resolve an API path against the router basename, so the same code works at
- * `/` in dev and `/projects/meet-runner/` in production.
+ * `/` in dev and `/` in production.
  */
 export function apiUrl(path: string): string {
   if (typeof document === "undefined") return path;
@@ -22,7 +22,7 @@ export function apiUrl(path: string): string {
 
 /**
  * Where this app lives, with a trailing slash: `/` in dev and
- * `/projects/meet-runner/` in production.
+ * `/` in production.
  *
  * Shared by the API path and the cookie `Path`, so a cookie this device writes
  * is scoped to exactly the requests that should carry it — and can't be read

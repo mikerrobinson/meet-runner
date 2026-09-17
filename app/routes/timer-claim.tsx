@@ -46,7 +46,7 @@ export async function loader({ params, request, context }: Route.LoaderArgs) {
    * It scopes the cookies, and *only* the cookies. The redirect below is a
    * bare path because the framework prefixes the basename itself on the way
    * out; building an absolute one here as well produced a `Location` of
-   * `/projects/meet-runner/projects/meet-runner/…`.
+   * `/…`.
    */
   const base = appBaseOf(request, "/t/");
 

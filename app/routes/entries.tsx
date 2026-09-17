@@ -22,7 +22,7 @@ import {
 } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Entries · Meet Runner" }];
+  return [{ title: "Entries · Swim Starts" }];
 }
 
 /**
@@ -87,7 +87,10 @@ export default function Registration() {
   const pending = usePending();
   const send = useSend();
   // What the server has acknowledged, plus what this device has said since.
-  const detail = useMemo(() => applyPending(loaded, pending), [loaded, pending]);
+  const detail = useMemo(
+    () => applyPending(loaded, pending),
+    [loaded, pending],
+  );
   const { meet, events: meetEvents, entries, athletes } = detail;
   const { nameOrder } = useViewPrefs();
 
@@ -294,7 +297,6 @@ export default function Registration() {
           "calc(100dvh - var(--app-chrome-top) - var(--app-chrome-bottom) - 1rem)",
       }}
     >
-
       {SHOW_ROSTER_CONTROLS && (
         <div className="shrink-0 space-y-3 py-3">
           <div className="flex gap-2">
@@ -391,14 +393,16 @@ export default function Registration() {
                     // administrator may change any, a coach only their own
                     // team's, a swimmer only their own and only when the meet
                     // allows it.
-                    const mayEdit = event !== undefined && mayEditFor(athlete.id);
+                    const mayEdit =
+                      event !== undefined && mayEditFor(athlete.id);
                     // Entry limits are the meet's rules, so they're checked
                     // here rather than discovered after the tap.
                     const blocked =
                       event !== undefined && !isIn
                         ? whyNotEnter(entryContext, athlete.id, event.id)
                         : null;
-                    const locked = event !== undefined && (!mayEdit || blocked !== null);
+                    const locked =
+                      event !== undefined && (!mayEdit || blocked !== null);
                     return (
                       <td
                         key={race.key}
@@ -413,7 +417,9 @@ export default function Registration() {
                           // that won't take a tap can say why instead of just
                           // refusing.
                           title={blocked ?? undefined}
-                          onClick={() => event && toggle(event.id, athlete.id, !isIn)}
+                          onClick={() =>
+                            event && toggle(event.id, athlete.id, !isIn)
+                          }
                           className={`flex h-12 w-full touch-manipulation items-center justify-center text-xl font-bold transition-colors ${
                             event === undefined
                               ? "cursor-not-allowed bg-slate-100 text-slate-300 dark:bg-slate-800/60 dark:text-slate-700"
@@ -435,7 +441,6 @@ export default function Registration() {
           </tbody>
         </table>
       </div>
-
     </div>
   );
 }

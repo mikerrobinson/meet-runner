@@ -14,8 +14,8 @@ import {
   type Progress,
 } from "~/types/meet";
 
-const LANE_LAYOUT_KEY = "meet-runner:lane-layout";
-const TIMER_ID_KEY = "meet-runner:timer-id";
+const LANE_LAYOUT_KEY = "swim-starts:lane-layout";
+const TIMER_ID_KEY = "swim-starts:timer-id";
 /**
  * Who this device is when it takes a time, in a cookie.
  *
@@ -26,7 +26,7 @@ const TIMER_ID_KEY = "meet-runner:timer-id";
  * borrowed phone is often enough to matter.
  */
 const TIMER_ID_COOKIE = "mr_timer_id";
-const PROGRESS_PREFIX = "meet-runner:progress:";
+const PROGRESS_PREFIX = "swim-starts:progress:";
 
 /**
  * How the stopwatch arranges its lane buttons. A property of whoever is
@@ -43,7 +43,7 @@ export function saveLaneLayout(layout: LaneLayout): void {
   local.set(LANE_LAYOUT_KEY, layout);
 }
 
-const NAME_ORDER_KEY = "meet-runner:name-order";
+const NAME_ORDER_KEY = "swim-starts:name-order";
 
 /**
  * How this person likes names written and sorted.

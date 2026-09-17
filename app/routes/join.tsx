@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { useFetcher, useNavigate, useSearchParams } from "react-router";
 import type { Route } from "./+types/join";
-import { Banner, Button, Card, Field, SectionTitle, TextInput } from "~/components/ui";
+import {
+  Banner,
+  Button,
+  Card,
+  Field,
+  SectionTitle,
+  TextInput,
+} from "~/components/ui";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
 import { findOrCreateTeam } from "~/lib/new-team.server";
 import { APP_HOME } from "./home";
@@ -9,7 +16,7 @@ import { describeContact } from "~/lib/identity";
 import { useSession } from "~/state/session";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Find your team · Meet Runner" }];
+  return [{ title: "Find your team · Swim Starts" }];
 }
 
 /**
@@ -239,7 +246,11 @@ export default function Join() {
       </Card>
 
       <div className="text-center">
-        <Button size="sm" variant="ghost" onClick={() => void session.signOut()}>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => void session.signOut()}
+        >
           Sign out
         </Button>
       </div>
