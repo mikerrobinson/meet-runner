@@ -120,11 +120,22 @@ export default function Registration() {
    * same thing whatever the Girls/Boys toggle is set to — counting the visible
    * rows would make a header change when you filtered, which is a header
    * measuring the wrong thing.
+   *
+   * A coach with no admin rights sees only their own teams' athletes rather
+   * than every team entered in the meet — the same boundary `mayEditFor`
+   * draws below. That narrowing is specifically for coaches: an admin sees
+   * everyone, and so does anyone here only because `entryVisibility` opened
+   * the meet's entries to the public — narrowing their view by team would
+   * take away exactly the transparency that setting grants.
    */
   const roster = useMemo(() => {
-    const onRoster = new Set(detail.enrollments.map((e) => e.athleteId));
+    const mine =
+      !access.admin && access.coachOf.length > 0
+        ? detail.enrollments.filter((e) => access.coachOf.includes(e.teamId))
+        : detail.enrollments;
+    const onRoster = new Set(mine.map((e) => e.athleteId));
     return athletes.filter((a) => onRoster.has(a.id));
-  }, [athletes, detail.enrollments]);
+  }, [athletes, detail.enrollments, access.admin, access.coachOf]);
 
   const swimmers = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -204,8 +215,14 @@ export default function Registration() {
     );
   }
 
+  // The header count reads the same scope as the rows below it — a coach
+  // sees their own team's count under a column of their own team's ticks,
+  // not the whole meet's.
+  const rosterIds = new Set(roster.map((a) => a.id));
   const entryCount = (event?: MeetEvent) =>
-    event ? (entries[event.id] ?? []).length : 0;
+    event
+      ? (entries[event.id] ?? []).filter((id) => rosterIds.has(id)).length
+      : 0;
 
   /** What the limit checks read. Assembled once rather than per cell. */
   const entryContext = {
