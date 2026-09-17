@@ -14,7 +14,7 @@
 
 import { ensureSchema } from "./schema.server";
 import { generateId } from "./id";
-import { isLaneCount, type Entry } from "~/types/meet";
+import { isLaneCount, isTimersPerLane, type Entry } from "~/types/meet";
 import type {
   Athlete,
   Enrollment,
@@ -31,6 +31,7 @@ import type {
   ResultStatus,
   Stroke,
   Team,
+  TimersPerLane,
   Watch,
 } from "~/types/meet";
 import { athleteRow, type AthleteRow } from "./athletes.server";
@@ -48,6 +49,7 @@ interface MeetRow {
   host_team_id: string | null;
   created_by: string | null;
   lane_count: number;
+  timers_per_lane: number;
   lead_gender: string;
   include_diving: number;
   entry_visibility: string;
@@ -78,6 +80,9 @@ function meetFrom(row: MeetRow, teamIds: string[]): Meet {
     hostTeamId: row.host_team_id ?? undefined,
     createdBy: row.created_by ?? undefined,
     laneCount: isLaneCount(row.lane_count) ? row.lane_count : 6,
+    // Absent on every meet made before the setting existed, which is a meet
+    // whose timers each carried their own phone.
+    timersPerLane: isTimersPerLane(row.timers_per_lane) ? row.timers_per_lane : 1,
     leadGender: row.lead_gender === "M" ? "M" : "F",
     includeDiving: row.include_diving === 1,
     entryVisibility: row.entry_visibility === "own-team" ? "own-team" : "everyone",
@@ -376,6 +381,7 @@ export interface MeetInput {
   hostTeamId?: string;
   createdBy?: string;
   laneCount?: LaneCount;
+  timersPerLane?: TimersPerLane;
   leadGender?: Gender;
   includeDiving?: boolean;
   limits?: EntryLimits;
@@ -395,11 +401,12 @@ export async function createMeet(
   await db.batch([
     db.prepare(
       `INSERT INTO meets (id, name, date, type, course, location, host_team_id,
-                          created_by, lane_count, lead_gender, include_diving,
+                          created_by, lane_count, timers_per_lane,
+                          lead_gender, include_diving,
                           entry_visibility, athletes_may_enter,
                           max_individual, max_relays, max_total, max_per_team_per_event,
                           created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       id,
       input.name,
@@ -410,6 +417,7 @@ export async function createMeet(
       teamIds.includes(input.hostTeamId ?? "") ? input.hostTeamId! : null,
       input.createdBy ?? null,
       input.laneCount ?? 6,
+      input.timersPerLane ?? 1,
       input.leadGender ?? "F",
       input.includeDiving ? 1 : 0,
       input.entryVisibility ?? "everyone",
@@ -451,6 +459,9 @@ export async function updateMeet(
   if (patch.location !== undefined) set("location", patch.location || null);
   if (patch.hostTeamId !== undefined) set("host_team_id", patch.hostTeamId || null);
   if (patch.laneCount !== undefined) set("lane_count", patch.laneCount);
+  if (patch.timersPerLane !== undefined) {
+    set("timers_per_lane", patch.timersPerLane);
+  }
   if (patch.leadGender !== undefined) set("lead_gender", patch.leadGender);
   if (patch.includeDiving !== undefined) set("include_diving", patch.includeDiving ? 1 : 0);
   if (patch.entryVisibility !== undefined) set("entry_visibility", patch.entryVisibility);

@@ -3,17 +3,21 @@ import { Link, useNavigate } from "react-router";
 import type { Route } from "./+types/timer";
 import { Button } from "~/components/ui";
 import { SwimmerPicker } from "~/components/SwimmerPicker";
-import { formatClock, formatTime } from "~/lib/time";
+import { formatClock, formatTime, parseTime } from "~/lib/time";
 import {
   earliestAllowed,
   fetchSnapshot,
   loadFurthest,
+  loadRole,
   runningOrder,
   saveFurthest,
+  watchCount,
   type QueuedAthlete,
   type Snapshot,
   type TimerAthlete,
+  type TimerRole,
 } from "~/lib/timer";
+import { watchSlot } from "~/lib/timing";
 import { stopPath, timerPath } from "~/lib/timer-path";
 import { eventName } from "~/types/meet";
 import {
@@ -50,6 +54,14 @@ export function meta({}: Route.MetaArgs) {
  * from elsewhere: this timer starts and stops their own watch, submits, and
  * moves on. Pool wifi may be gone the entire time and nothing here notices —
  * times queue and go up when they can.
+ *
+ * At a meet whose lanes carry two or three watches, a phone that said it has
+ * the sheet gets the other screen: no stopwatch of its own, a column per
+ * timer standing behind the lane, and one submit that files all of them. It
+ * is the same page otherwise — same lane, same swimmer, same queue, same walk
+ * through the heats — because it is the same job done the way a deck actually
+ * does it, with the handheld watches doing the timing and this holding what
+ * they read.
  */
 export default function Timer({ params }: Route.ComponentProps) {
   const navigate = useNavigate();
@@ -106,6 +118,25 @@ export default function Timer({ params }: Route.ComponentProps) {
     setRefused(state.rejected);
   };
 
+  /**
+   * Whether this phone is a stopwatch or a sheet, as it answered at the lane
+   * picker. `null` until the cookie has been read, which cannot happen on the
+   * server — and reads as a clipboard once it has, for the same reason the
+   * picker defaults that way.
+   */
+  const [role, setRole] = useState<TimerRole | null>(null);
+  /**
+   * What the clipboard has written down so far, as typed, one string per
+   * column.
+   *
+   * Text rather than milliseconds because that is what is in front of the
+   * person: half of "30.4" is not a time yet, and a field that reinterpreted
+   * itself on every keystroke would fight the thumb entering it. Read through
+   * `parseTime`, which is the same reader the desk uses, so "3045" and
+   * "30.45" mean what they do everywhere else in the app.
+   */
+  const [sheet, setSheet] = useState<string[]>([]);
+
   // Who this timer says is in the lane, per heat, before it's been submitted.
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   // Swimmers typed in on this device; they may not have reached the server yet.
@@ -130,6 +161,7 @@ export default function Timer({ params }: Route.ComponentProps) {
 
   useEffect(() => {
     setFurthest(loadFurthest());
+    setRole(loadRole() ?? "clipboard");
     refreshQueue();
     void load();
   }, [load, meetId]);
@@ -212,6 +244,9 @@ export default function Timer({ params }: Route.ComponentProps) {
     setElapsed(0);
     setRetiming(false);
     setPicking(false);
+    // Three times written down for heat 1 are not heat 2's times, for the
+    // same reason the clock above isn't heat 2's clock.
+    setSheet([]);
   }, [eventNo, heatNo, lane]);
 
   /* ----------------------------------------------------------------- state */
@@ -251,6 +286,17 @@ export default function Timer({ params }: Route.ComponentProps) {
   const ownTeam = snapshot?.ownTeam ?? "Home";
 
   /**
+   * How many columns this phone is filling in — one for a stopwatch, one per
+   * timer behind the lane for a sheet.
+   *
+   * The only thing that decides which screen this is. Everything downstream
+   * reads the number rather than the role, so a clipboard at a meet that has
+   * gone back to one watch a lane is simply a stopwatch again.
+   */
+  const watches = watchCount(snapshot, role);
+  const clipboard = watches > 1;
+
+  /**
    * Where this screen is, as the meet numbers it — event 7, heat 1, lane 3.
    * The same three integers the cookie path is built from, so what the phone
    * queues and what the person is looking at cannot disagree.
@@ -266,14 +312,33 @@ export default function Timer({ params }: Route.ComponentProps) {
   const swimmerId = overrides[laneKey] ?? seed?.athleteId ?? null;
   const swimmer = swimmerId ? byId.get(swimmerId) : undefined;
 
-  // This phone's own time for this swim, once the server has it. A watch with
-  // no time on it is this phone's stopwatch running, not a time sent.
-  const alreadyTimed = useMemo(() => {
-    if (!snapshot || !seed) return undefined;
-    return snapshot.mine.find(
-      (watch) => watch.seedId === seed.id && watch.timeMs !== undefined,
+  /**
+   * This phone's own times for this swim, once the server has them, by column.
+   *
+   * A watch with no time on it is a stopwatch running — this phone's own, or
+   * one of the handheld ones it armed — and is not a time sent. A column that
+   * never got one stays empty, which is exactly what the screen has to show
+   * when two of three timers came back with something.
+   */
+  const sent = useMemo(() => {
+    const times: Array<number | null> = Array.from(
+      { length: watches },
+      () => null,
     );
-  }, [snapshot, seed]);
+    if (!snapshot || !seed) return times;
+    for (const watch of snapshot.mine) {
+      if (watch.seedId !== seed.id || watch.timeMs === undefined) continue;
+      const slot = watchSlot(watch.timerId);
+      if (slot <= watches) times[slot - 1] = watch.timeMs;
+    }
+    return times;
+  }, [snapshot, seed, watches]);
+
+  const alreadyTimed = sent.some((ms) => ms !== null);
+  const sentLabel = sent
+    .filter((ms): ms is number => ms !== null)
+    .map(formatTime)
+    .join(", ");
 
   /* --------------------------------------------------------------- actions */
 
@@ -329,14 +394,44 @@ export default function Timer({ params }: Route.ComponentProps) {
     });
   };
 
-  const submit = async () => {
-    if (!where || !meetId || !stopped) return;
+  /**
+   * Arm the lane.
+   *
+   * Sent on its own, straight away, because this is the one message whose
+   * value is entirely in arriving early: the desk wants to see five lanes
+   * armed and a sixth not *before* the gun, which is the only moment anything
+   * can be done about it.
+   *
+   * A clipboard arms every watch behind its lane rather than one, since that
+   * is how many clocks just started — and the desk, which is watching for a
+   * lane nobody is covering, should see three.
+   */
+  const arm = () => {
+    const at = Date.now();
+    setStartedAt(at);
+    setElapsed(0);
+    if (where && meetId) {
+      enqueueStart(meetId, where, at, watches);
+      void flushQueue(meetId).then(refreshQueue);
+    }
+  };
 
-    // The time, and only the time. Whether the built-in stopwatch was used is
+  /**
+   * File this lane's times and move on.
+   *
+   * Takes the whole sheet, one entry per watch and `null` where a watch has
+   * nothing, because that is what the lane is saying: not "here is a time"
+   * but "here is what the watches on this lane read". One phone with one
+   * stopwatch says the same thing with one column.
+   */
+  const submit = async (times: Array<number | null>) => {
+    if (!where || !meetId || !times.some((ms) => ms !== null)) return;
+
+    // The times, and only the times. Whether a built-in stopwatch was used is
     // something the server works out from whether a start and a stop came
     // through for this lane — it doesn't have to be asserted here, and a
     // phone that was offline through the race still submits the same message.
-    enqueueSubmit(meetId, where, stopped.ms);
+    enqueueSubmit(meetId, where, times);
 
     // How far this device has got. The only thing about a timer's progress
     // that is still device state — the URL says where they *are*, not the
@@ -355,6 +450,7 @@ export default function Timer({ params }: Route.ComponentProps) {
     setStopped(null);
     setElapsed(0);
     setRetiming(false);
+    setSheet([]);
 
     // On to the next heat, which is the next page.
     const next = order[Math.min(order.length - 1, stopIndex + 1)];
@@ -409,6 +505,15 @@ export default function Timer({ params }: Route.ComponentProps) {
   }
 
   const running = startedAt !== null && !stopped;
+  /**
+   * Whether walking away from this heat is currently refused.
+   *
+   * A stopwatch mid-race is: the arrows and the lane link would abandon a
+   * clock that is the only record of a swim in progress. A clipboard's isn't
+   * — nothing is being measured here, the watches are in other people's
+   * hands, and there is no stop button coming that would ever unlock it.
+   */
+  const locked = running && !clipboard;
   const inEvent = new Set(snapshot.entries[stop.event.id] ?? []);
 
   /**
@@ -427,7 +532,7 @@ export default function Timer({ params }: Route.ComponentProps) {
         <Button
           size="sm"
           variant="ghost"
-          disabled={running || stopIndex <= floor}
+          disabled={locked || stopIndex <= floor}
           onClick={() => move(stopIndex - 1)}
           aria-label="Previous heat"
         >
@@ -447,7 +552,7 @@ export default function Timer({ params }: Route.ComponentProps) {
         <Button
           size="sm"
           variant="ghost"
-          disabled={running || stopIndex >= order.length - 1}
+          disabled={locked || stopIndex >= order.length - 1}
           onClick={() => move(stopIndex + 1)}
           aria-label="Next heat"
         >
@@ -464,7 +569,7 @@ export default function Timer({ params }: Route.ComponentProps) {
           <Link
             to={timerPath(meetId)}
             className={`flex w-full touch-manipulation items-center justify-between rounded-2xl bg-white px-4 py-3 text-left dark:bg-slate-900 ${
-              running ? "pointer-events-none opacity-60" : ""
+              locked ? "pointer-events-none opacity-60" : ""
             }`}
           >
             <span className="text-3xl font-bold">Lane {lane}</span>
@@ -492,100 +597,126 @@ export default function Timer({ params }: Route.ComponentProps) {
           </button>
         </div>
 
-        <div className="py-6 text-center">
-          <p className="font-mono text-6xl font-bold tabular-nums">
-            {stopped ? formatTime(stopped.ms) : formatClock(elapsed)}
-          </p>
-          {alreadyTimed && !stopped && startedAt === null && (
-            <p className="mt-2 text-sm text-slate-500">
-              Sent {formatTime(alreadyTimed.timeMs!)} for this heat.
-              {retiming && " Timing again replaces it."}
+        {clipboard ? (
+          <ClipboardSheet
+            watches={watches}
+            values={sheet}
+            onChange={(column, value) =>
+              setSheet((current) => {
+                const next = [...current];
+                next[column] = value;
+                return next;
+              })
+            }
+            sent={sent}
+            retiming={retiming}
+            armed={startedAt !== null}
+            elapsed={elapsed}
+            frozen={stopped ? stopped.ms : null}
+            onArm={arm}
+            onStop={() => {
+              const at = Date.now();
+              setStopped({ ms: at - (startedAt ?? at), at });
+              // No `stop` message goes with this. Nothing on this phone timed
+              // the race — the watches did — and a stop on the wire would put
+              // a `stoppedAt` on rows that never had a `startedAt` of their
+              // own meaning, which is what the desk reads to tell a stopwatch
+              // time from a written-down one.
+            }}
+            onRetime={() => {
+              // Whatever went up is what a correction starts from — the point
+              // of coming back is usually one column, not all three.
+              setSheet(sent.map((ms) => (ms === null ? "" : formatTime(ms))));
+              setRetiming(true);
+            }}
+            onSubmit={(times) => void submit(times)}
+          />
+        ) : (
+          <>
+          <div className="py-6 text-center">
+            <p className="font-mono text-6xl font-bold tabular-nums">
+              {stopped ? formatTime(stopped.ms) : formatClock(elapsed)}
             </p>
-          )}
-        </div>
+            {alreadyTimed && !stopped && startedAt === null && (
+              <p className="mt-2 text-sm text-slate-500">
+                Sent {sentLabel} for this heat.
+                {retiming && " Timing again replaces it."}
+              </p>
+            )}
+          </div>
 
-        <div className="space-y-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-          {stopped ? (
-            <div className="grid grid-cols-3 gap-2">
+          <div className="space-y-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+            {stopped ? (
+              <div className="grid grid-cols-3 gap-2">
+                <Button
+                  size="xl"
+                  variant="success"
+                  className="col-span-2"
+                  onClick={() => void submit([stopped.ms])}
+                >
+                  Submit
+                </Button>
+                <Button
+                  size="xl"
+                  onClick={() => {
+                    setStopped(null);
+                    setStartedAt(null);
+                    setElapsed(0);
+                  }}
+                >
+                  Redo
+                </Button>
+              </div>
+            ) : alreadyTimed && !retiming ? (
+              /* This heat is done, and says so where the button would be.
+                 A green START here invites re-timing a heat whose sheet has
+                 already gone to the desk — and reads identically to the heat in
+                 front of you, which is the one that matters. */
+              <>
+                <Button
+                  size="xl"
+                  variant="success"
+                  full
+                  disabled
+                  className="min-h-32 text-4xl"
+                >
+                  Submitted
+                </Button>
+                <Button variant="ghost" full onClick={() => setRetiming(true)}>
+                  Time it again
+                </Button>
+              </>
+            ) : running ? (
               <Button
                 size="xl"
-                variant="success"
-                className="col-span-2"
-                onClick={() => void submit()}
-              >
-                Submit
-              </Button>
-              <Button
-                size="xl"
+                variant="danger"
+                full
+                className="min-h-32 text-4xl"
                 onClick={() => {
-                  setStopped(null);
-                  setStartedAt(null);
-                  setElapsed(0);
+                  const at = Date.now();
+                  setStopped({ ms: at - (startedAt ?? at), at });
+                  // Queued, not sent: the thumb has more to do and the race
+                  // isn't over for everyone. It goes up with the submit.
+                  if (where && meetId) enqueueStop(meetId, where, at);
+                  refreshQueue();
                 }}
               >
-                Redo
+                STOP
               </Button>
-            </div>
-          ) : alreadyTimed && !retiming ? (
-            /* This heat is done, and says so where the button would be.
-               A green START here invites re-timing a heat whose sheet has
-               already gone to the desk — and reads identically to the heat in
-               front of you, which is the one that matters. */
-            <>
+            ) : (
               <Button
                 size="xl"
                 variant="success"
                 full
-                disabled
                 className="min-h-32 text-4xl"
+                onClick={arm}
               >
-                Submitted
+                START
               </Button>
-              <Button variant="ghost" full onClick={() => setRetiming(true)}>
-                Time it again
-              </Button>
-            </>
-          ) : running ? (
-            <Button
-              size="xl"
-              variant="danger"
-              full
-              className="min-h-32 text-4xl"
-              onClick={() => {
-                const at = Date.now();
-                setStopped({ ms: at - (startedAt ?? at), at });
-                // Queued, not sent: the thumb has more to do and the race
-                // isn't over for everyone. It goes up with the submit.
-                if (where && meetId) enqueueStop(meetId, where, at);
-                refreshQueue();
-              }}
-            >
-              STOP
-            </Button>
-          ) : (
-            <Button
-              size="xl"
-              variant="success"
-              full
-              className="min-h-32 text-4xl"
-              onClick={() => {
-                const at = Date.now();
-                setStartedAt(at);
-                setElapsed(0);
-                // Sent on its own, straight away, because this is the one
-                // message whose value is entirely in arriving early: the desk
-                // wants to see five lanes armed and a sixth not *before* the
-                // gun, which is the only moment anything can be done about it.
-                if (where && meetId) {
-                  enqueueStart(meetId, where, at);
-                  void flushQueue(meetId).then(refreshQueue);
-                }
-              }}
-            >
-              START
-            </Button>
-          )}
-        </div>
+            )}
+          </div>
+          </>
+        )}
       </div>
 
       {picking && (
@@ -611,5 +742,205 @@ export default function Timer({ params }: Route.ComponentProps) {
         />
       )}
     </main>
+  );
+}
+
+
+/**
+ * The lane's sheet: a column per watch, and one submit for all of them.
+ *
+ * What a timing lane looks like on a deck. Two or three people hold handheld
+ * stopwatches, one person holds a clipboard, and when the race ends the
+ * watches are read out and written down. Nothing here measures anything — the
+ * clock above the columns is the race's, for reassurance and for anyone
+ * checking a reading that looks wrong, and it is deliberately grey and small
+ * so that nobody mistakes it for a time to copy.
+ *
+ * Empty columns are allowed and mean what they say: a timer who missed the
+ * start has nothing, and the swim is still timed by the other two. A column
+ * is never shuffled up to fill a gap — watch 2's time is watch 2's whether or
+ * not watch 1 has one, and the server files it that way.
+ *
+ * Unreadable text is the one thing that blocks the submit. Everything else
+ * this screen can interpret it does, out loud, in the column beside the entry,
+ * so "3045" showing as 30.45 is never a surprise sprung after the fact.
+ */
+function ClipboardSheet({
+  watches,
+  values,
+  onChange,
+  sent,
+  retiming,
+  armed,
+  elapsed,
+  frozen,
+  onArm,
+  onStop,
+  onRetime,
+  onSubmit,
+}: {
+  watches: number;
+  /** What has been typed, by column. Sparse until somebody types. */
+  values: string[];
+  onChange: (column: number, value: string) => void;
+  /** What this phone has already filed for this swim, by column. */
+  sent: Array<number | null>;
+  retiming: boolean;
+  armed: boolean;
+  elapsed: number;
+  /** The reference clock once it has been stopped. Null while it runs. */
+  frozen: number | null;
+  onArm: () => void;
+  onStop: () => void;
+  onRetime: () => void;
+  onSubmit: (times: Array<number | null>) => void;
+}) {
+  const columns = Array.from({ length: watches }, (_, index) => index);
+  const typed = columns.map((column) => (values[column] ?? "").trim());
+  const parsed = typed.map((text) => (text ? parseTime(text) : null));
+
+  const done = sent.some((ms) => ms !== null) && !retiming;
+  const unreadable = typed.some((text, i) => text !== "" && parsed[i] === null);
+  const count = parsed.filter((ms) => ms !== null).length;
+  const ticking = armed && frozen === null;
+
+  return (
+    <>
+      <div className="py-2 text-center">
+        <p className="font-mono text-3xl font-bold tabular-nums text-slate-400">
+          {frozen !== null
+            ? formatClock(frozen)
+            : armed
+              ? formatClock(elapsed)
+              : "\u2014"}
+        </p>
+      </div>
+
+      <div className="space-y-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        {columns.map((column) => (
+          <label
+            key={column}
+            className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 dark:bg-slate-900"
+          >
+            <span className="w-20 shrink-0 text-sm font-bold text-slate-500">
+              Watch {column + 1}
+            </span>
+            {done ? (
+              <span className="min-w-0 flex-1 text-right font-mono text-3xl font-bold tabular-nums">
+                {sent[column] === null ? "\u2014" : formatTime(sent[column]!)}
+              </span>
+            ) : (
+              <input
+                value={values[column] ?? ""}
+                onChange={(event) => onChange(column, event.target.value)}
+                inputMode="decimal"
+                placeholder={"\u2014"}
+                aria-label={`Watch ${column + 1}`}
+                className="min-w-0 flex-1 bg-transparent text-right font-mono text-3xl font-bold tabular-nums outline-none placeholder:text-slate-300 dark:placeholder:text-slate-600"
+              />
+            )}
+            <span className="w-14 shrink-0 text-right text-sm font-semibold tabular-nums text-slate-500">
+              {done || typed[column] === ""
+                ? ""
+                : parsed[column] !== null
+                  ? formatTime(parsed[column]!)
+                  : "?"}
+            </span>
+          </label>
+        ))}
+
+        {/* Nothing to explain about a sheet that has already gone up. */}
+        {!done && (
+          <p
+            className={`px-1 text-xs ${
+              unreadable ? "font-bold text-red-600" : "text-slate-500"
+            }`}
+          >
+            {unreadable
+              ? "One of those can\u2019t be read as a time. 3045 is 30.45."
+              : "Just digits \u2014 3045 is 30.45, 11127 is 1:11.27."}
+          </p>
+        )}
+
+        {done ? (
+          /* Already gone to the desk, and says so where the button would be —
+             a live Submit here invites sending a sheet that has already been
+             read out. Coming back to fix one column is exactly what the ghost
+             button under it is for. */
+          <>
+            <Button
+              size="xl"
+              variant="success"
+              full
+              disabled
+              className="min-h-24 text-3xl"
+            >
+              Submitted
+            </Button>
+            <Button variant="ghost" full onClick={onRetime}>
+              Change these times
+            </Button>
+          </>
+        ) : !armed && count === 0 && !unreadable ? (
+          /* Before the gun there is one thing to do, and it is the same
+             thing it is on a stopwatch: tell the desk this lane is covered. */
+          <Button
+            size="xl"
+            variant="success"
+            full
+            className="min-h-24 text-3xl"
+            onClick={onArm}
+          >
+            START
+          </Button>
+        ) : ticking && count === 0 ? (
+          /**
+           * The swimmer touches, and the thumb goes down here too.
+           *
+           * It stops the clock above and nothing else: this phone is not one
+           * of the watches, and no time is taken from it. What the frozen
+           * number is for is the next thirty seconds, when three timers read
+           * out three numbers and one of them is 9.8 seconds off — the person
+           * writing them down is the only one who can catch that, and this is
+           * what they catch it against.
+           */
+          <Button
+            size="xl"
+            variant="danger"
+            full
+            className="min-h-24 text-3xl"
+            onClick={onStop}
+          >
+            STOP
+          </Button>
+        ) : (
+          <>
+            <Button
+              size="xl"
+              variant="success"
+              full
+              className="min-h-24 text-3xl"
+              disabled={unreadable || count === 0}
+              onClick={() => onSubmit(parsed)}
+            >
+              {count === 0
+                ? "Submit"
+                : count === 1
+                  ? "Submit 1 time"
+                  : `Submit ${count} times`}
+            </Button>
+            {/* Somebody who started writing before the swimmer touched must
+                still be able to stop the clock, and must never have to stop
+                it to send the times. So it stays reachable and stays out of
+                the way of the only button that matters. */}
+            {ticking && (
+              <Button variant="ghost" full onClick={onStop}>
+                Stop the clock
+              </Button>
+            )}
+          </>
+        )}
+      </div>
+    </>
   );
 }

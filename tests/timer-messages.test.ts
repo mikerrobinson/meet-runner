@@ -22,15 +22,47 @@ eq(parseLaneKey("x/1/3"), null, "and they are numbers");
 /* ----------------------------------------------------------- round trips */
 
 eq(
-  parseSubmit(formatSubmit({ at: 1789413369235, elapsedMs: 30000 })),
-  { at: 1789413369235, elapsedMs: 30000 },
+  parseSubmit(formatSubmit({ at: 1789413369235, times: [30000] })),
+  { at: 1789413369235, times: [30000] },
   "a submitted time survives the round trip",
 );
 eq(
-  parseStart(formatStart({ at: 1789413338262, startedAt: 1789413337235 })),
-  { at: 1789413338262, startedAt: 1789413337235 },
+  parseStart(formatStart({ at: 1789413338262, startedAt: 1789413337235, watches: 1 })),
+  { at: 1789413338262, startedAt: 1789413337235, watches: 1 },
   "so does a start",
 );
+
+/* --------------------------------------------- a lane is several watches */
+
+// The clipboard case: one phone, three handheld stopwatches read out to it.
+// Columns are positions, so the message has to keep them even when the middle
+// one is empty — watch 3's time filed as watch 2's is somebody else's swim.
+const sheet = formatSubmit({ at: 1789413369235, times: [30000, null, 30110] });
+eq(sheet, "1789413369235,30000,,30110", "an empty watch is an empty field");
+eq(
+  parseSubmit(sheet),
+  { at: 1789413369235, times: [30000, null, 30110] },
+  "and the columns come back where they were",
+);
+eq(
+  parseSubmit(formatSubmit({ at: 1, times: [null, null, 30110] })),
+  { at: 1, times: [null, null, 30110] },
+  "including trailing columns, which are what say how many watches there are",
+);
+eq(
+  parseSubmit(formatSubmit({ at: 1, times: [30000, null, null] })),
+  { at: 1, times: [30000, null, null] },
+  "and leading ones, which a stopwatch's single column must not be mistaken for",
+);
+
+eq(
+  parseStart(formatStart({ at: 1, startedAt: 2, watches: 3 })),
+  { at: 1, startedAt: 2, watches: 3 },
+  "a clipboard arms every watch behind its lane",
+);
+// What a phone still running the build before clipboards existed sends. It
+// means one watch, which is what it has always meant.
+eq(parseStart("1789413338262,1789413337235")?.watches, 1, "a start with no count is one watch");
 
 // The format is positional and comma-delimited, so a name containing a comma
 // — which is how this app writes them, "Castellanos, Sofia" — must not be
@@ -50,6 +82,11 @@ eq(
 // A time nobody swam is not a time — the same rule the rest of the app keeps.
 eq(parseSubmit("1789413369235,0"), null, "zero is not a time");
 eq(parseSubmit("1789413369235,-5"), null, "nor is a clock that went backwards");
+eq(
+  parseSubmit("1789413369235,0,30110"),
+  { at: 1789413369235, times: [null, 30110] },
+  "and one watch reading zero doesn't take the other's time with it",
+);
 eq(parseSubmit("1789413369235"), null, "nor a message with no time in it");
 
 eq(parseSeat("1789413328262,0,,"), null, "a seat naming nobody is not a seat");
@@ -57,11 +94,15 @@ eq(parseStart("1789413338262"), null, "a start with no timestamp is not a start"
 
 // A message from a phone still running an older build should read as far as
 // it makes sense rather than taking down the request that carried it.
+// A column that can't be read as a time empties that column rather than
+// refusing the sheet: the other watches on the lane are still evidence, and
+// a message the server refuses is one the phone throws away.
 eq(
   parseSubmit("1789413369235,30000,something,else"),
-  { at: 1789413369235, elapsedMs: 30000 },
-  "extra fields are ignored, not fatal",
+  { at: 1789413369235, times: [30000, null, null] },
+  "unreadable columns empty, they don't take the sheet down",
 );
+eq(parseSubmit("1789413369235,,,"), null, "a sheet with nothing on it says nothing");
 
 /* ------------------------------------------------------------------ size */
 
@@ -69,8 +110,8 @@ eq(
 // browser handed one over ~4KB drops it silently.
 const anEvent =
   formatSeat({ at: 1789413328262, team: 1, athleteId: "", name: "Mike Robinson" }) +
-  formatStart({ at: 1789413338262, startedAt: 1789413337235 }) +
-  formatSubmit({ at: 1789413369235, elapsedMs: 30000 });
+  formatStart({ at: 1789413338262, startedAt: 1789413337235, watches: 3 }) +
+  formatSubmit({ at: 1789413369235, times: [30000, 30110, 29990] });
 eq(anEvent.length < 200, true, `one lane's messages stay small (${anEvent.length} bytes)`);
 
 /* ----------------------------------------------- names, in whichever order */

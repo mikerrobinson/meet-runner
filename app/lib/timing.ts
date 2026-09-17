@@ -72,6 +72,59 @@ export function fromStopwatch(watch: Watch): boolean {
   return watch.startedAt !== undefined && watch.stoppedAt !== undefined;
 }
 
+/* ------------------------------------------- one device, several watches */
+
+/**
+ * The separator between a device and which of its watches this is.
+ *
+ * A device id is `[A-Za-z0-9_-]` and nothing else (`grants.server.ts`), so a
+ * `#` in a `timerId` can only ever be this, and a plain id can never be
+ * mistaken for a slotted one.
+ */
+const SLOT = "#";
+
+/**
+ * The id one of a clipboard's watches is filed under.
+ *
+ * A lane timed by three people used to mean three phones, one watch each,
+ * keyed by three device ids. It usually means one phone and three handheld
+ * watches, and those three still have to be three rows — `watches` is keyed
+ * `(seed_id, timer_id)`, one row per submitter, so a device filing three
+ * times needs three ids or it would overwrite itself twice.
+ *
+ * Which is all the suffix is: the same device, saying which of the watches
+ * in its hand this reading came off. Re-submitting a corrected sheet lands on
+ * exactly the same rows.
+ *
+ * The first watch keeps the bare device id, so a phone that is itself the
+ * stopwatch and a clipboard's watch 1 are the same row rather than two. That
+ * is what makes swapping between the two mid-meet harmless: the device holds
+ * one place on the lane and adds rows beside it, instead of leaving an
+ * orphaned watch behind every time the person changes how they are working.
+ */
+export function slotTimerId(deviceId: string, slot: number): string {
+  return slot > 1 ? `${deviceId}${SLOT}${slot}` : deviceId;
+}
+
+/**
+ * Which watch on the clipboard this was — 1, 2 or 3.
+ *
+ * A timer that never held a clipboard has no suffix and is watch 1, which is
+ * the honest answer rather than a special case: a phone that is itself the
+ * stopwatch is the first and only watch on its lane.
+ */
+export function watchSlot(timerId: string): number {
+  const at = timerId.lastIndexOf(SLOT);
+  if (at < 0) return 1;
+  const slot = Number(timerId.slice(at + 1));
+  return Number.isInteger(slot) && slot > 0 ? slot : 1;
+}
+
+/** Whether a watch came off this device, whichever of its watches it is. */
+export function fromDevice(timerId: string, deviceId: string): boolean {
+  return timerId === deviceId || timerId.startsWith(`${deviceId}${SLOT}`);
+}
+
 export interface ProposedTime {
   timeMs: number;
   method: TimeMethod;

@@ -8,6 +8,12 @@
  *   submit=1789413369235,30000
  *   Path=/…/api/meets/{meetId}/timer/{event}/{heat}/{lane}
  *
+ * A submit carries one field per watch on the lane, so the same message says
+ * both "my stopwatch read 30.00" and "the three timers here read 30.00, 30.11
+ * and nothing" — `submit=1789413369235,30000,30110,`. Which of those a device
+ * is sending is the device's business; the lane, and the server, only see how
+ * many columns the sheet has.
+ *
  * Which makes the addressing free. A cookie is identified by name, domain and
  * path, so pressing submit twice on the same lane overwrites rather than
  * queues — the browser does the de-duplication that a queue would otherwise
@@ -70,6 +76,17 @@ export interface SeatMessage {
 export interface StartMessage {
   at: number;
   startedAt: number;
+  /**
+   * How many watches this device is arming on the lane.
+   *
+   * One is a phone that is itself the stopwatch. More is a clipboard saying
+   * the lane has that many handheld watches behind it — so the desk sees
+   * three clocks running on lane 3 rather than one, which is the truth and is
+   * the thing a desk watching for an uncovered lane is reading.
+   *
+   * Absent from anything an older build queued, and read as one.
+   */
+  watches: number;
 }
 
 export interface StopMessage {
@@ -80,13 +97,20 @@ export interface StopMessage {
 export interface SubmitMessage {
   at: number;
   /**
-   * The time itself.
+   * The times on the lane, one slot per watch, in the order the sheet lists
+   * them. A slot is `null` when that watch has nothing on it — a timer who
+   * missed the start, or a clipboard with two of three columns filled.
    *
-   * A difference between two readings of one clock, which is the only thing
-   * about a phone's clock worth trusting, and the same number whether it came
-   * off the built-in stopwatch or was typed in off a handheld one.
+   * Positional, because position is identity here: the second number is watch
+   * 2's time whether or not watch 1 has one, and a sheet that shifted its
+   * columns up when a timer missed a start would file one person's reading
+   * under another's.
+   *
+   * Each is a difference between two readings of one clock, which is the only
+   * thing about a clock worth trusting, and the same number whether it came
+   * off the built-in stopwatch or was read aloud off a handheld one.
    */
-  elapsedMs: number;
+  times: Array<number | null>;
 }
 
 /* -------------------------------------------------------------- formatting */
@@ -105,13 +129,15 @@ export function formatSeat(m: SeatMessage): string {
   return [m.at, m.team, esc(m.athleteId), esc(m.name)].join(",");
 }
 export function formatStart(m: StartMessage): string {
-  return `${m.at},${m.startedAt}`;
+  return `${m.at},${m.startedAt},${m.watches}`;
 }
 export function formatStop(m: StopMessage): string {
   return `${m.at},${m.stoppedAt}`;
 }
 export function formatSubmit(m: SubmitMessage): string {
-  return `${m.at},${m.elapsedMs}`;
+  // An empty field is a watch with nothing on it. Trailing ones are kept —
+  // they are what says how many watches the lane has.
+  return [m.at, ...m.times.map((ms) => ms ?? "")].join(",");
 }
 
 /* ---------------------------------------------------------------- parsing */
@@ -142,9 +168,15 @@ export function parseSeat(raw: string): SeatMessage | null {
 }
 
 export function parseStart(raw: string): StartMessage | null {
-  const [at, startedAt] = raw.split(",");
+  const [at, startedAt, watches] = raw.split(",");
   if (!startedAt) return null;
-  return { at: num(at), startedAt: num(startedAt) };
+  return {
+    at: num(at),
+    startedAt: num(startedAt),
+    // One watch unless the message says otherwise, which is what a phone
+    // running the build before clipboards existed means by saying nothing.
+    watches: Math.max(1, Math.round(num(watches)) || 1),
+  };
 }
 
 export function parseStop(raw: string): StopMessage | null {
@@ -154,12 +186,20 @@ export function parseStop(raw: string): StopMessage | null {
 }
 
 export function parseSubmit(raw: string): SubmitMessage | null {
-  const [at, elapsedMs] = raw.split(",");
-  const ms = num(elapsedMs);
+  const [at, ...fields] = raw.split(",");
+  if (fields.length === 0) return null;
+
   // Zero isn't a time anybody swam, and negative is a clock that went
-  // backwards. Both are worth refusing rather than recording.
-  if (ms <= 0) return null;
-  return { at: num(at), elapsedMs: Math.round(ms) };
+  // backwards. Either empties that one slot rather than refusing the sheet:
+  // the other two watches on the lane are still evidence, and a message the
+  // server rejects outright is one the phone throws away.
+  const times = fields.map((field) => {
+    const ms = num(field);
+    return field.trim() !== "" && ms > 0 ? Math.round(ms) : null;
+  });
+
+  // A sheet with nothing on it says nothing.
+  return times.some((ms) => ms !== null) ? { at: num(at), times } : null;
 }
 
 /**

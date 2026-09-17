@@ -1,6 +1,9 @@
 import { done, eq } from "./harness.ts";
 import {
   eventClosed,
+  fromDevice,
+  slotTimerId,
+  watchSlot,
   eventTouched,
   fromStopwatch,
   heatClosed,
@@ -306,6 +309,55 @@ eq(
     seedsForHeat({ seeds: [unnamed] }, EVENT, 1).length,
     1,
     "the swim is in its heat like any other",
+  );
+}
+
+/* ------------------------------------------- one device, several watches */
+
+/**
+ * A lane timed by three people used to mean three phones. It usually means one
+ * phone holding the sheet and three handheld watches read onto it — and those
+ * still have to be three rows, because `watches` is keyed one per submitter.
+ *
+ * The first watch keeps the bare device id, so a phone that is itself the
+ * stopwatch and a clipboard's first column are the same row rather than two.
+ * That is what makes swapping between the two mid-meet harmless.
+ */
+eq(slotTimerId("d-abc", 1), "d-abc", "the first watch is just the device");
+eq(slotTimerId("d-abc", 3), "d-abc#3", "the rest say which watch they are");
+eq(watchSlot("d-abc"), 1, "a plain timer is watch one");
+eq(watchSlot("d-abc#3"), 3, "and a slotted one says so");
+eq(watchSlot("d-abc#nonsense"), 1, "garbage after the marker is still watch one");
+eq(fromDevice("d-abc#2", "d-abc"), true, "a column belongs to the device holding it");
+eq(fromDevice("d-abc", "d-abc"), true, "so does the bare one");
+eq(fromDevice("d-abcdef", "d-abc"), false, "and a device whose id merely starts the same does not");
+
+// The point of the third watch, filed by one phone: it outvotes the slow
+// thumb rather than dragging an average toward it.
+{
+  const s10 = seed("s10", 1, 4, "a1");
+  const sheet = [
+    watch("s10", slotTimerId("d-1", 1), 27_140),
+    watch("s10", slotTimerId("d-1", 2), 27_200),
+    watch("s10", slotTimerId("d-1", 3), 28_900),
+  ];
+  eq(
+    swimTime({ seeds: [s10], watches: sheet, results: [] }, "s10"),
+    { timeMs: 27_200, method: "median", watchCount: 3, status: "OK", official: false, from: "timer" },
+    "three watches off one clipboard are three watches, and take the middle one",
+  );
+  eq(
+    laneProgress({ watches: sheet }, "s10"),
+    "complete",
+    "and the desk reads the lane as covered by all three",
+  );
+  // A clipboard that armed three and submitted two: the third row is deleted
+  // on the way in (`api.timer.lane.ts`), so the lane is not left waiting on a
+  // watch nobody is holding.
+  eq(
+    laneProgress({ watches: [sheet[0], watch("s10", slotTimerId("d-1", 2), undefined)] }, "s10"),
+    "waiting",
+    "a column still running is a lane still waiting",
   );
 }
 

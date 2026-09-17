@@ -85,6 +85,7 @@ const SCHEMA = [
      host_team_id TEXT,
      created_by TEXT,
      lane_count INTEGER NOT NULL DEFAULT 6,
+     timers_per_lane INTEGER NOT NULL DEFAULT 1,
      lead_gender TEXT NOT NULL DEFAULT 'F',
      include_diving INTEGER NOT NULL DEFAULT 0,
      entry_visibility TEXT NOT NULL DEFAULT 'everyone',
@@ -198,6 +199,26 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS results_by_event ON results (event_id)`,
 ];
 
+/**
+ * Columns added to a table that already exists somewhere.
+ *
+ * `CREATE TABLE IF NOT EXISTS` is the whole of the schema above, which is
+ * exactly right for a new database and does nothing at all for the one
+ * already holding a season's meets. So a column added later is stated twice:
+ * in the table, for a database being created now, and here, for one that
+ * isn't. SQLite has no `ADD COLUMN IF NOT EXISTS`, so the second run of one
+ * of these fails with "duplicate column name" — which is the success case,
+ * and the only error swallowed below.
+ *
+ * Deliberately not a migration framework. There is no version table and no
+ * ordering to get wrong: each statement is idempotent on its own, and a list
+ * of them is as much machinery as adding a column to a handful of rows is
+ * worth.
+ */
+const MIGRATIONS = [
+  `ALTER TABLE meets ADD COLUMN timers_per_lane INTEGER NOT NULL DEFAULT 1`,
+];
+
 let ready = false;
 
 /**
@@ -211,6 +232,15 @@ let ready = false;
 export async function ensureSchema(db: D1Database): Promise<void> {
   if (ready) return;
   for (const statement of SCHEMA) await db.prepare(statement).run();
+  for (const statement of MIGRATIONS) {
+    try {
+      await db.prepare(statement).run();
+    } catch (error) {
+      // Already applied — which is what this looks like every time but the
+      // first. Anything else is a real failure and belongs in the logs.
+      if (!/duplicate column name/i.test(String(error))) throw error;
+    }
+  }
   ready = true;
 }
 

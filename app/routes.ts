@@ -63,7 +63,6 @@ export default [
       route("results", "routes/results.tsx"),
       route("run", "routes/run.tsx"),
     ]),
-
   ]),
 
   // Lists of people, and searching for one. The screens that show a team or a

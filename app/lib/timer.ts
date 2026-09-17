@@ -38,6 +38,58 @@ function furthestPath(meetId: string): string {
   return `${appBasePath()}meets/${encodeURIComponent(meetId)}/timer`;
 }
 
+/**
+ * What this phone is doing behind its lane.
+ *
+ * `own` is the screen this app started with: one phone, one thumb, one watch.
+ * `clipboard` is what a lane usually looks like — two or three people holding
+ * handheld stopwatches and reading them out to whoever has the sheet — and
+ * makes this phone that sheet.
+ *
+ * A device answer, not a meet one, and the reason is that both are true at
+ * the same meet: the coach sets "three timers a lane" because that is how
+ * many watches a lane has, and then one lane is covered by three parents with
+ * three phones while the next has a clipboard. The meet says how many
+ * watches; each phone says which of them it is holding.
+ *
+ * Scoped by path to this meet, like `furthest`, so a volunteer who was the
+ * clipboard on Tuesday isn't quietly one again on Thursday.
+ */
+export type TimerRole = "own" | "clipboard";
+
+const ROLE_COOKIE = "mr_timer_role";
+
+export function loadRole(): TimerRole | null {
+  const raw = readCookie(ROLE_COOKIE);
+  return raw === "clipboard" || raw === "own" ? raw : null;
+}
+
+export function saveRole(meetId: string, role: TimerRole): void {
+  if (typeof document === "undefined") return;
+  const secure = location.protocol === "https:" ? "; Secure" : "";
+  document.cookie =
+    `${ROLE_COOKIE}=${role}` +
+    `; Path=${furthestPath(meetId)}; SameSite=Lax` +
+    `; Max-Age=${A_WEEK}${secure}`;
+}
+
+/**
+ * How many watches this phone is filling in, given what it is and what the
+ * meet says a lane has.
+ *
+ * One unless this phone is the clipboard — a phone that is itself a stopwatch
+ * is one watch however many are standing beside it — and never more than the
+ * meet expects, so turning "three timers" down to two mid-meet takes a column
+ * off every clipboard rather than leaving one stranded.
+ */
+export function watchCount(
+  snapshot: Pick<Snapshot, "meet"> | null,
+  role: TimerRole | null,
+): number {
+  const expected = Math.max(1, snapshot?.meet.timersPerLane ?? 1);
+  return role === "clipboard" ? expected : 1;
+}
+
 /** The furthest heat submitted, as an index into the running order. */
 export function loadFurthest(): number {
   const raw = readCookie(FURTHEST_COOKIE);
@@ -157,6 +209,8 @@ export interface Snapshot {
     name: string;
     date: string;
     laneCount: number;
+    /** How many watches a lane is timed by. One is a phone per timer. */
+    timersPerLane: number;
     teams: TimerTeam[];
   };
   /** What to call athletes with no team label of their own. */

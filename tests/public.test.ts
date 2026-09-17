@@ -76,6 +76,7 @@ const meetRow: Meet = {
   teamIds: [home.id, away.id],
   hostTeamId: home.id,
   laneCount: 6,
+  timersPerLane: 1,
   leadGender: "F",
   includeDiving: true,
   limits: {},

@@ -89,6 +89,28 @@ export function isLaneCount(value: unknown): value is LaneCount {
 }
 
 /**
+ * How many stopwatches a lane is timed by.
+ *
+ * A deck fact rather than a preference: a lane has one, two or three people
+ * standing behind it with watches, and everything about how times reach the
+ * app follows from which. One is a phone per timer, self-reporting. Two or
+ * three is the arrangement this was built for — the timers hold handheld
+ * watches and read them out to whoever is holding the clipboard, who is the
+ * only one with a phone.
+ *
+ * Three is the ceiling because three is what the hand-timing rules are for:
+ * the third watch is the one that outvotes a slow thumb, and a fourth adds
+ * nothing the median didn't already have.
+ */
+export type TimersPerLane = 1 | 2 | 3;
+
+export const TIMERS_PER_LANE: TimersPerLane[] = [1, 2, 3];
+
+export function isTimersPerLane(value: unknown): value is TimersPerLane {
+  return TIMERS_PER_LANE.includes(value as TimersPerLane);
+}
+
+/**
  * How the lane buttons are arranged while running a heat. The two list
  * layouts put the lanes in a single column in pool order, so whoever is
  * watching from the side maps a finish straight onto a button without having
@@ -363,6 +385,17 @@ export interface Meet {
   /** The account that set it up. */
   createdBy?: string;
   laneCount: LaneCount;
+  /**
+   * How many watches a lane is expected to be timed by.
+   *
+   * One — the default, and what every meet before this setting existed was —
+   * means a timing phone is one person's stopwatch. More means a lane has
+   * that many handheld watches on it, and a phone standing behind that lane
+   * may be the clipboard recording all of them. Which of the two a given
+   * phone is doing is that phone's own answer, not the meet's: see
+   * `timer-lanes.tsx`.
+   */
+  timersPerLane: TimersPerLane;
   /** Which gender swims first in each pair of a split lineup. */
   leadGender: Gender;
   /** Whether the lineup carries a Diving event. */

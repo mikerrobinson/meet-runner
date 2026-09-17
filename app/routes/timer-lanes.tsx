@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import type { Route } from "./+types/timer-lanes";
-import { fetchSnapshot, type Snapshot } from "~/lib/timer";
+import {
+  fetchSnapshot,
+  loadRole,
+  saveRole,
+  type Snapshot,
+  type TimerRole,
+} from "~/lib/timer";
 import { firstStopPath } from "~/lib/timer-path";
 
 export function meta({}: Route.MetaArgs) {
@@ -17,15 +23,35 @@ export function meta({}: Route.MetaArgs) {
  * of the pool by going back, and what makes "which lane am I?" a question with
  * a visible answer rather than a remembered one.
  *
- * The lanes are the only thing on screen. A person who has just been handed a
- * phone and a clipboard is being asked one question, and it is a big-buttoned
- * one they can answer without reading.
+ * The lanes are very nearly the only thing on screen. A person who has just
+ * been handed a phone and a clipboard is being asked one question, and it is a
+ * big-buttoned one they can answer without reading.
+ *
+ * At a meet whose lanes carry two or three watches there is a second question
+ * above it — is this phone one timer's stopwatch, or the sheet all of them are
+ * read onto? — because the meet cannot answer it. "Three timers a lane" is
+ * true both when three parents each hold a phone and when one of them holds
+ * the clipboard and the other two hold watches. The answer sticks to the
+ * device, so it is asked once and not again at every lane change.
  */
 export default function TimerLanes({ params }: Route.ComponentProps) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * What this phone is: its own stopwatch, or the clipboard for the lane.
+   *
+   * Only asked at a meet whose lanes have more than one watch, and remembered
+   * on the device from then on — so a volunteer answers once, not at every
+   * lane change. `null` until the cookie has been read, which cannot happen
+   * during the server render.
+   */
+  const [role, setRole] = useState<TimerRole | null>(null);
 
   useEffect(() => {
+    // A phone that has already said which it is keeps that answer. One that
+    // hasn't gets the clipboard, because a coach only sets "three timers a
+    // lane" when the lanes have three watches on them and one sheet.
+    setRole(loadRole() ?? "clipboard");
     fetchSnapshot()
       .then(setSnapshot)
       .catch((err: unknown) =>
@@ -34,6 +60,11 @@ export default function TimerLanes({ params }: Route.ComponentProps) {
         ),
       );
   }, []);
+
+  const choose = (next: TimerRole) => {
+    setRole(next);
+    saveRole(params.meetId, next);
+  };
 
   if (error) {
     return (
@@ -64,6 +95,36 @@ export default function TimerLanes({ params }: Route.ComponentProps) {
       <p className="mb-6 text-center text-slate-600 dark:text-slate-300">
         Which lane are you timing?
       </p>
+
+      {/* The other question a lane with several watches has to answer, and the
+          only place it is asked. Absent at a meet whose lanes are one watch
+          each, where there is nothing to choose between. */}
+      {snapshot.meet.timersPerLane > 1 && (
+        <div className="mb-6">
+          <div className="grid grid-cols-2 gap-2">
+            {(
+              [
+                ["clipboard", `I have the sheet for ${snapshot.meet.timersPerLane} watches`],
+                ["own", "Just my own watch"],
+              ] as Array<[TimerRole, string]>
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => choose(value)}
+                aria-pressed={role === value}
+                className={`min-h-16 touch-manipulation rounded-2xl border-2 px-3 py-2 text-sm font-semibold ${
+                  role === value
+                    ? "border-blue-600 bg-blue-600 text-white"
+                    : "border-slate-300 text-slate-700 dark:border-slate-700 dark:text-slate-200"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-3">
         {Array.from({ length: snapshot.meet.laneCount }, (_, i) => i + 1).map(
           (lane) => (

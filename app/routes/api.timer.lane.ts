@@ -14,12 +14,15 @@ import {
   grantToken,
 } from "~/lib/grants.server";
 import {
+  deleteWatch,
   ensureLane,
   meetDetail,
   putWatch,
   seedAt,
   setSeed,
 } from "~/lib/meets.server";
+import { slotTimerId } from "~/lib/timing";
+import { TIMERS_PER_LANE } from "~/types/meet";
 import { putAthlete } from "~/lib/athletes.server";
 import { enrolVisitor } from "~/lib/teams.server";
 import { generateId } from "~/lib/id";
@@ -44,6 +47,12 @@ import {
  * on the way out. A phone that has been out of signal since heat 3 sends
  * nothing special: it posts to the lane's URL and the browser brings whatever
  * was still pending along with it.
+ *
+ * A lane may be more than one watch. `submit` carries a column per stopwatch
+ * standing behind the lane, so one phone acting as the clipboard for three
+ * timers writes three rows keyed to itself — see `slotTimerId`. A phone that
+ * is itself the stopwatch sends one column and writes the one row it always
+ * did.
  *
  * Every write here is keyed by heat, lane and timer, which is also what makes
  * the whole thing safe to repeat. If this succeeds and the *response* is lost,
@@ -220,17 +229,57 @@ export async function action({ params, request, context }: Route.ActionArgs) {
       const onServerClock = (message: { at: number }, value: number) =>
         message.at > 0 ? value + (receivedAt - message.at) : value;
 
-      await putWatch(db, grant.meetId, {
-        seedId: seed.id,
-        timerId,
-        // A grant is a lane and a stopwatch, nothing else — there is no
-        // account behind it and no other role it could be.
-        role: "timer",
-        timeMs: submit?.elapsedMs,
-        recordedAt: submit?.at || receivedAt,
-        startedAt: start ? onServerClock(start, start.startedAt) : undefined,
-        stoppedAt: stop ? onServerClock(stop, stop.stoppedAt) : undefined,
-      });
+      /**
+       * How many watches this phone is speaking for.
+       *
+       * One is the phone that is itself the stopwatch, and is every message
+       * this endpoint saw before clipboards existed. More is a clipboard: one
+       * device behind a lane with two or three handheld watches read out to
+       * it, which is what timing a lane actually looks like on a deck.
+       *
+       * The submitted sheet is the authority when there is one — its columns
+       * *are* the watches — and the arming message says so only until then.
+       * Capped rather than believed, so a mangled cookie cannot ask for a
+       * hundred rows on one swim.
+       */
+      const columns = Math.min(
+        Math.max(...TIMERS_PER_LANE),
+        submit ? submit.times.length : (start?.watches ?? 1),
+      );
+
+      /**
+       * One row per watch, all of them keyed to this device.
+       *
+       * A submit is the whole sheet, so a column with nothing in it is a
+       * statement — that watch has no time — and the row for it goes. That is
+       * what keeps the desk honest: a lane armed for three and submitted with
+       * two would otherwise read as forever waiting on a third watch nobody
+       * is holding, and it is how a device that swaps between clipboard and
+       * its own stopwatch mid-meet leaves exactly one set of watches behind.
+       */
+      for (let slot = 1; slot <= Math.max(...TIMERS_PER_LANE); slot++) {
+        const id = slotTimerId(timerId, slot);
+        const timeMs = submit ? (submit.times[slot - 1] ?? undefined) : undefined;
+
+        if (slot > columns || (submit && timeMs === undefined)) {
+          // Only a sheet retires a watch. A start says nothing about the
+          // columns it didn't mention.
+          if (submit) await deleteWatch(db, seed.id, id);
+          continue;
+        }
+
+        await putWatch(db, grant.meetId, {
+          seedId: seed.id,
+          timerId: id,
+          // A grant is a lane and a stopwatch, nothing else — there is no
+          // account behind it and no other role it could be.
+          role: "timer",
+          timeMs,
+          recordedAt: submit?.at || receivedAt,
+          startedAt: start ? onServerClock(start, start.startedAt) : undefined,
+          stoppedAt: stop ? onServerClock(stop, stop.stoppedAt) : undefined,
+        });
+      }
       applied += 1;
     }
 

@@ -13,6 +13,7 @@
  */
 
 import { meetDetail } from "./meets.server";
+import { fromDevice } from "./timing";
 import type { Grant } from "./grants.server";
 import type { MeetEvent, Seed, Watch } from "~/types/meet";
 
@@ -39,6 +40,12 @@ export interface TimerSnapshot {
     name: string;
     date: string;
     laneCount: number;
+    /**
+     * How many watches a lane is timed by, so a phone can offer to be the
+     * clipboard for them. One — the default — is a phone per timer, which is
+     * what this screen has always been.
+     */
+    timersPerLane: number;
     /** The teams racing, for the "add a swimmer" buttons. */
     teams: TimerTeam[];
   };
@@ -54,7 +61,11 @@ export interface TimerSnapshot {
   /** eventId -> athleteIds registered in it. */
   entries: Record<string, string[]>;
   athletes: TimerAthlete[];
-  /** Only this device's own times. Another timer's is not a hint. */
+  /**
+   * Only this device's own times — every watch it is holding, which is three
+   * of them when it is the clipboard for a lane. Another timer's is not a
+   * hint.
+   */
   mine: Watch[];
 }
 
@@ -90,6 +101,7 @@ export async function timerSnapshot(
       name: detail.meet.name,
       date: detail.meet.date,
       laneCount: detail.meet.laneCount,
+      timersPerLane: detail.meet.timersPerLane,
       teams: detail.teams.map((t) => ({ id: t.id, name: t.name })),
     },
     ownTeam: host || label.get(detail.meet.teamIds[0] ?? "") || "Home",
@@ -104,6 +116,8 @@ export async function timerSnapshot(
       lastName: a.lastName,
       team: teamOf.get(a.id) || undefined,
     })),
-    mine: detail.watches.filter((w) => w.timerId === timerId),
+    // A clipboard's watches are keyed to this same device with a column
+    // number after them, so "mine" is the device and everything in its hand.
+    mine: detail.watches.filter((w) => fromDevice(w.timerId, timerId)),
   };
 }

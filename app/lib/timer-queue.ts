@@ -173,12 +173,18 @@ export function enqueueSeat(
   }));
 }
 
+/**
+ * `watches` is how many clocks this device is arming — one for a phone that
+ * is itself the stopwatch, more for a clipboard saying how many handheld
+ * watches are standing behind the lane.
+ */
 export function enqueueStart(
   meetId: string,
   at: LaneRef,
   startedAt: number,
+  watches = 1,
 ): void {
-  put(meetId, at, "start", formatStart({ at: Date.now(), startedAt }));
+  put(meetId, at, "start", formatStart({ at: Date.now(), startedAt, watches }));
 }
 
 export function enqueueStop(
@@ -189,12 +195,19 @@ export function enqueueStop(
   put(meetId, at, "stop", formatStop({ at: Date.now(), stoppedAt }));
 }
 
+/**
+ * One sheet for the lane: every watch on it, in column order, with `null`
+ * where a watch has nothing. Sent whole rather than a message per time, so
+ * the cookie the browser overwrites is the same cookie however many watches
+ * the lane has — and so a corrected sheet replaces the old one entire rather
+ * than half of it.
+ */
 export function enqueueSubmit(
   meetId: string,
   at: LaneRef,
-  elapsedMs: number,
+  times: Array<number | null>,
 ): void {
-  put(meetId, at, "submit", formatSubmit({ at: Date.now(), elapsedMs }));
+  put(meetId, at, "submit", formatSubmit({ at: Date.now(), times }));
 }
 
 /* ---------------------------------------------------------------- sending */

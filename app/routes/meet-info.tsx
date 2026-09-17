@@ -45,14 +45,17 @@ import {
   eventName,
   isLaneCount,
   isMeetCourse,
+  isTimersPerLane,
   LANE_COUNTS,
   MEET_COURSES,
   MEET_TYPES,
   meetSubtitle,
   STROKES,
+  TIMERS_PER_LANE,
   type EventGender,
   type LaneCount,
   type MeetType,
+  type TimersPerLane,
   type Stroke,
 } from "~/types/meet";
 
@@ -108,6 +111,7 @@ export async function action({ params, request, context }: Route.ActionArgs) {
 
   if (intent === "details") {
     const lanes = Number(form.get("laneCount"));
+    const timers = Number(form.get("timersPerLane"));
     const course = form.get("course");
     await updateMeet(db, params.meetId, {
       name: String(form.get("name") ?? "").trim() || "Meet",
@@ -116,6 +120,7 @@ export async function action({ params, request, context }: Route.ActionArgs) {
       course: isMeetCourse(course) ? course : "SCY",
       location: String(form.get("location") ?? "").trim(),
       laneCount: isLaneCount(lanes) ? lanes : 6,
+      timersPerLane: isTimersPerLane(timers) ? timers : 1,
     });
     return { ok: true };
   }
@@ -328,6 +333,7 @@ export default function MeetInfo({ loaderData }: Route.ComponentProps) {
             meet.date,
             courseLabel(meet.course),
             `${meet.laneCount} lanes`,
+            meet.timersPerLane > 1 ? `${meet.timersPerLane} timers a lane` : "",
             meet.location,
           ]
             .filter(Boolean)
@@ -502,6 +508,26 @@ function DetailsEditor() {
             </Select>
           </Field>
         </div>
+        {/* How many stopwatches stand behind a lane, which is a fact about
+            the deck rather than a way of working: whether those watches
+            report themselves from three phones or get read onto one sheet is
+            answered on each phone, at the lane picker. */}
+        <Field
+          label="Timers per lane"
+          hint={
+            meet.timersPerLane > 1
+              ? "A timing phone can hold the sheet for all of them, or be one timer\u2019s own watch."
+              : "One watch a lane. Raise it and a phone can record every timer\u2019s time on the lane."
+          }
+        >
+          <Select name="timersPerLane" defaultValue={meet.timersPerLane}>
+            {TIMERS_PER_LANE.map((n: TimersPerLane) => (
+              <option key={n} value={n}>
+                {n === 1 ? "1 \u2014 one watch a lane" : `${n} watches a lane`}
+              </option>
+            ))}
+          </Select>
+        </Field>
         <Field label="Location">
           <TextInput
             name="location"
