@@ -303,7 +303,10 @@ export async function action({ params, request, context }: Route.ActionArgs) {
           // A no-show or a disqualification with nothing on the clock is zero,
           // which is how every screen already reads "no time".
           timeMs: Number.isFinite(timeMs) && timeMs > 0 ? Math.round(timeMs) : 0,
-          decidedBy: user?.id,
+          // The app's own sentinel rather than nobody's id, so a later
+          // discrepancy can tell its own earlier call apart from a person's
+          // and take only its own back.
+          decidedBy: write.auto ? "auto" : user?.id,
           decidedAt: Date.now(),
         });
         return json({ ok: true });

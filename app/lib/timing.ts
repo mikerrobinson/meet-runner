@@ -173,6 +173,26 @@ export interface LaneTime {
   watchCount: number;
   /** Which tier answered, so a screen can say why. */
   from: WatchRole;
+  /**
+   * The spread between the fastest and slowest watch that fed this time.
+   * `null` when only one watch did — an administrator's own reading, or a
+   * lane with a single stopwatch on it — so there is nothing to disagree.
+   */
+  discrepancyMs: number | null;
+}
+
+/**
+ * How much daylight between watches still counts as one lane, one time.
+ * Past this, the watches disagree about what actually happened rather than
+ * just rounding differently, and a person needs to look rather than the app
+ * quietly picking a number.
+ */
+export const OK_DISCREPANCY_MS = 300;
+
+function spreadOf(watches: Watch[]): number | null {
+  if (watches.length < 2) return null;
+  const times = watches.map((w) => w.timeMs!);
+  return Math.max(...times) - Math.min(...times);
 }
 
 /**
@@ -207,11 +227,14 @@ export function laneTime(watches: Watch[]): LaneTime | null {
       method: "official",
       watchCount: 1,
       from: "admin",
+      // A ruling, not a reading among several — nothing else to disagree.
+      discrepancyMs: null,
     };
   }
 
-  const timers = proposedTime(byRole("timer"));
-  if (timers) return { ...timers, from: "timer" };
+  const timers = byRole("timer");
+  const proposed = proposedTime(timers);
+  if (proposed) return { ...proposed, from: "timer", discrepancyMs: spreadOf(timers) };
 
   const coaches = byRole("coach");
   if (coaches.length > 0) {
@@ -220,6 +243,7 @@ export function laneTime(watches: Watch[]): LaneTime | null {
       method: coaches.length === 1 ? "single" : "average",
       watchCount: coaches.length,
       from: "coach",
+      discrepancyMs: spreadOf(coaches),
     };
   }
 
@@ -281,6 +305,7 @@ export interface SwimTime {
   method: TimeMethod;
   watchCount: number;
   from: WatchRole;
+  discrepancyMs: number | null;
   /** True once an administrator has signed it off. */
   official: boolean;
 }
@@ -294,6 +319,7 @@ export function swimTime(rows: TimingRows, seedId: string): SwimTime | null {
       method: "official",
       watchCount: 0,
       from: "admin",
+      discrepancyMs: null,
       official: true,
     };
   }

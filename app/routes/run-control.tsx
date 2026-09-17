@@ -13,6 +13,7 @@ import {
   heatsOf,
   laneProgress,
   laneTime,
+  OK_DISCREPANCY_MS,
   resultFor,
   runningWatches,
   seedsForHeat,
@@ -275,39 +276,128 @@ function HeatCard({
   const progress = heatProgress(detail, event.id, heat);
   const closed = heatClosed(detail, event.id, heat);
 
-  // Only the swims still outstanding, so "sign off all" never quietly
-  // overwrites a correction somebody already made.
-  const outstanding = seeds.filter(
-    (seed) => resultFor(detail, seed.id) === undefined,
-  );
+  /**
+   * Keep each lane's status honest, without anybody having to press
+   * anything.
+   *
+   * A lane with one clean time is not a decision — it is the timing table
+   * agreeing with itself, and OK is the only status that can be inferred
+   * rather than chosen. So it is set the moment a time exists and taken
+   * straight back the moment the watches stop agreeing, and it never touches
+   * a DQ, an NS or an OK a person actually clicked — those are calls, and
+   * only a person undoes a call.
+   *
+   * Marked `auto` on the way out so a later disagreement can tell its own
+   * earlier writing apart from somebody's decision and take back only that.
+   */
+  useEffect(() => {
+    if (closed) return;
+    for (const seed of seeds) {
+      const result = resultFor(detail, seed.id);
+      const derived = laneTime(watchesOn(detail, seed.id));
+
+      if (!result) {
+        if (
+          derived &&
+          (derived.discrepancyMs === null ||
+            derived.discrepancyMs <= OK_DISCREPANCY_MS)
+        ) {
+          send({
+            kind: "result",
+            meetId: detail.meet.id,
+            seedId: seed.id,
+            status: "OK",
+            timeMs: derived.timeMs,
+            auto: true,
+          });
+        }
+        continue;
+      }
+
+      if (result.decidedBy !== "auto") continue;
+
+      if (
+        !derived ||
+        (derived.discrepancyMs !== null && derived.discrepancyMs > OK_DISCREPANCY_MS)
+      ) {
+        send({ kind: "unresult", meetId: detail.meet.id, seedId: seed.id });
+      } else if (derived.timeMs !== result.timeMs) {
+        send({
+          kind: "result",
+          meetId: detail.meet.id,
+          seedId: seed.id,
+          status: "OK",
+          timeMs: derived.timeMs,
+          auto: true,
+        });
+      }
+    }
+    // detail carries the pending overlay, so this settles itself as soon as a
+    // write above lands in it — no extra guard needed against re-firing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail, seeds, closed, send]);
+
+  // Once anybody's clock has moved, sitting on "not started" would be a lie —
+  // and once a lane reads OK on its own, or there is nothing left to time,
+  // there is nothing more the timing table can add.
+  const anyActivity = seeds.some((seed) => watchesOn(detail, seed.id).length > 0);
+  const anyOk = seeds.some((seed) => resultFor(detail, seed.id)?.status === "OK");
+  const allNS =
+    seeds.length > 0 &&
+    seeds.every((seed) => resultFor(detail, seed.id)?.status === "NS");
+  const readyToComplete = anyOk || seeds.length === 0 || allNS;
+
+  /**
+   * The one press that closes a heat out.
+   *
+   * Everything with a time on the clock — even one the discrepancy check
+   * wouldn't trust on its own — is accepted as the administrator's own call
+   * the moment they press this; a lane with nothing on it at all is recorded
+   * as a no-show rather than left to sit open forever.
+   */
+  const markComplete = () => {
+    for (const seed of seeds) {
+      if (resultFor(detail, seed.id)) continue;
+      const derived = laneTime(watchesOn(detail, seed.id));
+      send({
+        kind: "result",
+        meetId: detail.meet.id,
+        seedId: seed.id,
+        status: derived ? "OK" : "NS",
+        timeMs: derived ? derived.timeMs : 0,
+      });
+    }
+  };
+
+  /** Reopen every lane in the heat, so a correction can be made and the
+   *  automatic status can pick the swims back up on its own. */
+  const fixResults = () => {
+    for (const seed of seeds) {
+      if (!resultFor(detail, seed.id)) continue;
+      send({ kind: "unresult", meetId: detail.meet.id, seedId: seed.id });
+    }
+  };
+
+  const heatButton = closed
+    ? { label: "Fix Results", onClick: fixResults, variant: "ghost" as const, disabled: false }
+    : readyToComplete
+      ? { label: "Mark as Complete", onClick: markComplete, variant: "primary" as const, disabled: false }
+      : anyActivity
+        ? { label: "In progress", onClick: undefined, variant: undefined, disabled: true }
+        : { label: "Not started", onClick: undefined, variant: undefined, disabled: true };
 
   return (
     <Card>
       <SectionTitle
         action={
-          outstanding.length > 0 ? (
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => {
-                for (const seed of outstanding) {
-                  const time = laneTime(watchesOn(detail, seed.id));
-                  // Nothing to accept on a lane with no time at all: signing
-                  // one off would record a zero as though somebody swam it.
-                  if (!time) continue;
-                  send({
-                    kind: "result",
-                    meetId: detail.meet.id,
-                    seedId: seed.id,
-                    status: "OK",
-                    timeMs: time.timeMs,
-                  });
-                }
-              }}
-            >
-              Sign off ({outstanding.length})
-            </Button>
-          ) : undefined
+          <Button
+            size="sm"
+            variant={heatButton.variant}
+            disabled={heatButton.disabled}
+            onClick={heatButton.onClick}
+          >
+            {heatButton.label}
+          </Button>
         }
       >
         {eventName(event)} · heat {heat}
@@ -333,7 +423,6 @@ function HeatCard({
               <th className="py-1 pr-2 font-semibold">Watches</th>
               <th className="py-1 pr-2 font-semibold">Time</th>
               <th className="py-1 pr-2 font-semibold">Status</th>
-              <th className="py-1 font-semibold" />
             </tr>
           </thead>
           <tbody>
@@ -352,6 +441,7 @@ function HeatCard({
                 send={send}
                 me={me}
                 now={now}
+                closed={closed}
                 onAssign={onAssign}
               />
               ),
@@ -438,6 +528,7 @@ function LaneRow({
   send,
   me,
   now,
+  closed,
   onAssign,
 }: {
   detail: MeetDetail;
@@ -448,6 +539,9 @@ function LaneRow({
   send: (write: Write) => void;
   me: string | null;
   now: number;
+  /** The heat this lane belongs to has been marked complete — nothing here
+   *  may change until "Fix Results" reopens it. */
+  closed: boolean;
   onAssign: (lane: number) => void;
 }) {
   /**
@@ -535,7 +629,7 @@ function LaneRow({
   const commitTime = () => {
     const text = draft;
     setDraft(null);
-    if (text === null || !seed) return;
+    if (text === null || !seed || closed) return;
 
     const mine = watches.find((w) => w.role === "admin" && w.timerId === me);
     if (text.trim() === "") {
@@ -564,7 +658,7 @@ function LaneRow({
    * Taking it back is deleting the row, which is what `unresult` does.
    */
   const signOff = (status: ResultStatus) => {
-    if (!seed) return;
+    if (!seed || closed) return;
     send({
       kind: "result",
       meetId: detail.meet.id,
@@ -573,11 +667,6 @@ function LaneRow({
       // A no-show or a disqualification needn't have a time behind it.
       timeMs: status === "OK" ? (accepted?.timeMs ?? 0) : (accepted?.timeMs ?? 0),
     });
-  };
-
-  const undo = () => {
-    if (!seed) return;
-    send({ kind: "unresult", meetId: detail.meet.id, seedId: seed.id });
   };
 
   /**
@@ -589,7 +678,7 @@ function LaneRow({
    * people who may record a time rather than the desk alone.
    */
   const toggleExhibition = () => {
-    if (!seed) return;
+    if (!seed || closed) return;
     send({
       kind: "exhibition",
       meetId: detail.meet.id,
@@ -693,8 +782,10 @@ function LaneRow({
                 type="button"
                 aria-label={`Discard the ${formatTime(w.timeMs!)} watch`}
                 title="Discard this watch"
+                disabled={closed}
                 onClick={() =>
                   seed &&
+                  !closed &&
                   send({
                     kind: "drop-watch",
                     meetId: detail.meet.id,
@@ -702,7 +793,7 @@ function LaneRow({
                     timerId: w.timerId,
                   })
                 }
-                className="text-red-600 hover:text-red-500"
+                className="text-red-600 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 ✕
               </button>
@@ -736,9 +827,10 @@ function LaneRow({
           inputMode="numeric"
           placeholder={progress === "none" ? "" : "0000"}
           aria-label={`Time for lane ${lane}`}
-          title={PROGRESS_HINT[progress]}
+          title={closed ? "This heat is complete — Fix Results to change it." : PROGRESS_HINT[progress]}
           tone={TIME_TONE[progress]}
-          className="!w-28 text-center font-mono tabular-nums"
+          readOnly={closed}
+          className="!w-28 text-center font-mono tabular-nums disabled:opacity-60"
         />
         {derived && (
           <span className="ml-1 text-xs text-slate-400">
@@ -759,11 +851,13 @@ function LaneRow({
               <button
                 key={status}
                 type="button"
-                disabled={idle}
+                disabled={idle || closed}
                 title={
-                  signedOff
-                    ? `Signed off as ${status}`
-                    : `Sign this lane off as ${status}`
+                  closed
+                    ? "This heat is complete — Fix Results to change it."
+                    : signedOff
+                      ? `Signed off as ${status}`
+                      : `Sign this lane off as ${status}`
                 }
                 onClick={() => signOff(status)}
                 className={`rounded px-1.5 py-0.5 text-xs font-semibold ${
@@ -772,7 +866,7 @@ function LaneRow({
                       ? "bg-slate-700 text-white dark:bg-slate-200 dark:text-slate-900"
                       : "bg-red-600 text-white"
                     : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
-                } ${idle ? "opacity-40" : ""}`}
+                } ${idle || closed ? "opacity-40" : ""}`}
               >
                 {status}
               </button>
@@ -783,49 +877,24 @@ function LaneRow({
               one of them. */}
           <button
             type="button"
-            disabled={idle}
+            disabled={idle || closed}
             title={
-              seed?.exhibition
-                ? "Exhibition — doesn't count towards scoring or placing. Tap to make it count again."
-                : "Mark exhibition — the time stands, but it won't score or place."
+              closed
+                ? "This heat is complete — Fix Results to change it."
+                : seed?.exhibition
+                  ? "Exhibition — doesn't count towards scoring or placing. Tap to make it count again."
+                  : "Mark exhibition — the time stands, but it won't score or place."
             }
             onClick={toggleExhibition}
             className={`rounded px-1.5 py-0.5 text-xs font-semibold ${
               seed?.exhibition
                 ? "bg-amber-500 text-white"
                 : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
-            } ${idle ? "opacity-40" : ""}`}
+            } ${idle || closed ? "opacity-40" : ""}`}
           >
             X
           </button>
         </div>
-      </td>
-
-      <td className="py-2 text-right">
-        {signedOff ? (
-          <span className="flex items-center justify-end gap-2">
-            <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
-              signed off
-            </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              title="Takes the sign-off back. Every watch underneath it stays."
-              onClick={undo}
-            >
-              Undo
-            </Button>
-          </span>
-        ) : (
-          <Button
-            size="sm"
-            variant="success"
-            disabled={idle || !accepted}
-            onClick={() => signOff("OK")}
-          >
-            Sign off
-          </Button>
-        )}
       </td>
     </tr>
   );

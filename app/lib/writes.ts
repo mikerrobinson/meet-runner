@@ -76,5 +76,11 @@ export type Write =
       seedId: string;
       status: ResultStatus;
       timeMs: number;
+      /**
+       * Written by the app's own discrepancy check rather than a person —
+       * lets it be taken back automatically when the watches change their
+       * story, without ever touching a call somebody actually made.
+       */
+      auto?: boolean;
     }
   | { kind: "unresult"; meetId: string; seedId: string }

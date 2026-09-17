@@ -54,6 +54,7 @@ function swim(
       method: "official",
       watchCount: 0,
       from: "admin",
+      discrepancyMs: null,
       official: true,
     },
   };

@@ -128,6 +128,7 @@ export function applyPending(detail: MeetDetail, queue: Queued[]): MeetDetail {
             athleteId: seed.athleteId,
             status: write.status,
             timeMs: write.timeMs,
+            decidedBy: write.auto ? "auto" : undefined,
             decidedAt: Date.now(),
           },
         ];

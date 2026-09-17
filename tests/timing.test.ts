@@ -97,12 +97,12 @@ eq(
   eq(laneTime([]), null, "a swim nobody timed has no time");
   eq(
     laneTime(timers),
-    { timeMs: 27_160, method: "median", watchCount: 3, from: "timer" },
+    { timeMs: 27_160, method: "median", watchCount: 3, from: "timer", discrepancyMs: 3_860 },
     "three timers take the middle one — the slow thumb is outvoted, not averaged",
   );
   eq(
     laneTime(coaches),
-    { timeMs: 27_600, method: "average", watchCount: 2, from: "coach" },
+    { timeMs: 27_600, method: "average", watchCount: 2, from: "coach", discrepancyMs: 200 },
     "coaches are averaged when there are no timers",
   );
   eq(
@@ -112,7 +112,7 @@ eq(
   );
   eq(
     laneTime([...timers, ...coaches, official]),
-    { timeMs: 26_990, method: "official", watchCount: 1, from: "admin" },
+    { timeMs: 26_990, method: "official", watchCount: 1, from: "admin", discrepancyMs: null },
     "whoever runs the meet decides, whatever the rest say",
   );
 
@@ -292,7 +292,7 @@ eq(
       { seeds: [unnamed], watches: [watch("s9", "d-1", 27_140)], results: [] },
       "s9",
     ),
-    { timeMs: 27_140, method: "single", watchCount: 1, status: "OK", official: false, from: "timer" },
+    { timeMs: 27_140, method: "single", watchCount: 1, status: "OK", official: false, from: "timer", discrepancyMs: null },
     "an unnamed lane's watch still proposes a time",
   );
   eq(
@@ -343,7 +343,7 @@ eq(fromDevice("d-abcdef", "d-abc"), false, "and a device whose id merely starts 
   ];
   eq(
     swimTime({ seeds: [s10], watches: sheet, results: [] }, "s10"),
-    { timeMs: 27_200, method: "median", watchCount: 3, status: "OK", official: false, from: "timer" },
+    { timeMs: 27_200, method: "median", watchCount: 3, status: "OK", official: false, from: "timer", discrepancyMs: 1_760 },
     "three watches off one clipboard are three watches, and take the middle one",
   );
   eq(

@@ -227,7 +227,12 @@ export async function flush(): Promise<void> {
 
       if (status !== 0 && status < 400) {
         publish({
-          pending: state.pending.slice(1),
+          // By id, not position: a write for another seed can supersede one
+          // still ahead of this one in the queue while this fetch is in
+          // flight, and `head` is no longer necessarily at index 0 by the
+          // time it resolves. Slicing off "whatever's first now" would drop
+          // that other write on the floor without ever sending it.
+          pending: state.pending.filter((q) => q.id !== head.id),
           settled: [...state.settled, { ...head, settledAt: Date.now() }],
           error: null,
         });
@@ -237,7 +242,9 @@ export async function flush(): Promise<void> {
       if (worthRetrying(status)) {
         const tries = head.tries + 1;
         publish({
-          pending: [{ ...head, tries }, ...state.pending.slice(1)],
+          pending: state.pending.map((q) =>
+            q.id === head.id ? { ...q, tries } : q,
+          ),
         });
         schedule(BACKOFF_MS[Math.min(tries - 1, BACKOFF_MS.length - 1)]);
         return;
@@ -245,7 +252,10 @@ export async function flush(): Promise<void> {
 
       // Refused for good. Drop it so the rest of the queue can move, and say
       // so — silently discarding somebody's time would be worse than either.
-      publish({ pending: state.pending.slice(1), error: message });
+      publish({
+        pending: state.pending.filter((q) => q.id !== head.id),
+        error: message,
+      });
     }
   } finally {
     flushing = false;
