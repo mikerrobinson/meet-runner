@@ -36,14 +36,17 @@ export function pointsTable(
  * with the list it was scored from.
  *
  * A DQ or a no-show scores nothing — it has no place to look a point value up
- * by, the same reason it prints an em dash instead of a place. A place past
- * the end of the table scores nothing either: a fourth-place finish at a
- * three-deep dual meet is a real place with no points behind it.
+ * by, the same reason it prints an em dash instead of a place. Neither does an
+ * exhibition swim, and it doesn't consume a place in the table either: the
+ * swim behind it moves up to the place it would have held anyway, the same as
+ * if the exhibition swim had not been entered. A place past the end of the
+ * table scores nothing either: a fourth-place finish at a three-deep dual meet
+ * is a real place with no points behind it.
  */
 export function eventPoints(ranked: RankedSwim[], table: number[]): number[] {
   let place = 0;
   return ranked.map((row) => {
-    if (row.time.status !== "OK") return 0;
+    if (row.time.status !== "OK" || row.seed.exhibition) return 0;
     return table[place++] ?? 0;
   });
 }

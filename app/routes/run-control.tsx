@@ -580,6 +580,24 @@ function LaneRow({
     send({ kind: "unresult", meetId: detail.meet.id, seedId: seed.id });
   };
 
+  /**
+   * Say whether this swim counts.
+   *
+   * Not a call in the sense a DQ is — it doesn't need every watch on the lane
+   * in front of it, and it can be set before there's a time at all. It just
+   * has to land on the same row a DQ would, which is why it's open to the same
+   * people who may record a time rather than the desk alone.
+   */
+  const toggleExhibition = () => {
+    if (!seed) return;
+    send({
+      kind: "exhibition",
+      meetId: detail.meet.id,
+      seedId: seed.id,
+      exhibition: !seed.exhibition,
+    });
+  };
+
   return (
     <tr
       className={`border-t border-slate-100 dark:border-slate-800 ${
@@ -733,7 +751,7 @@ function LaneRow({
           beforehand. Tapping one accepts the swim as that — which is the act
           the desk came to the row to perform, in one tap rather than two. */}
       <td className="py-2 pr-2">
-        <div className="flex gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           {STATUSES.map((status) => {
             const current = result?.status ?? "OK";
             const chosen = signedOff && current === status;
@@ -760,6 +778,26 @@ function LaneRow({
               </button>
             );
           })}
+          {/* Doesn't count towards scoring or placing, but the time still
+              stands — so this is separate from OK/DQ/NS rather than a fourth
+              one of them. */}
+          <button
+            type="button"
+            disabled={idle}
+            title={
+              seed?.exhibition
+                ? "Exhibition — doesn't count towards scoring or placing. Tap to make it count again."
+                : "Mark exhibition — the time stands, but it won't score or place."
+            }
+            onClick={toggleExhibition}
+            className={`rounded px-1.5 py-0.5 text-xs font-semibold ${
+              seed?.exhibition
+                ? "bg-amber-500 text-white"
+                : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+            } ${idle ? "opacity-40" : ""}`}
+          >
+            X
+          </button>
         </div>
       </td>
 

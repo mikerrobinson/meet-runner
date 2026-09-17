@@ -19,6 +19,7 @@ import {
   meetDetail,
   putWatch,
   seedAt,
+  setExhibition,
   setSeed,
 } from "~/lib/meets.server";
 import { slotTimerId } from "~/lib/timing";
@@ -28,6 +29,7 @@ import { enrolVisitor } from "~/lib/teams.server";
 import { generateId } from "~/lib/id";
 import {
   TIMER_ACTIONS,
+  parseExhibition,
   parseSeat,
   parseStart,
   parseStop,
@@ -43,8 +45,9 @@ import {
  *
  * There is no request body. What the phone has to say arrives as cookies the
  * browser attached because their path matches this URL — `seat`, `start`,
- * `stop`, `submit`, any subset of them — and this clears the ones it consumed
- * on the way out. A phone that has been out of signal since heat 3 sends
+ * `stop`, `submit`, `exhibition`, any subset of them — and this clears the
+ * ones it consumed on the way out. A phone that has been out of signal since
+ * heat 3 sends
  * nothing special: it posts to the lane's URL and the browser brings whatever
  * was still pending along with it.
  *
@@ -177,6 +180,26 @@ export async function action({ params, request, context }: Route.ActionArgs) {
           });
           applied += 1;
         }
+      }
+    }
+
+    /* ---- whether this swim counts. A fact about the lane, like who's in it. */
+    const exhibitionMsg = messages.get("exhibition");
+    if (exhibitionMsg) {
+      const parsed = parseExhibition(exhibitionMsg);
+      if (parsed) {
+        // Made to exist first, the same as a time arriving for a lane nobody
+        // has named — flagging a swim before anybody's said who's in it is
+        // not a mistake to refuse.
+        if (!seed) {
+          seed = await ensureLane(db, grant.meetId, {
+            eventId: event.id,
+            heat: heatNo,
+            lane,
+          });
+        }
+        await setExhibition(db, seed.id, parsed.exhibition);
+        applied += 1;
       }
     }
 

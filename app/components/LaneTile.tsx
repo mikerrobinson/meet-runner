@@ -49,6 +49,7 @@ export function LaneTile({
   lane,
   athlete,
   time: result,
+  exhibition,
   stoppedHere,
   running,
   clockRunning,
@@ -63,6 +64,8 @@ export function LaneTile({
   athlete?: Athlete;
   /** The lane's official time, from whoever's watches are on it. */
   time?: SwimTime;
+  /** Swum outside the competition — a real time, but no place or points. */
+  exhibition?: boolean;
   /**
    * Whether *this* device has taken this lane.
    *
@@ -127,6 +130,14 @@ export function LaneTile({
         <span className="min-w-0 flex-1 truncate text-lg font-bold leading-tight">
           {displayName(athlete, nameOrder)}
         </span>
+        {exhibition && (
+          <span
+            title="Exhibition — won't score or place"
+            className="shrink-0 rounded-full bg-black/10 px-1.5 py-0.5 text-xs font-bold dark:bg-white/10"
+          >
+            X
+          </span>
+        )}
         <span className="shrink-0 text-2xl font-bold tabular-nums">{value}</span>
       </button>
     );
@@ -136,8 +147,16 @@ export function LaneTile({
     <button
       type="button"
       onClick={handle}
-      className={`${height} flex touch-manipulation flex-col items-center justify-center rounded-2xl px-2 text-center transition-colors ${tone(result, running)}`}
+      className={`${height} relative flex touch-manipulation flex-col items-center justify-center rounded-2xl px-2 text-center transition-colors ${tone(result, running)}`}
     >
+      {exhibition && (
+        <span
+          title="Exhibition — won't score or place"
+          className="absolute right-1.5 top-1.5 rounded-full bg-black/10 px-1.5 py-0.5 text-xs font-bold dark:bg-white/10"
+        >
+          X
+        </span>
+      )}
       <span className="text-xs font-bold opacity-70">Lane {lane}</span>
       <span className="w-full truncate text-base font-bold leading-tight">
         {displayName(athlete, nameOrder)}

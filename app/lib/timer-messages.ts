@@ -1,7 +1,7 @@
 /**
  * What a timer's phone says, and how it says it.
  *
- * Four messages, one per thing a person behind a lane actually does. Each
+ * Five messages, one per thing a person behind a lane actually does. Each
  * travels as a cookie whose *name* is the action and whose *path* is the lane
  * it happened on:
  *
@@ -32,7 +32,13 @@
  * silently dropping the write.
  */
 
-export const TIMER_ACTIONS = ["seat", "start", "stop", "submit"] as const;
+export const TIMER_ACTIONS = [
+  "seat",
+  "start",
+  "stop",
+  "submit",
+  "exhibition",
+] as const;
 export type TimerAction = (typeof TIMER_ACTIONS)[number];
 
 /** Where a message happened. Small integers, and all of them in the path. */
@@ -94,6 +100,16 @@ export interface StopMessage {
   stoppedAt: number;
 }
 
+/**
+ * Whether this swim counts. Known, and changeable, before there's anything
+ * else to say about the lane — a timer decides it from the water, same as
+ * who's in it.
+ */
+export interface ExhibitionMessage {
+  at: number;
+  exhibition: boolean;
+}
+
 export interface SubmitMessage {
   at: number;
   /**
@@ -138,6 +154,9 @@ export function formatSubmit(m: SubmitMessage): string {
   // An empty field is a watch with nothing on it. Trailing ones are kept —
   // they are what says how many watches the lane has.
   return [m.at, ...m.times.map((ms) => ms ?? "")].join(",");
+}
+export function formatExhibition(m: ExhibitionMessage): string {
+  return `${m.at},${m.exhibition ? 1 : 0}`;
 }
 
 /* ---------------------------------------------------------------- parsing */
@@ -200,6 +219,12 @@ export function parseSubmit(raw: string): SubmitMessage | null {
 
   // A sheet with nothing on it says nothing.
   return times.some((ms) => ms !== null) ? { at: num(at), times } : null;
+}
+
+export function parseExhibition(raw: string): ExhibitionMessage | null {
+  const [at, exhibition] = raw.split(",");
+  if (exhibition === undefined) return null;
+  return { at: num(at), exhibition: exhibition === "1" };
 }
 
 /**

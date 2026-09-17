@@ -36,6 +36,13 @@ export type Write =
       seedId: string;
     }
   | { kind: "unseed"; meetId: string; seedId: string }
+  /**
+   * Whether a swim counts towards scoring and placing.
+   *
+   * Open to whoever may record a time, not just the desk — it's known before
+   * there's a result to sign off, and often by whoever's standing at the lane.
+   */
+  | { kind: "exhibition"; meetId: string; seedId: string; exhibition: boolean }
   | {
       kind: "watch";
       meetId: string;

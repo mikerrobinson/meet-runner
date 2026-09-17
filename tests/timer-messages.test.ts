@@ -1,9 +1,11 @@
 import { done, eq } from "./harness.ts";
 import {
+  formatExhibition,
   formatSeat,
   formatStart,
   formatSubmit,
   laneKey,
+  parseExhibition,
   parseLaneKey,
   parseSeat,
   parseStart,
@@ -76,6 +78,20 @@ eq(
   { at: 5, team: 1, athleteId: "a-1", name: "" },
   "a seat picked from the list carries an id and no name",
 );
+
+/* ------------------------------------------------------------ exhibition */
+
+eq(
+  parseExhibition(formatExhibition({ at: 1, exhibition: true })),
+  { at: 1, exhibition: true },
+  "marking a swim exhibition survives the round trip",
+);
+eq(
+  parseExhibition(formatExhibition({ at: 1, exhibition: false })),
+  { at: 1, exhibition: false },
+  "and so does taking it back",
+);
+eq(parseExhibition("1789413369235"), null, "a message with nothing to say isn't one");
 
 /* ------------------------------------------------------ refusing nonsense */
 

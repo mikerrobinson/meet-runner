@@ -412,6 +412,7 @@ export default function RunMeet() {
                   seedByLane.get(lane)?.athleteId ?? null,
                 )}
                 time={timeByLane.get(lane)}
+                exhibition={seedByLane.get(lane)?.exhibition ?? false}
                 stoppedHere={stoppedByMe.has(lane)}
                 running={running}
                 clockRunning={clockRunning}
@@ -605,6 +606,15 @@ export default function RunMeet() {
                 (w) => w.timeMs !== undefined,
               )}
               timerId={mine}
+              exhibition={seed.exhibition ?? false}
+              onToggleExhibition={() =>
+                send({
+                  kind: "exhibition",
+                  meetId: meet.id,
+                  seedId: seed.id,
+                  exhibition: !seed.exhibition,
+                })
+              }
               onSaveTime={(timeMs) => {
                 send({
                   kind: "watch",
@@ -703,8 +713,10 @@ function LaneSheet({
   time,
   watches,
   timerId,
+  exhibition,
   onClose,
   onSaveTime,
+  onToggleExhibition,
   onRemoveWatch,
   onRemoveFromLane,
 }: {
@@ -714,8 +726,11 @@ function LaneSheet({
   /** Every watch on this lane, so a coach can see what the time is made of. */
   watches: Watch[];
   timerId: string;
+  /** Whether this swim counts towards scoring and placing. */
+  exhibition: boolean;
   onClose: () => void;
   onSaveTime: (timeMs: number) => void;
+  onToggleExhibition: () => void;
   onRemoveWatch: (watchId: string) => void;
   onRemoveFromLane: () => void;
 }) {
@@ -760,6 +775,27 @@ function LaneSheet({
                 for 1:11.27.
               </p>
             ))}
+
+          {/* Doesn't need a time or a sign-off to be true — a swim can be
+              flagged before it's even run. The time still counts for the
+              swimmer; only the place and the points don't. */}
+          <button
+            type="button"
+            onClick={onToggleExhibition}
+            aria-pressed={exhibition}
+            className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left ${
+              exhibition
+                ? "bg-amber-500 text-white"
+                : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            }`}
+          >
+            <span className="font-semibold">Exhibition</span>
+            <span className="text-xs">
+              {exhibition
+                ? "Won't score or place — tap to undo"
+                : "Time counts, but not for scoring"}
+            </span>
+          </button>
 
           <Button
             variant="primary"

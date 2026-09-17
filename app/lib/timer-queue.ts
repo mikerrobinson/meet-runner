@@ -24,6 +24,7 @@
 import { A_WEEK, readCookie, writeCookie } from "./cookies";
 import { appBasePath } from "./http";
 import {
+  formatExhibition,
   formatSeat,
   formatStart,
   formatStop,
@@ -208,6 +209,18 @@ export function enqueueSubmit(
   times: Array<number | null>,
 ): void {
   put(meetId, at, "submit", formatSubmit({ at: Date.now(), times }));
+}
+
+/**
+ * Say whether this lane's swim counts, straight away — like a seat, since
+ * it's a fact about the swim rather than evidence to be reconciled later.
+ */
+export function enqueueExhibition(
+  meetId: string,
+  at: LaneRef,
+  exhibition: boolean,
+): void {
+  put(meetId, at, "exhibition", formatExhibition({ at: Date.now(), exhibition }));
 }
 
 /* ---------------------------------------------------------------- sending */

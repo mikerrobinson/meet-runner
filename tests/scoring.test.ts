@@ -28,17 +28,26 @@ function ev(
   };
 }
 
-function seed(id: string, athleteId: string): Seed {
-  return { id, meetId: MEET, eventId: "e1", heat: 1, lane: 1, athleteId };
+function seed(id: string, athleteId: string, exhibition = false): Seed {
+  return {
+    id,
+    meetId: MEET,
+    eventId: "e1",
+    heat: 1,
+    lane: 1,
+    athleteId,
+    exhibition: exhibition || undefined,
+  };
 }
 
 function swim(
   id: string,
   athleteId: string,
   status: SwimTime["status"] = "OK",
+  exhibition = false,
 ): RankedSwim {
   return {
-    seed: seed(id, athleteId),
+    seed: seed(id, athleteId, exhibition),
     time: {
       timeMs: 0,
       status,
@@ -71,6 +80,15 @@ eq(
   eventPoints([swim("s1", "a1"), swim("s2", "a2"), swim("s3", "a3")], [6, 4]),
   [6, 4, 0],
   "a place past the end of the table scores nothing",
+);
+
+eq(
+  eventPoints(
+    [swim("s1", "a1"), swim("s2", "a2", "OK", true), swim("s3", "a3")],
+    [6, 4, 3],
+  ),
+  [6, 0, 4],
+  "an exhibition swim scores nothing and doesn't take a place from the table",
 );
 
 eq(pointsTable(ev("e1", { stroke: "Free" }), DUAL_MEET_SCORING), [6, 4, 3, 2, 1], "an individual event scores off the individual table");

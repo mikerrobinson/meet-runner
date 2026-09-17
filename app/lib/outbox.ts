@@ -144,6 +144,9 @@ function supersedes(next: Write, old: Write): boolean {
         old.seedId === next.seedId &&
         old.timerId === next.timerId
       );
+    case "exhibition":
+      // Toggled twice before either reaches the server is one answer, not two.
+      return old.kind === "exhibition" && old.seedId === next.seedId;
     case "result":
     case "unresult":
       return (

@@ -21,7 +21,7 @@
  */
 
 import { eventClosed, swimTime, type SwimTime } from "./timing";
-import { eventName, isDiving } from "~/types/meet";
+import { athleteName, eventName, isDiving } from "~/types/meet";
 import type {
   Seed,
   TimeMethod,
@@ -153,6 +153,8 @@ export interface PublicPlacing {
    * what the watches worked out, and the meet isn't official.
    */
   final: boolean;
+  /** Swum outside the competition: a real time, but no place and no points. */
+  exhibition: boolean;
 }
 
 export interface PublicEventResults {
@@ -173,6 +175,20 @@ export interface PublicEventResults {
 
 export interface PublicMeetDetail extends PublicMeetSummary {
   results: PublicEventResults[];
+}
+
+/**
+ * Four groups, in the order a results sheet reads them: swims that count,
+ * fastest first; exhibition swims — real times, but never a place — also
+ * fastest first, below every swim that counts; then DQs and no-shows, which
+ * have no time to rank by, so sorted by name instead. Not for lack of an
+ * order to put them in — it's so the page doesn't reshuffle two of them on
+ * every reload.
+ */
+function resultGroup(row: { status: Result["status"]; seed: Pick<Seed, "exhibition"> }): 0 | 1 | 2 | 3 {
+  if (row.status === "DQ") return 2;
+  if (row.status !== "OK") return 3;
+  return row.seed.exhibition ? 1 : 0;
 }
 
 /**
@@ -205,19 +221,27 @@ export function meetResults(
       .filter(({ seed }) => seed.eventId === event.id)
       .map(({ seed, time }) => ({ ...time, seed, athleteId: seed.athleteId }))
       .sort((a, b) => {
-        // Anything without a clean time sorts last, whatever the clock said.
-        if (a.status !== b.status) {
-          if (a.status === "OK") return -1;
-          if (b.status === "OK") return 1;
-        }
-        return a.timeMs - b.timeMs;
+        const ga = resultGroup(a);
+        const gb = resultGroup(b);
+        if (ga !== gb) return ga - gb;
+        if (ga <= 1) return a.timeMs - b.timeMs;
+
+        const nameOf = (row: typeof a) => {
+          const athlete = byId.get(row.athleteId);
+          return athlete ? athleteName(athlete) : "";
+        };
+        return nameOf(a).localeCompare(nameOf(b));
       });
 
     let place = 0;
     const placings: PublicPlacing[] = forEvent.map((row) => {
       const athlete = byId.get(row.athleteId);
+      // An exhibition swim keeps its line, ranked by time same as any other,
+      // but takes no place — the swim behind it moves up to the one it would
+      // have held had the exhibition swim not been entered.
+      const ranked = row.status === "OK" && !row.seed.exhibition;
       return {
-        place: row.status === "OK" ? ++place : null,
+        place: ranked ? ++place : null,
         athlete: athlete ? publicAthlete(athlete) : null,
         team: teamOf(row.athleteId),
         lane: row.seed.lane,
@@ -227,6 +251,7 @@ export function meetResults(
         method: row.method,
         watchCount: row.watchCount,
         final: row.official,
+        exhibition: row.seed.exhibition === true,
       };
     });
 
@@ -259,6 +284,8 @@ export interface AthleteSwim {
   place: number | null;
   /** True for the fastest clean swim of this race in this course. */
   best: boolean;
+  /** Swum outside the competition: a real time, but no place and no points. */
+  exhibition: boolean;
 }
 
 export interface PublicAthleteDetail extends PublicAthlete {
@@ -291,9 +318,15 @@ export function athleteSwims(
       const event = events.get(seed.eventId);
       if (!event || isDiving(event)) continue;
 
-      // Place is scored across the whole event, not within a heat.
+      // Place is scored across the whole event, not within a heat — and an
+      // exhibition swim, this one included, never has one.
       const ranked = all
-        .filter((r) => r.seed.eventId === event.id && r.time.status === "OK")
+        .filter(
+          (r) =>
+            r.seed.eventId === event.id &&
+            r.time.status === "OK" &&
+            !r.seed.exhibition,
+        )
         .sort((a, b) => a.time.timeMs - b.time.timeMs);
       const at = ranked.findIndex((r) => r.seed.id === seed.id);
       const result = { ...time, lane: seed.lane };
@@ -309,6 +342,7 @@ export function athleteSwims(
         timeMs: result.timeMs,
         status: result.status,
         best: false,
+        exhibition: seed.exhibition === true,
       });
     }
   }

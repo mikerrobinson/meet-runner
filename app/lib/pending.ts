@@ -77,6 +77,14 @@ export function applyPending(detail: MeetDetail, queue: Queued[]): MeetDetail {
         results = results.filter((r) => r.seedId !== write.seedId);
         break;
 
+      case "exhibition":
+        seeds = seeds.map((s) =>
+          s.id === write.seedId
+            ? { ...s, exhibition: write.exhibition || undefined }
+            : s,
+        );
+        break;
+
       case "watch": {
         const existing = watches.find(
           (w) => w.seedId === write.seedId && w.timerId === write.timerId,

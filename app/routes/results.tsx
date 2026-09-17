@@ -16,7 +16,7 @@ import {
 } from "~/lib/scoring";
 import { useMeet } from "./meet-layout";
 import { useLiveData } from "~/hooks/use-live-data";
-import { eventName, athleteName, type MeetDetail } from "~/types/meet";
+import { eventName, athleteName, type Athlete, type MeetDetail } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Results · Swim Starts" }];
@@ -24,6 +24,37 @@ export function meta({}: Route.MetaArgs) {
 
 /** Girls, then boys, then whatever an Open event's points fell under. */
 const GROUP_ORDER: ScoreGroup[] = ["F", "M", "Open", "all"];
+
+/**
+ * Four groups, in the order a results sheet reads them: swims that count,
+ * fastest first; exhibition swims — real times, but never a place — also
+ * fastest first, below every swim that counts; then DQs and no-shows, which
+ * have no time to rank by, so sorted by name instead. Not for lack of an
+ * order to put them in — it's so the page doesn't reshuffle two of them on
+ * every reload.
+ */
+function rankGroup(row: RankedSwim): 0 | 1 | 2 | 3 {
+  if (row.time.status === "DQ") return 2;
+  if (row.time.status !== "OK") return 3;
+  return row.seed.exhibition ? 1 : 0;
+}
+
+function compareSwims(
+  a: RankedSwim,
+  b: RankedSwim,
+  byId: Map<string, Athlete>,
+): number {
+  const ga = rankGroup(a);
+  const gb = rankGroup(b);
+  if (ga !== gb) return ga - gb;
+  if (ga <= 1) return a.time.timeMs - b.time.timeMs;
+
+  const nameOf = (row: RankedSwim) => {
+    const athlete = byId.get(row.seed.athleteId);
+    return athlete ? athleteName(athlete) : "";
+  };
+  return nameOf(a).localeCompare(nameOf(b));
+}
 
 export default function Results() {
   const { detail } = useMeet();
@@ -75,16 +106,10 @@ export default function Results() {
       map.set(seed.eventId, list);
     }
     for (const list of map.values()) {
-      list.sort((a, b) => {
-        // DQs and no-shows keep their line and lose their place.
-        if (a.time.status !== b.time.status) {
-          return a.time.status === "OK" ? -1 : 1;
-        }
-        return a.time.timeMs - b.time.timeMs;
-      });
+      list.sort((a, b) => compareSwims(a, b, byId));
     }
     return map;
-  }, [detail]);
+  }, [detail, byId]);
 
   // Points earned by each ranked swim, aligned index-for-index with `byEvent`
   // so a place and its points can never come from different orderings.
@@ -190,52 +215,62 @@ export default function Results() {
 
               {open && (
                 <ol className="mt-3 divide-y divide-slate-200 dark:divide-slate-800">
-                  {results.map(({ seed, time }, place) => {
-                    const athlete = byId.get(seed.athleteId);
-                    const enrollment = enrollments.get(seed.athleteId);
-                    const team = enrollment
-                      ? teamsById.get(enrollment.teamId)
-                      : undefined;
-                    const pts = points[place] ?? 0;
-                    return (
-                      <li key={seed.id} className="flex items-center gap-3 py-2">
-                        <span className="w-6 text-center text-sm font-bold text-slate-400">
-                          {time.status === "OK" ? place + 1 : "—"}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate font-semibold">
-                            {athlete
-                              ? athleteName(athlete)
-                              : seed.athleteId
-                                ? "(removed)"
-                                : "(no name — lane " + seed.lane + ")"}
+                  {(() => {
+                    // A running count of real places, separate from the row's
+                    // index — an exhibition swim sits in the list at the time
+                    // it earned, but it doesn't take a place from the swim
+                    // behind it, the same rule `eventPoints` scores by.
+                    let place = 0;
+                    return results.map(({ seed, time }, index) => {
+                      const athlete = byId.get(seed.athleteId);
+                      const enrollment = enrollments.get(seed.athleteId);
+                      const team = enrollment
+                        ? teamsById.get(enrollment.teamId)
+                        : undefined;
+                      const ranked = time.status === "OK" && !seed.exhibition;
+                      const shownPlace = ranked ? ++place : null;
+                      const pts = points[index] ?? 0;
+                      return (
+                        <li key={seed.id} className="flex items-center gap-3 py-2">
+                          <span className="w-6 text-center text-sm font-bold text-slate-400">
+                            {shownPlace ?? (seed.exhibition ? "X" : "—")}
                           </span>
-                          {/* Team first: in a dual meet the question this
-                              screen answers is which school scored, and the lane
-                              is only how to find somebody on the deck. The code
-                              where there is one — "CACTUS" scans down a column
-                              in a way "Cactus Shadows" does not. */}
-                          <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
-                            {team && `${team.code || team.name} · `}
-                            Lane {seed.lane}
-                            {enrollment?.squad && ` · ${enrollment.squad}`}
-                          </span>
-                        </span>
-                        <span className="text-right">
-                          <span className="block text-lg font-bold tabular-nums">
-                            {time.status === "OK"
-                              ? formatTime(time.timeMs)
-                              : time.status}
-                          </span>
-                          {pts > 0 && (
-                            <span className="block text-xs font-semibold text-blue-600 dark:text-blue-400">
-                              {pts} pt{pts === 1 ? "" : "s"}
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate font-semibold">
+                              {athlete
+                                ? athleteName(athlete)
+                                : seed.athleteId
+                                  ? "(removed)"
+                                  : "(no name — lane " + seed.lane + ")"}
                             </span>
-                          )}
-                        </span>
-                      </li>
-                    );
-                  })}
+                            {/* Team first: in a dual meet the question this
+                                screen answers is which school scored, and the lane
+                                is only how to find somebody on the deck. The code
+                                where there is one — "CACTUS" scans down a column
+                                in a way "Cactus Shadows" does not. */}
+                            <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
+                              {team && `${team.code || team.name} · `}
+                              Lane {seed.lane}
+                              {enrollment?.squad && ` · ${enrollment.squad}`}
+                              {seed.exhibition && " · exhibition"}
+                            </span>
+                          </span>
+                          <span className="text-right">
+                            <span className="block text-lg font-bold tabular-nums">
+                              {time.status === "OK"
+                                ? formatTime(time.timeMs)
+                                : time.status}
+                            </span>
+                            {pts > 0 && (
+                              <span className="block text-xs font-semibold text-blue-600 dark:text-blue-400">
+                                {pts} pt{pts === 1 ? "" : "s"}
+                              </span>
+                            )}
+                          </span>
+                        </li>
+                      );
+                    });
+                  })()}
                 </ol>
               )}
             </Card>

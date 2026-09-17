@@ -158,7 +158,8 @@ const SCHEMA = [
      heat INTEGER NOT NULL,
      lane INTEGER NOT NULL,
      athlete_id TEXT NOT NULL,
-     seed_time_ms INTEGER
+     seed_time_ms INTEGER,
+     exhibition INTEGER NOT NULL DEFAULT 0
    )`,
   `CREATE INDEX IF NOT EXISTS seeds_by_meet ON seeds (meet_id)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS seeds_by_lane ON seeds (event_id, heat, lane)`,
@@ -228,6 +229,7 @@ const MIGRATIONS = [
   `ALTER TABLE meets ADD COLUMN lane_assignments TEXT`,
   `ALTER TABLE meets ADD COLUMN scoring TEXT`,
   `ALTER TABLE entries ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE seeds ADD COLUMN exhibition INTEGER NOT NULL DEFAULT 0`,
 ];
 
 let ready = false;

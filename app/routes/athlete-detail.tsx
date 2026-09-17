@@ -356,6 +356,14 @@ export default function AthleteDetail({ loaderData }: Route.ComponentProps) {
                         </span>
                       </span>
                       <span className="flex shrink-0 items-center gap-2">
+                        {swim.exhibition && (
+                          <span
+                            title="Exhibition — swum outside the competition"
+                            className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200"
+                          >
+                            X
+                          </span>
+                        )}
                         {swim.best && group.swims.length > 1 && (
                           <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
                             best

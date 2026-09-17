@@ -150,6 +150,7 @@ interface SeedRow {
   lane: number;
   athlete_id: string;
   seed_time_ms: number | null;
+  exhibition: number | null;
 }
 
 function seedFrom(row: SeedRow): Seed {
@@ -161,6 +162,7 @@ function seedFrom(row: SeedRow): Seed {
     lane: row.lane,
     athleteId: row.athlete_id,
     seedTimeMs: row.seed_time_ms ?? undefined,
+    exhibition: row.exhibition === 1 ? true : undefined,
   };
 }
 
@@ -790,8 +792,8 @@ export async function replaceSeeds(
     ...seeds.map((seed) =>
       db
         .prepare(
-          `INSERT INTO seeds (id, meet_id, event_id, heat, lane, athlete_id, seed_time_ms)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO seeds (id, meet_id, event_id, heat, lane, athlete_id, seed_time_ms, exhibition)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .bind(
           seed.id,
@@ -801,6 +803,7 @@ export async function replaceSeeds(
           seed.lane,
           seed.athleteId,
           seed.seedTimeMs ?? null,
+          seed.exhibition ? 1 : 0,
         ),
     ),
   ]);
@@ -863,7 +866,28 @@ export async function setSeed(
     lane: place.lane,
     athleteId: place.athleteId,
     seedTimeMs: existing?.seed_time_ms ?? undefined,
+    exhibition: existing?.exhibition === 1 ? true : undefined,
   };
+}
+
+/**
+ * Mark a swim exhibition, or take that back.
+ *
+ * A flag on the seed rather than something folded into `setSeed`: naming who
+ * is in a lane and saying the swim doesn't count are two different decisions,
+ * made by whoever's job it is at two different moments, and conflating them
+ * would mean re-seating somebody could silently clear it.
+ */
+export async function setExhibition(
+  db: D1Database,
+  seedId: string,
+  exhibition: boolean,
+): Promise<void> {
+  await ensureSchema(db);
+  await db
+    .prepare("UPDATE seeds SET exhibition = ? WHERE id = ?")
+    .bind(exhibition ? 1 : 0, seedId)
+    .run();
 }
 
 /** Find the swim in a lane, if there is one. */

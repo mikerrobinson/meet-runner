@@ -301,6 +301,7 @@ export function resultsToCsv(
       "Time",
       "Time (ms)",
       "Status",
+      "Exhibition",
       "Place",
       "Entry",
     ],
@@ -315,10 +316,11 @@ export function resultsToCsv(
   detail.events.forEach((event, eventIndex) => {
     const forEvent = swims.filter(({ seed }) => seed.eventId === event.id);
 
-    // Place is scored across the whole event, not within a heat.
+    // Place is scored across the whole event, not within a heat, and an
+    // exhibition swim never has one.
     const place = new Map(
       forEvent
-        .filter(({ time }) => time.status === "OK")
+        .filter(({ seed, time }) => time.status === "OK" && !seed.exhibition)
         .sort((a, b) => a.time.timeMs - b.time.timeMs)
         .map((row, i) => [row.seed.id, i + 1] as const),
     );
@@ -343,6 +345,7 @@ export function resultsToCsv(
         time.status === "OK" ? formatTime(time.timeMs) : time.status,
         time.status === "OK" ? time.timeMs : "",
         time.status,
+        seed.exhibition ? "Yes" : "",
         place.get(seed.id) ?? "",
         // Whether a stopwatch in this app ran the race, or the number was
         // typed in from a handheld or the board.

@@ -496,6 +496,17 @@ export interface Seed {
   athleteId: string;
   /** What they are expected to swim, when anybody knows. Nothing reads it yet. */
   seedTimeMs?: number;
+  /**
+   * Swum outside the competition: the time is real and stands for the
+   * swimmer, but the swim takes no place and scores no points.
+   *
+   * A flag on the swim rather than a third value on `Result["status"]`,
+   * because it answers a different question — a DQ says the watches don't
+   * count, this says the *place* doesn't. Set on the seed rather than the
+   * result because it's known (or changed) before there's anything to sign
+   * off, by whoever is standing at the lane, not only the desk.
+   */
+  exhibition?: boolean;
 }
 
 export type ResultStatus = "OK" | "DQ" | "NS";

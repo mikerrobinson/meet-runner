@@ -21,6 +21,7 @@ import { watchSlot } from "~/lib/timing";
 import { stopPath, timerPath } from "~/lib/timer-path";
 import { eventName } from "~/types/meet";
 import {
+  enqueueExhibition,
   enqueueSeat,
   enqueueStart,
   enqueueStop,
@@ -139,6 +140,11 @@ export default function Timer({ params }: Route.ComponentProps) {
 
   // Who this timer says is in the lane, per heat, before it's been submitted.
   const [overrides, setOverrides] = useState<Record<string, string>>({});
+  // Whether this timer says the lane's swim is exhibition, per heat, ahead of
+  // the next snapshot poll catching up — same reason `overrides` exists.
+  const [exhibitionOverrides, setExhibitionOverrides] = useState<
+    Record<string, boolean>
+  >({});
   // Swimmers typed in on this device; they may not have reached the server yet.
   // `QueuedAthlete`, not `Athlete`: each carries the team the timer tapped, and
   // that has to survive into the outbox for the server to enrol them.
@@ -315,6 +321,7 @@ export default function Timer({ params }: Route.ComponentProps) {
   const laneKey = stop && lane ? `${stop.event.id}/${stop.heat}/${lane}` : "";
   const swimmerId = overrides[laneKey] ?? seed?.athleteId ?? null;
   const swimmer = swimmerId ? byId.get(swimmerId) : undefined;
+  const exhibition = exhibitionOverrides[laneKey] ?? seed?.exhibition ?? false;
 
   /**
    * This phone's own times for this swim, once the server has them, by column.
@@ -396,6 +403,20 @@ export default function Timer({ params }: Route.ComponentProps) {
       // one everybody else is now looking at.
       void load();
     });
+  };
+
+  /**
+   * Say whether this lane's swim counts, straight away — the same way a seat
+   * goes up, because it's a fact about the swim rather than evidence to
+   * reconcile with anyone else's later.
+   */
+  const toggleExhibition = () => {
+    if (!where || !meetId) return;
+    const next = !exhibition;
+    setExhibitionOverrides((current) => ({ ...current, [laneKey]: next }));
+    enqueueExhibition(meetId, where, next);
+    refreshQueue();
+    void flushQueue(meetId).then(refreshQueue);
   };
 
   /**
@@ -601,6 +622,25 @@ export default function Timer({ params }: Route.ComponentProps) {
             </span>
             <span className="shrink-0 text-sm font-semibold text-blue-600">
               change
+            </span>
+          </button>
+
+          {/* Doesn't need a name or a time to be true, so it's here rather
+              than buried in the sheet below — a call a timer can make about
+              the lane before the race is even swum. */}
+          <button
+            type="button"
+            onClick={toggleExhibition}
+            aria-pressed={exhibition}
+            className={`flex w-full touch-manipulation items-center justify-between rounded-2xl px-4 py-3 text-left ${
+              exhibition
+                ? "bg-amber-500 text-white"
+                : "bg-white dark:bg-slate-900"
+            }`}
+          >
+            <span className="font-semibold">Exhibition</span>
+            <span className={`text-sm ${exhibition ? "" : "text-slate-500"}`}>
+              {exhibition ? "Won't score or place" : "Time counts, but not for scoring"}
             </span>
           </button>
         </div>

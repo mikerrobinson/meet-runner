@@ -24,6 +24,7 @@ import {
   removeEntry,
   removeSeed,
   replaceSeeds,
+  setExhibition,
   setSeed,
 } from "~/lib/meets.server";
 import { whyNotEnter } from "~/lib/events";
@@ -183,6 +184,24 @@ export async function action({ params, request, context }: Route.ActionArgs) {
           athleteId: write.athleteId,
         });
         return json({ seed });
+      }
+
+      /**
+       * Whether a swim counts.
+       *
+       * Open to the same people who may record a time — a call worth making
+       * from the lane, before there's anything for the desk to sign off —
+       * rather than the administrator alone.
+       */
+      case "exhibition": {
+        if (!mayRecordTime(access)) {
+          throw new SyncError(
+            "Only the teams racing can mark a swim exhibition.",
+            403,
+          );
+        }
+        await setExhibition(db, write.seedId, write.exhibition);
+        return json({ ok: true });
       }
 
       /**
