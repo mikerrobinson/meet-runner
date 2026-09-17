@@ -123,11 +123,17 @@ const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS events_by_meet ON events (meet_id, position)`,
 
-  /** One swimmer in one race. Two coaches entering their own never collide. */
+  /**
+   * One swimmer in one race. Two coaches entering their own never collide.
+   *
+   * `created_at` is what auto-seeding ranks by in place of a real seed time:
+   * first entered swims the middle lane until the app has a time to seed by.
+   */
   `CREATE TABLE IF NOT EXISTS entries (
      meet_id TEXT NOT NULL,
      event_id TEXT NOT NULL,
      athlete_id TEXT NOT NULL,
+     created_at INTEGER NOT NULL DEFAULT 0,
      PRIMARY KEY (event_id, athlete_id)
    )`,
   `CREATE INDEX IF NOT EXISTS entries_by_meet ON entries (meet_id)`,
@@ -221,6 +227,7 @@ const MIGRATIONS = [
   `ALTER TABLE meets ADD COLUMN timers_per_lane INTEGER NOT NULL DEFAULT 1`,
   `ALTER TABLE meets ADD COLUMN lane_assignments TEXT`,
   `ALTER TABLE meets ADD COLUMN scoring TEXT`,
+  `ALTER TABLE entries ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0`,
 ];
 
 let ready = false;

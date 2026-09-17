@@ -58,7 +58,7 @@ export function RunControl() {
   const detail = useMemo(() => applyPending(loaded, pending), [loaded, pending]);
   const meet = detail.meet;
   const { nameOrder } = useViewPrefs();
-  const seed = useFetcher();
+  const addHeat = useFetcher();
 
   // Only while a thumb is actually down somewhere in the meet.
   const now = useTicker(
@@ -101,48 +101,47 @@ export function RunControl() {
         <EventRail detail={detail} openEvent={event?.id} onOpen={setOpenEvent} />
 
         <div className="mt-4 min-w-0 space-y-4 lg:mt-0">
-          {!event ? null : heats.length === 0 ? (
-            <Card>
-              <SectionTitle
-                action={
-                  <Button
-                    size="sm"
-                    onClick={() =>
-                      seed.submit(
-                        { eventId: event.id },
-                        {
-                          method: "post",
-                          action: `/meets/${meet.id}/run`,
-                          encType: "application/json",
-                        },
-                      )
-                    }
-                  >
-                    Seed heats
-                  </Button>
-                }
-              >
-                {eventName(event)}
-              </SectionTitle>
-              <p className="text-sm text-slate-500">
-                {(detail.entries[event.id] ?? []).length} entered, and no heats
-                yet.
-              </p>
-            </Card>
-          ) : (
-            heats.map((heat) => (
-              <HeatCard
-                key={heat}
-                detail={detail}
-                event={event}
-                heat={heat}
-                nameOrder={nameOrder}
-                send={send}
-                me={access.userId}
-                now={now}
-                onAssign={(lane) => setAssigning({ heat, lane })}
-              />
-            ))
+          {!event ? null : (
+            <>
+              {/* Heats fill themselves as swimmers are entered — this is only
+                  for the ones nobody's entry creates on its own: an
+                  exhibition swim, room held before the lineup's settled. */}
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm text-slate-500">
+                  {(detail.entries[event.id] ?? []).length} entered
+                  {heats.length === 0 ? ", no heats yet" : ""}
+                </p>
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    addHeat.submit(
+                      { eventId: event.id },
+                      {
+                        method: "post",
+                        action: `/meets/${meet.id}/run`,
+                        encType: "application/json",
+                      },
+                    )
+                  }
+                >
+                  {addHeat.state === "submitting" ? "Adding…" : "+ Add heat"}
+                </Button>
+              </div>
+
+              {heats.map((heat) => (
+                <HeatCard
+                  key={heat}
+                  detail={detail}
+                  event={event}
+                  heat={heat}
+                  nameOrder={nameOrder}
+                  send={send}
+                  me={access.userId}
+                  now={now}
+                  onAssign={(lane) => setAssigning({ heat, lane })}
+                />
+              ))}
+            </>
           )}
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { done, eq } from "./harness.ts";
-import { buildSeeds, laneOrder, reseedEvent } from "../app/lib/heats.ts";
-import type { Result, Seed, Watch } from "../app/types/meet.ts";
+import { buildSeeds, laneOrder, reseedEvent, seedEvent } from "../app/lib/heats.ts";
+import type { LaneAssignments, Result, Seed, Watch } from "../app/types/meet.ts";
 
 /* ------------------------------------------------ lanes */
 
@@ -51,40 +51,109 @@ for (const n of [4, 5, 6, 8, 10] as const) {
 
 eq(buildSeeds("m1", "e3", [], 6), [], "nobody entered, nothing to seed");
 
-/* ------------------------------------------------ reseeding */
+/* ------------------------------------------------ automatic seeding */
 
+// Home swims the odds, away the evens — a typical dual meet's lanes.
+const LANES: LaneAssignments = { home: [1, 3, 5], away: [2, 4, 6] };
+const teamOf = (athleteId: string) =>
+  athleteId.startsWith("h") ? "home" : athleteId.startsWith("a") ? "away" : undefined;
+const seatsOf = (seeds: Seed[]) => seeds.map((s) => `${s.heat}/${s.lane}:${s.athleteId}`);
+
+// Entered in order, home's own entrants take the centre of home's own lanes
+// first — nobody's timed yet, so entry order stands in for speed.
 {
-  const seeded = buildSeeds("m1", "e1", ["s1", "s2", "s3", "s4", "s5", "s6", "s7"], 6);
+  const seeds = seedEvent({ seeds: [] }, "m1", "e1", ["h1", "h2", "h3"], teamOf, LANES, 6);
+  eq(
+    seatsOf(seeds),
+    ["1/3:h1", "1/5:h2", "1/1:h3"],
+    "home's first three entrants fill home's own lanes, centre-out, in entry order",
+  );
+}
+
+// A fourth home entrant, with away still empty, doesn't open a second heat —
+// it reaches for whichever lane is nearest the centre and unclaimed.
+{
+  const seeds = seedEvent({ seeds: [] }, "m1", "e1", ["h1", "h2", "h3", "h4"], teamOf, LANES, 6);
+  eq(
+    seatsOf(seeds),
+    ["1/3:h1", "1/5:h2", "1/1:h3", "1/4:h4"],
+    "home's overflow swimmer borrows the nearest open lane rather than a new heat",
+  );
+}
+
+// Away's coach enters two swimmers afterwards. Reseeding the whole event —
+// not just placing the newcomers — lets away reclaim its own lanes, and
+// home's overflow swimmer moves to whatever's left, not away's spot.
+{
+  const round1 = seedEvent({ seeds: [] }, "m1", "e1", ["h1", "h2", "h3", "h4"], teamOf, LANES, 6);
+  const round2 = seedEvent(
+    { seeds: round1 },
+    "m1",
+    "e1",
+    ["h1", "h2", "h3", "h4", "a1", "a2"],
+    teamOf,
+    LANES,
+    6,
+  );
+
+  eq(
+    seatsOf(round2),
+    ["1/3:h1", "1/5:h2", "1/1:h3", "1/6:h4", "1/4:a1", "1/2:a2"],
+    "away reclaims its own lanes; home's overflow swimmer is bumped to what's left",
+  );
+
+  const idOf = (seeds: Seed[], athleteId: string) =>
+    seeds.find((s) => s.athleteId === athleteId)?.id;
+  eq(idOf(round2, "h1"), idOf(round1, "h1"), "h1 kept its seat, so it keeps its row's id");
+  eq(idOf(round2, "h2"), idOf(round1, "h2"), "so does h2");
+  eq(idOf(round2, "h3"), idOf(round1, "h3"), "so does h3");
+  eq(
+    idOf(round2, "h4") === idOf(round1, "h4"),
+    false,
+    "h4 moved lanes, so it's a fresh row",
+  );
+}
+
+// With no lane assignments at all, everybody's overflow: lanes fill from the
+// centre out, in entry order, one heat at a time.
+{
+  const seeds = seedEvent(
+    { seeds: [] },
+    "m1",
+    "e1",
+    Array.from({ length: 7 }, (_, i) => `s${i + 1}`),
+    () => undefined,
+    {},
+    5,
+  );
+  eq(
+    seatsOf(seeds),
+    ["1/3:s1", "1/2:s2", "1/4:s3", "1/1:s4", "1/5:s5", "2/3:s6", "2/2:s7"],
+    "no team preference: centre-out, heat 1 fills before heat 2 opens",
+  );
+}
+
+// Reseeding refuses once anything has been recorded against the event.
+{
+  const seeded = seedEvent({ seeds: [] }, "m1", "e1", ["h1", "h2"], teamOf, LANES, 6);
   const base = { seeds: seeded, watches: [] as Watch[], results: [] as Result[] };
 
-  const again = reseedEvent(base, "m1", "e1", ["s7", "s6", "s5", "s4", "s3", "s2", "s1"], 6);
-  eq(again !== null, true, "an untouched event reseeds");
-  eq(again!.length, 7, "still seven swims");
-  eq(
-    again!.filter((s) => s.heat === 1).map((s) => s.athleteId),
-    ["s7"],
-    "and the order actually changed",
-  );
+  const untouched = reseedEvent(base, "m1", "e1", ["h1", "h2", "a1"], teamOf, LANES, 6);
+  eq(untouched !== null, true, "an untouched event reseeds");
+  eq(untouched!.length, 3, "the new entrant is included");
 
-  // Somebody who lands back in the lane they were in keeps their row, so a
-  // watch already taken on it would still point at the right swim.
-  const stayed = reseedEvent(base, "m1", "e1", ["s1", "s2", "s3", "s4", "s5", "s6", "s7"], 6);
-  eq(
-    stayed!.map((s) => s.id).sort(),
-    seeded.map((s) => s.id).sort(),
-    "an unchanged reseeding reuses every id",
-  );
-
-  // One watch anywhere in the event is enough to stop it.
   const timed = {
     ...base,
     watches: [
-      { seedId: seeded[1].id, timerId: "t1", role: "timer" as const, timeMs: 27_140, recordedAt: 1 },
+      { seedId: seeded[0].id, timerId: "t1", role: "timer" as const, timeMs: 27_140, recordedAt: 1 },
     ],
   };
-  eq(reseedEvent(timed, "m1", "e1", ["s1"], 6), null, "an event with a time on it refuses");
+  eq(
+    reseedEvent(timed, "m1", "e1", ["h1", "h2", "a1"], teamOf, LANES, 6),
+    null,
+    "a watch anywhere in the event stops it",
+  );
 
-  // A result with no watch behind it is still a record of the swim.
   const dq = {
     ...base,
     results: [
@@ -92,26 +161,17 @@ eq(buildSeeds("m1", "e3", [], 6), [], "nobody entered, nothing to seed");
         seedId: seeded[0].id,
         meetId: "m1",
         eventId: "e1",
-        athleteId: "s1",
+        athleteId: "h1",
         status: "DQ" as const,
         timeMs: 0,
         decidedAt: 2,
       },
     ],
   };
-  eq(reseedEvent(dq, "m1", "e1", ["s1"], 6), null, "so does an event with only a DQ on it");
-
-  // Another event's times are no business of this one.
-  const elsewhere = {
-    ...base,
-    watches: [
-      { seedId: "other", timerId: "t1", role: "timer" as const, timeMs: 27_140, recordedAt: 1 },
-    ],
-  };
   eq(
-    reseedEvent(elsewhere, "m1", "e1", ["s1"], 6) !== null,
-    true,
-    "another event's times don't block it",
+    reseedEvent(dq, "m1", "e1", ["h1", "h2", "a1"], teamOf, LANES, 6),
+    null,
+    "so does a result with no watch behind it",
   );
 }
 

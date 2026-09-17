@@ -16,13 +16,11 @@ import {
 } from "~/components/ui";
 import { useElapsed, useWakeLock } from "~/hooks/use-stopwatch";
 import { useLiveData } from "~/hooks/use-live-data";
-import { reseedEvent, shuffle } from "~/lib/heats";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
 import { mayEditMeet } from "~/lib/access";
 import { meetAccess } from "~/lib/access.server";
-import { meetDetail, replaceSeeds } from "~/lib/meets.server";
+import { addHeat } from "~/lib/meets.server";
 import {
-  eventTouched,
   fromStopwatch,
   heatsOf,
   seedsForHeat,
@@ -36,7 +34,6 @@ import { enrollmentIndex } from "~/lib/roster";
 import { mayDecide } from "~/lib/access";
 import { applyPending } from "~/lib/pending";
 import { generateId } from "~/lib/id";
-import { useFetcher } from "react-router";
 import { usePending, useSend } from "~/state/outbox";
 import { useMeet } from "./meet-layout";
 import { RunControl } from "./run-control";
@@ -81,11 +78,15 @@ const METHOD_LABEL: Record<string, string> = {
  * watch too — but a coach is never shown a sign-off desk they can't use.
  */
 /**
- * Reseeding an event's lanes.
+ * One more heat for an event, on request.
  *
- * Not a queued write: unlike a tick or a time it is one deliberate decision
- * about a whole event, made at a desk with signal, and it needs the server's
- * answer — it refuses once anything has been recorded against the event.
+ * The only seeding decision left for a person to make: entering a swimmer
+ * seats them automatically, so this exists for the heats nobody's entry
+ * creates on its own — an exhibition swim, a late addition before the
+ * lineup's finished, room held for somebody not on the roster yet.
+ *
+ * Not a queued write: it's one deliberate tap at a desk with signal, and the
+ * new heat number comes back from the server rather than being guessed.
  */
 export async function action({ params, request, context }: Route.ActionArgs) {
   const env = context.cloudflare.env as SyncEnv;
@@ -93,29 +94,14 @@ export async function action({ params, request, context }: Route.ActionArgs) {
   const user = await currentUser(request, env);
   const access = await meetAccess(db, params.meetId, user);
   if (!mayEditMeet(access)) {
-    throw new Response("Whoever is running this meet seeds it.", {
+    throw new Response("Whoever is running this meet adds a heat.", {
       status: 403,
     });
   }
 
   const { eventId } = (await request.json()) as { eventId: string };
-  const detail = await meetDetail(db, params.meetId);
-  if (!detail) throw new Response("No such meet", { status: 404 });
-
-  const entrants = shuffle(detail.entries[eventId] ?? []);
-  const rebuilt = reseedEvent(
-    detail,
-    params.meetId,
-    eventId,
-    entrants,
-    detail.meet.laneCount,
-  );
-  // Refused: the event has times against it. The screen disables the control
-  // for the same reason, so this is the backstop.
-  if (!rebuilt) return { ok: false };
-
-  await replaceSeeds(db, params.meetId, eventId, rebuilt);
-  return { ok: true };
+  const heat = await addHeat(db, params.meetId, eventId);
+  return { ok: true, heat };
 }
 
 export default function RunMeet() {
@@ -168,7 +154,6 @@ export default function RunMeet() {
    * because starting a heat also cleared it, deleted times the phones had
    * already sent.
    */
-  const reseed = useFetcher();
   const [clock, setClock] = useState<{
     eventId: string;
     heat: number;
@@ -274,12 +259,6 @@ export default function RunMeet() {
         stoppedByMe.has(lane) ||
         (timeByLane.has(lane) && !(clock?.alreadyTimed ?? []).includes(lane)),
     );
-
-  // Swims already recorded can't be reseeded out from under their times.
-  const touched = useMemo(
-    () => (event ? eventTouched(detail, event.id) : false),
-    [detail, event],
-  );
 
   /**
    * The three states of the action panel below the lanes: swimmers are still
@@ -557,35 +536,13 @@ export default function RunMeet() {
           )}
 
           {!running && (
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <Button
                 size="sm"
                 onClick={prevHeat}
                 disabled={eventIndex === 0 && heatIndex === 0}
               >
                 ‹ Back
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={touched}
-                title={
-                  touched
-                    ? "This event has times against it — reseeding would move swimmers out from under them."
-                    : undefined
-                }
-                onClick={() =>
-                  reseed.submit(
-                    { eventId: event.id },
-                    {
-                      method: "post",
-                      action: `/meets/${meet.id}/run`,
-                      encType: "application/json",
-                    },
-                  )
-                }
-              >
-                Reseed lanes
               </Button>
               <Button size="sm" onClick={nextHeat} disabled={isLastHeat}>
                 Skip ›

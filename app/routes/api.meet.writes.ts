@@ -23,9 +23,13 @@ import {
   putWatch,
   removeEntry,
   removeSeed,
+  replaceSeeds,
   setSeed,
 } from "~/lib/meets.server";
 import { whyNotEnter } from "~/lib/events";
+import { reseedEvent } from "~/lib/heats";
+import { eventTouched } from "~/lib/timing";
+import { enrollmentIndex } from "~/lib/roster";
 import type { Write } from "~/lib/writes";
 
 /**
@@ -84,23 +88,61 @@ export async function action({ params, request, context }: Route.ActionArgs) {
           throw new SyncError("That swimmer isn't yours to enter.", 403);
         }
 
-        if (!write.entering) {
+        if (write.entering) {
+          const refusal = whyNotEnter(
+            { events: detail.events, entries: detail.entries, limits: detail.meet.limits },
+            write.athleteId,
+            write.eventId,
+          );
+          if (refusal) throw new SyncError(refusal, 400);
+
+          await addEntry(db, {
+            meetId: params.meetId,
+            eventId: write.eventId,
+            athleteId: write.athleteId,
+          });
+        } else {
           await removeEntry(db, write.eventId, write.athleteId);
-          return json({ ok: true });
         }
 
-        const refusal = whyNotEnter(
-          { events: detail.events, entries: detail.entries, limits: detail.meet.limits },
-          write.athleteId,
-          write.eventId,
-        );
-        if (refusal) throw new SyncError(refusal, 400);
+        /**
+         * Reseed the whole event, automatically.
+         *
+         * Dual, tri and inter-squad meets don't get a "seed this event"
+         * button — entering or scratching a swimmer reseeds the event right
+         * then, over the *whole* current entry list, so a team that enters
+         * late still reaches for its own lanes rather than whatever another
+         * team's overflow left behind. First entered stands in for fastest
+         * until the app has a real seed time to rank by.
+         *
+         * Skipped once the event is touched — the same rule reseeding always
+         * followed, since nothing here should move a swim that's already
+         * been timed.
+         */
+        if (!eventTouched(detail, write.eventId)) {
+          const before = detail.entries[write.eventId] ?? [];
+          const entrants = write.entering
+            ? before.includes(write.athleteId)
+              ? before
+              : [...before, write.athleteId]
+            : before.filter((id) => id !== write.athleteId);
 
-        await addEntry(db, {
-          meetId: params.meetId,
-          eventId: write.eventId,
-          athleteId: write.athleteId,
-        });
+          const teamOf = (id: string) =>
+            enrollmentIndex(detail.enrollments).get(id)?.teamId;
+          const seeds = reseedEvent(
+            detail,
+            params.meetId,
+            write.eventId,
+            entrants,
+            teamOf,
+            detail.meet.laneAssignments,
+            detail.meet.laneCount,
+          );
+          // Only null when the event turned out to be touched, which the
+          // guard above already ruled out.
+          if (seeds) await replaceSeeds(db, params.meetId, write.eventId, seeds);
+        }
+
         return json({ ok: true });
       }
 

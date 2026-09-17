@@ -315,7 +315,10 @@ export async function meetDetail(
       meetRowP,
       db.prepare("SELECT team_id FROM meet_teams WHERE meet_id = ?").bind(meetId).all<{ team_id: string }>(),
       db.prepare("SELECT * FROM events WHERE meet_id = ? ORDER BY position").bind(meetId).all<EventRow>(),
-      db.prepare("SELECT event_id, athlete_id FROM entries WHERE meet_id = ?").bind(meetId).all<{ event_id: string; athlete_id: string }>(),
+      // Ordered by when each entry was made: first entered swims the middle
+      // lane until the app has a real seed time to rank by.
+      db.prepare("SELECT event_id, athlete_id FROM entries WHERE meet_id = ? ORDER BY created_at")
+        .bind(meetId).all<{ event_id: string; athlete_id: string }>(),
       db.prepare("SELECT * FROM seeds WHERE meet_id = ?").bind(meetId).all<SeedRow>(),
       db.prepare("SELECT * FROM watches WHERE meet_id = ?").bind(meetId).all<WatchRow>(),
       db.prepare("SELECT * FROM results WHERE meet_id = ?").bind(meetId).all<ResultRow>(),
@@ -598,8 +601,7 @@ export async function removeEvent(db: D1Database, eventId: string): Promise<void
   await ensureSchema(db);
   // Nothing hanging off these seeds is deleted, and nothing needs to be:
   // `reseedEvent` refuses once the event has a watch or a result against it,
-  // so by the time this runs there is nothing to orphan. Deleting evidence to
-  // make room for a reseeding is the failure that rule exists to prevent.
+  // so by the time this runs there is nothing to orphan.
   await db.batch([
     db.prepare("DELETE FROM seeds WHERE event_id = ?").bind(eventId),
     db.prepare("DELETE FROM entries WHERE event_id = ?").bind(eventId),
@@ -623,13 +625,17 @@ export async function setEventOrder(
 
 /* ---------------------------------------------------------------- entries */
 
-export async function addEntry(db: D1Database, entry: Entry): Promise<void> {
+export async function addEntry(
+  db: D1Database,
+  entry: Entry,
+  now = Date.now(),
+): Promise<void> {
   await ensureSchema(db);
   await db
     .prepare(
-      "INSERT OR IGNORE INTO entries (meet_id, event_id, athlete_id) VALUES (?, ?, ?)",
+      "INSERT OR IGNORE INTO entries (meet_id, event_id, athlete_id, created_at) VALUES (?, ?, ?, ?)",
     )
-    .bind(entry.meetId, entry.eventId, entry.athleteId)
+    .bind(entry.meetId, entry.eventId, entry.athleteId, now)
     .run();
 }
 
@@ -648,18 +654,13 @@ export async function removeEntry(
 /* ------------------------------------------------------------------ heats */
 
 /**
- * Replace an event's heats.
- *
- * Callers pass heats that already carry the ids they want kept — see
- * `reseedHeats` in `heats.ts`, which reuses the existing ids by position so a
- * reseed doesn't orphan the seats, watches and calls pointing at them.
- */
-/**
  * Replace an event's seeding wholesale.
  *
- * Seeding is one person's single decision about a whole event, so the rows are
- * rewritten rather than diffed — but `reseedEvent` hands back the ids of any
- * swim that didn't actually move, so a watch already taken on it survives.
+ * Seeding a whole event is one decision, so the rows are rewritten rather
+ * than diffed — but `reseedEvent` hands back the ids of any swim that didn't
+ * actually move, so a watch already taken on it would still point at the
+ * right row. The caller checks the event is untouched before this runs;
+ * nothing here checks again.
  */
 export async function replaceSeeds(
   db: D1Database,
@@ -811,6 +812,29 @@ export async function ensureLane(
       athleteId: "",
     }
   );
+}
+
+/**
+ * One more heat, empty until somebody's named.
+ *
+ * Numbered after whatever the event already has, and made to exist the same
+ * way any unnamed lane does — a placeholder row nobody has named, in lane one.
+ * The rest of the pool doesn't need a row of its own: the run screens already
+ * draw every lane of a heat whether or not it's seeded.
+ */
+export async function addHeat(
+  db: D1Database,
+  meetId: string,
+  eventId: string,
+): Promise<number> {
+  await ensureSchema(db);
+  const row = await db
+    .prepare("SELECT COALESCE(MAX(heat), 0) AS h FROM seeds WHERE event_id = ?")
+    .bind(eventId)
+    .first<{ h: number }>();
+  const heat = (row?.h ?? 0) + 1;
+  await ensureLane(db, meetId, { eventId, heat, lane: 1 });
+  return heat;
 }
 
 /** Take somebody out of a lane. Their watches go with the swim. */
