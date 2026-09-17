@@ -94,6 +94,8 @@ const SCHEMA = [
      max_relays INTEGER,
      max_total INTEGER,
      max_per_team_per_event INTEGER,
+     lane_assignments TEXT,
+     scoring TEXT,
      created_at INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS meets_by_date ON meets (date)`,
@@ -217,6 +219,8 @@ const SCHEMA = [
  */
 const MIGRATIONS = [
   `ALTER TABLE meets ADD COLUMN timers_per_lane INTEGER NOT NULL DEFAULT 1`,
+  `ALTER TABLE meets ADD COLUMN lane_assignments TEXT`,
+  `ALTER TABLE meets ADD COLUMN scoring TEXT`,
 ];
 
 let ready = false;

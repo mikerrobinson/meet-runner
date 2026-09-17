@@ -364,6 +364,31 @@ export interface EntryLimits {
 export type EntryVisibility = "everyone" | "own-team";
 
 /**
+ * Which lanes a team swims, by team id.
+ *
+ * A team missing from the map hasn't been assigned lanes yet. Nothing here
+ * enforces that two teams' lanes don't overlap — this is what the coach typed,
+ * not a validated seat chart.
+ */
+export type LaneAssignments = Record<string, number[]>;
+
+/**
+ * "1, 3, 5" -> [1, 3, 5]. Blank and non-numeric entries are dropped, order
+ * kept — what a lane list or a points list is typed as and stored as.
+ */
+export function parseNumberList(text: string): number[] {
+  return text
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n));
+}
+
+/** The reverse of `parseNumberList`, for filling a text box back in. */
+export function formatNumberList(values: number[]): string {
+  return values.join(", ");
+}
+
+/**
  * One day's racing.
  *
  * The lineup, entries, heats and times are their own rows in their own tables,
@@ -407,6 +432,14 @@ export interface Meet {
    * themselves. Off by default: most coaches pick the lineup.
    */
   athletesMayEnter: boolean;
+  /**
+   * Which lanes each team swims. Usually one team gets the odds and the other
+   * the evens in a dual meet, but that's an assumption a triangular meet or an
+   * odd-width pool breaks — so it's said explicitly rather than derived.
+   */
+  laneAssignments: LaneAssignments;
+  /** How this meet's races turn into points. See `ScoringRules`. */
+  scoring: ScoringRules;
 }
 
 /** One race in a meet's programme. `position` is the order it's swum in. */

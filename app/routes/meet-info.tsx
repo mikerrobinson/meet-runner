@@ -43,6 +43,7 @@ import { useMeet } from "./meet-layout";
 import {
   courseLabel,
   eventName,
+  formatNumberList,
   isLaneCount,
   isMeetCourse,
   isTimersPerLane,
@@ -50,11 +51,14 @@ import {
   MEET_COURSES,
   MEET_TYPES,
   meetSubtitle,
+  parseNumberList,
   STROKES,
   TIMERS_PER_LANE,
   type EventGender,
+  type LaneAssignments,
   type LaneCount,
   type MeetType,
+  type ScoringRules,
   type TimersPerLane,
   type Stroke,
 } from "~/types/meet";
@@ -122,6 +126,30 @@ export async function action({ params, request, context }: Route.ActionArgs) {
       laneCount: isLaneCount(lanes) ? lanes : 6,
       timersPerLane: isTimersPerLane(timers) ? timers : 1,
     });
+    return { ok: true };
+  }
+
+  /**
+   * How the deck is laid out and how it's scored — not derived from anything
+   * else, since a coach setting up the meet is the only one who knows either.
+   *
+   * Lane fields arrive one per racing team, named `lanes-<teamId>`; a team the
+   * form doesn't mention (dropped from the meet since the page loaded, say)
+   * just doesn't end up in the map rather than erroring.
+   */
+  if (intent === "seeding") {
+    const laneAssignments: LaneAssignments = {};
+    for (const [key, value] of form.entries()) {
+      if (!key.startsWith("lanes-")) continue;
+      const lanes = parseNumberList(String(value));
+      if (lanes.length) laneAssignments[key.slice("lanes-".length)] = lanes;
+    }
+    const scoring: ScoringRules = {
+      individual: parseNumberList(String(form.get("individualPoints") ?? "")),
+      relay: parseNumberList(String(form.get("relayPoints") ?? "")),
+      separateByGender: form.get("separateByGender") === "on",
+    };
+    await updateMeet(db, params.meetId, { laneAssignments, scoring });
     return { ok: true };
   }
 
@@ -365,6 +393,10 @@ export default function MeetInfo({ loaderData }: Route.ComponentProps) {
           and the first thing to notice is wrong. */}
       <MeetTeamsCard />
 
+      {/* Below who's racing, on purpose: assigning lanes needs to know which
+          teams there are to assign them to. */}
+      {editing && <SeedingScoringEditor />}
+
       {/* Directly under who's racing, because they answer adjacent questions —
           which teams are in this, and who among everyone here decides it. */}
       <MeetAdmins admins={admins} youRunThis={access.admin} />
@@ -458,6 +490,89 @@ function MeetTeamsCard() {
         fetcher.submit(form, { method: "post" });
       }}
     />
+  );
+}
+
+/**
+ * The rules the meet runs by: which lanes each team swims, and how places
+ * turn into points.
+ *
+ * Both are configuration only — nothing downstream reads either yet. They're
+ * asked for here anyway because a coach setting a meet up knows both answers
+ * at setup time, and the alternative is asking again later when nobody
+ * remembers what was agreed on deck.
+ */
+function SeedingScoringEditor() {
+  const { detail } = useMeet();
+  const { meet, teams } = detail;
+  const fetcher = useFetcher();
+
+  return (
+    <Card>
+      <SectionTitle>Seeding &amp; scoring</SectionTitle>
+      <fetcher.Form method="post" className="space-y-4">
+        <input type="hidden" name="intent" value="seeding" />
+
+        <div className="space-y-3">
+          <span className="block text-sm font-semibold text-slate-600 dark:text-slate-300">
+            Lanes
+          </span>
+          {teams.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              Add the teams racing before assigning lanes.
+            </p>
+          ) : (
+            teams.map((team) => (
+              <Field key={team.id} label={team.name}>
+                <TextInput
+                  name={`lanes-${team.id}`}
+                  defaultValue={formatNumberList(meet.laneAssignments[team.id] ?? [])}
+                  placeholder="1, 3, 5"
+                  inputMode="numeric"
+                />
+              </Field>
+            ))
+          )}
+          <span className="block text-xs text-slate-500 dark:text-slate-400">
+            Comma-separated lane numbers. In a dual meet the home team usually
+            takes the odd lanes, the visitors the even ones.
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Individual points" hint="Best place first">
+            <TextInput
+              name="individualPoints"
+              defaultValue={formatNumberList(meet.scoring.individual)}
+              placeholder="6, 4, 3, 2, 1"
+            />
+          </Field>
+          <Field label="Relay points" hint="Best place first">
+            <TextInput
+              name="relayPoints"
+              defaultValue={formatNumberList(meet.scoring.relay)}
+              placeholder="8, 4"
+            />
+          </Field>
+        </div>
+
+        <label className="flex min-h-12 touch-manipulation items-center gap-3">
+          <input
+            type="checkbox"
+            name="separateByGender"
+            defaultChecked={meet.scoring.separateByGender}
+            className="h-6 w-6 rounded border-slate-300"
+          />
+          <span className="text-sm font-semibold">
+            Score girls and boys as separate contests
+          </span>
+        </label>
+
+        <Button type="submit" variant="primary" full>
+          {fetcher.state === "submitting" ? "Saving…" : "Save seeding & scoring"}
+        </Button>
+      </fetcher.Form>
+    </Card>
   );
 }
 

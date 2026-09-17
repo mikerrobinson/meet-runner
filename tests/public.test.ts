@@ -10,6 +10,7 @@ import {
 import { defaultEvents } from "../app/lib/events.ts";
 import { buildSeeds } from "../app/lib/heats.ts";
 import { makeEnrollment } from "../app/lib/roster.ts";
+import { DUAL_MEET_SCORING } from "../app/types/meet.ts";
 import type {
   Athlete,
   Result,
@@ -82,6 +83,8 @@ const meetRow: Meet = {
   limits: {},
   entryVisibility: "everyone",
   athletesMayEnter: false,
+  laneAssignments: {},
+  scoring: DUAL_MEET_SCORING,
 };
 
 const watch = (athleteId: string, timeMs: number, at: number): Watch => ({

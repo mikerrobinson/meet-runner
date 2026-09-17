@@ -14,18 +14,25 @@
 
 import { ensureSchema } from "./schema.server";
 import { generateId } from "./id";
-import { isLaneCount, isTimersPerLane, type Entry } from "~/types/meet";
+import {
+  DUAL_MEET_SCORING,
+  isLaneCount,
+  isTimersPerLane,
+  type Entry,
+} from "~/types/meet";
 import type {
   Athlete,
   Enrollment,
   EntryLimits,
   Gender,
+  LaneAssignments,
   LaneCount,
   Meet,
   MeetCourse,
   MeetDetail,
   MeetEvent,
   Result,
+  ScoringRules,
   Seed,
   MeetType,
   ResultStatus,
@@ -58,6 +65,18 @@ interface MeetRow {
   max_relays: number | null;
   max_total: number | null;
   max_per_team_per_event: number | null;
+  lane_assignments: string | null;
+  scoring: string | null;
+}
+
+/** Parse a JSON column, falling back rather than throwing on a bad or absent value. */
+function parseJsonColumn<T>(text: string | null, fallback: T): T {
+  if (!text) return fallback;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return fallback;
+  }
 }
 
 function meetFrom(row: MeetRow, teamIds: string[]): Meet {
@@ -88,6 +107,8 @@ function meetFrom(row: MeetRow, teamIds: string[]): Meet {
     entryVisibility: row.entry_visibility === "own-team" ? "own-team" : "everyone",
     athletesMayEnter: row.athletes_may_enter === 1,
     limits,
+    laneAssignments: parseJsonColumn<LaneAssignments>(row.lane_assignments, {}),
+    scoring: parseJsonColumn<ScoringRules>(row.scoring, DUAL_MEET_SCORING),
   };
 }
 
@@ -387,6 +408,8 @@ export interface MeetInput {
   limits?: EntryLimits;
   entryVisibility?: Meet["entryVisibility"];
   athletesMayEnter?: boolean;
+  laneAssignments?: LaneAssignments;
+  scoring?: ScoringRules;
 }
 
 export async function createMeet(
@@ -405,8 +428,9 @@ export async function createMeet(
                           lead_gender, include_diving,
                           entry_visibility, athletes_may_enter,
                           max_individual, max_relays, max_total, max_per_team_per_event,
+                          lane_assignments, scoring,
                           created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
       id,
       input.name,
@@ -426,6 +450,8 @@ export async function createMeet(
       input.limits?.maxRelays ?? null,
       input.limits?.maxTotal ?? null,
       input.limits?.maxPerTeamPerEvent ?? null,
+      JSON.stringify(input.laneAssignments ?? {}),
+      JSON.stringify(input.scoring ?? DUAL_MEET_SCORING),
       now,
     ),
     ...teamIds.map((teamId) =>
@@ -474,6 +500,10 @@ export async function updateMeet(
     set("max_total", patch.limits.maxTotal ?? null);
     set("max_per_team_per_event", patch.limits.maxPerTeamPerEvent ?? null);
   }
+  if (patch.laneAssignments !== undefined) {
+    set("lane_assignments", JSON.stringify(patch.laneAssignments));
+  }
+  if (patch.scoring !== undefined) set("scoring", JSON.stringify(patch.scoring));
 
   if (sets.length > 0) {
     await db.prepare(`UPDATE meets SET ${sets.join(", ")} WHERE id = ?`)
