@@ -118,35 +118,27 @@ export function MeetTeams({
                 <div className="flex items-center gap-3">
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">
-                      {team.name}
-                      {team.code && (
-                        <span className="ml-2 text-xs font-normal text-slate-500">
-                          {team.code}
-                        </span>
-                      )}
-                      {coachOf.includes(team.id) && (
-                        <span className="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-200">
-                          yours
-                        </span>
+                      {team.name}&nbsp;({team.code})
+                      {canEdit ? (
+                        <button
+                          type="button"
+                          disabled={saving}
+                          onClick={() => setHost(team.id)}
+                          className="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-200"
+                        >
+                          {host ? "Host" : "Set as host"}
+                        </button>
+                      ) : (
+                        host && (
+                          <span className="ml-2 rounded bg-blue-100 px-1.5 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-950 dark:text-blue-200">
+                            Host pool
+                          </span>
+                        )
                       )}
                     </span>
-                    {canEdit ? (
-                      <button
-                        type="button"
-                        disabled={saving}
-                        onClick={() => setHost(team.id)}
-                        className="text-xs font-semibold text-blue-600 disabled:opacity-50"
-                      >
-                        {host ? "Host pool ✓" : "Set as host"}
-                      </button>
-                    ) : (
-                      host && (
-                        <span className="text-xs text-slate-500">Host pool</span>
-                      )
-                    )}
                     {entered > 0 && (
                       <span className="ml-2 text-xs text-slate-500">
-                        {entered} entered
+                        {entered} athletes entered
                       </span>
                     )}
                   </span>
@@ -178,10 +170,7 @@ export function MeetTeams({
                     </Banner>
                     <div className="grid grid-cols-2 gap-2">
                       <Button onClick={() => setConfirming(null)}>Keep</Button>
-                      <Button
-                        variant="danger"
-                        onClick={() => remove(team.id)}
-                      >
+                      <Button variant="danger" onClick={() => remove(team.id)}>
                         Remove anyway
                       </Button>
                     </div>
