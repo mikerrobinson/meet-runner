@@ -560,7 +560,11 @@ export default function Timer({ params }: Route.ComponentProps) {
         </Button>
       </header>
 
-      <div className="flex flex-1 flex-col justify-between p-4">
+      <div
+        className={`flex flex-1 flex-col p-4 ${
+          clipboard ? "gap-3" : "justify-between"
+        }`}
+      >
         <div className="space-y-3">
           {/* Back to the lane picker, which is a page rather than a state —
               so this is a link, and the browser's own back button does the
@@ -610,19 +614,6 @@ export default function Timer({ params }: Route.ComponentProps) {
             }
             sent={sent}
             retiming={retiming}
-            armed={startedAt !== null}
-            elapsed={elapsed}
-            frozen={stopped ? stopped.ms : null}
-            onArm={arm}
-            onStop={() => {
-              const at = Date.now();
-              setStopped({ ms: at - (startedAt ?? at), at });
-              // No `stop` message goes with this. Nothing on this phone timed
-              // the race — the watches did — and a stop on the wire would put
-              // a `stoppedAt` on rows that never had a `startedAt` of their
-              // own meaning, which is what the desk reads to tell a stopwatch
-              // time from a written-down one.
-            }}
             onRetime={() => {
               // Whatever went up is what a correction starts from — the point
               // of coming back is usually one column, not all three.
@@ -774,11 +765,6 @@ function ClipboardSheet({
   onChange,
   sent,
   retiming,
-  armed,
-  elapsed,
-  frozen,
-  onArm,
-  onStop,
   onRetime,
   onSubmit,
 }: {
@@ -789,12 +775,6 @@ function ClipboardSheet({
   /** What this phone has already filed for this swim, by column. */
   sent: Array<number | null>;
   retiming: boolean;
-  armed: boolean;
-  elapsed: number;
-  /** The reference clock once it has been stopped. Null while it runs. */
-  frozen: number | null;
-  onArm: () => void;
-  onStop: () => void;
   onRetime: () => void;
   onSubmit: (times: Array<number | null>) => void;
 }) {
@@ -805,145 +785,93 @@ function ClipboardSheet({
   const done = sent.some((ms) => ms !== null) && !retiming;
   const unreadable = typed.some((text, i) => text !== "" && parsed[i] === null);
   const count = parsed.filter((ms) => ms !== null).length;
-  const ticking = armed && frozen === null;
 
   return (
-    <>
-      <div className="py-2 text-center">
-        <p className="font-mono text-3xl font-bold tabular-nums text-slate-400">
-          {frozen !== null
-            ? formatClock(frozen)
-            : armed
-              ? formatClock(elapsed)
-              : "\u2014"}
+    <div className="space-y-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+      {columns.map((column) => (
+        <label
+          key={column}
+          className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 dark:bg-slate-900"
+        >
+          <span className="w-20 shrink-0 text-sm font-bold text-slate-500">
+            Watch {column + 1}
+          </span>
+          {done ? (
+            <span className="min-w-0 flex-1 text-right font-mono text-3xl font-bold tabular-nums">
+              {sent[column] === null ? "\u2014" : formatTime(sent[column]!)}
+            </span>
+          ) : (
+            <input
+              // Shown formatted — "3045" reads back as "30.45" while the
+              // thumb is still typing it, so the separators never have to be
+              // typed and a misread digit shows up immediately rather than
+              // waiting for a preview off to the side.
+              value={
+                typed[column] === ""
+                  ? ""
+                  : parsed[column] !== null
+                    ? formatTime(parsed[column]!)
+                    : typed[column]
+              }
+              onChange={(event) =>
+                onChange(
+                  column,
+                  event.target.value.replace(/\D/g, "").slice(0, 7),
+                )
+              }
+              inputMode="numeric"
+              placeholder={"\u2014"}
+              aria-label={`Watch ${column + 1}`}
+              className="min-w-0 flex-1 rounded-xl border-2 border-slate-300 bg-slate-50 px-3 py-2.5 text-right font-mono text-4xl font-bold tabular-nums outline-none focus:border-blue-500 placeholder:text-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:placeholder:text-slate-600"
+            />
+          )}
+        </label>
+      ))}
+
+      {/* Nothing to explain about a sheet that has already gone up. */}
+      {!done && (
+        <p
+          className={`px-1 text-xs ${
+            unreadable ? "font-bold text-red-600" : "text-slate-500"
+          }`}
+        >
+          {unreadable
+            ? "One of those can\u2019t be read as a time. 3045 is 30.45."
+            : "Just digits \u2014 3045 is 30.45, 11127 is 1:11.27."}
         </p>
-      </div>
+      )}
 
-      <div className="space-y-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-        {columns.map((column) => (
-          <label
-            key={column}
-            className="flex items-center gap-3 rounded-2xl bg-white px-4 py-3 dark:bg-slate-900"
-          >
-            <span className="w-20 shrink-0 text-sm font-bold text-slate-500">
-              Watch {column + 1}
-            </span>
-            {done ? (
-              <span className="min-w-0 flex-1 text-right font-mono text-3xl font-bold tabular-nums">
-                {sent[column] === null ? "\u2014" : formatTime(sent[column]!)}
-              </span>
-            ) : (
-              <input
-                value={values[column] ?? ""}
-                onChange={(event) => onChange(column, event.target.value)}
-                inputMode="decimal"
-                placeholder={"\u2014"}
-                aria-label={`Watch ${column + 1}`}
-                className="min-w-0 flex-1 bg-transparent text-right font-mono text-3xl font-bold tabular-nums outline-none placeholder:text-slate-300 dark:placeholder:text-slate-600"
-              />
-            )}
-            <span className="w-14 shrink-0 text-right text-sm font-semibold tabular-nums text-slate-500">
-              {done || typed[column] === ""
-                ? ""
-                : parsed[column] !== null
-                  ? formatTime(parsed[column]!)
-                  : "?"}
-            </span>
-          </label>
-        ))}
-
-        {/* Nothing to explain about a sheet that has already gone up. */}
-        {!done && (
-          <p
-            className={`px-1 text-xs ${
-              unreadable ? "font-bold text-red-600" : "text-slate-500"
-            }`}
-          >
-            {unreadable
-              ? "One of those can\u2019t be read as a time. 3045 is 30.45."
-              : "Just digits \u2014 3045 is 30.45, 11127 is 1:11.27."}
-          </p>
-        )}
-
-        {done ? (
-          /* Already gone to the desk, and says so where the button would be —
-             a live Submit here invites sending a sheet that has already been
-             read out. Coming back to fix one column is exactly what the ghost
-             button under it is for. */
-          <>
-            <Button
-              size="xl"
-              variant="success"
-              full
-              disabled
-              className="min-h-24 text-3xl"
-            >
-              Submitted
-            </Button>
-            <Button variant="ghost" full onClick={onRetime}>
-              Change these times
-            </Button>
-          </>
-        ) : !armed && count === 0 && !unreadable ? (
-          /* Before the gun there is one thing to do, and it is the same
-             thing it is on a stopwatch: tell the desk this lane is covered. */
+      {done ? (
+        /* Already gone to the desk, and says so where the button would be \u2014
+           a live Submit here invites sending a sheet that has already been
+           read out. Coming back to fix one column is exactly what the ghost
+           button under it is for. */
+        <>
           <Button
             size="xl"
             variant="success"
             full
+            disabled
             className="min-h-24 text-3xl"
-            onClick={onArm}
           >
-            START
+            Submitted
           </Button>
-        ) : ticking && count === 0 ? (
-          /**
-           * The swimmer touches, and the thumb goes down here too.
-           *
-           * It stops the clock above and nothing else: this phone is not one
-           * of the watches, and no time is taken from it. What the frozen
-           * number is for is the next thirty seconds, when three timers read
-           * out three numbers and one of them is 9.8 seconds off — the person
-           * writing them down is the only one who can catch that, and this is
-           * what they catch it against.
-           */
-          <Button
-            size="xl"
-            variant="danger"
-            full
-            className="min-h-24 text-3xl"
-            onClick={onStop}
-          >
-            STOP
+          <Button variant="ghost" full onClick={onRetime}>
+            Change these times
           </Button>
-        ) : (
-          <>
-            <Button
-              size="xl"
-              variant="success"
-              full
-              className="min-h-24 text-3xl"
-              disabled={unreadable || count === 0}
-              onClick={() => onSubmit(parsed)}
-            >
-              {count === 0
-                ? "Submit"
-                : count === 1
-                  ? "Submit 1 time"
-                  : `Submit ${count} times`}
-            </Button>
-            {/* Somebody who started writing before the swimmer touched must
-                still be able to stop the clock, and must never have to stop
-                it to send the times. So it stays reachable and stays out of
-                the way of the only button that matters. */}
-            {ticking && (
-              <Button variant="ghost" full onClick={onStop}>
-                Stop the clock
-              </Button>
-            )}
-          </>
-        )}
-      </div>
-    </>
+        </>
+      ) : (
+        <Button
+          size="xl"
+          variant="success"
+          full
+          className="min-h-24 text-3xl"
+          disabled={unreadable || count === 0}
+          onClick={() => onSubmit(parsed)}
+        >
+          Submit
+        </Button>
+      )}
+    </div>
   );
 }
