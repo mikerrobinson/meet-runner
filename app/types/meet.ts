@@ -252,7 +252,10 @@ export type NameOrder = "first" | "last";
 
 /** Team codes are short and upper-case wherever they're exchanged. */
 export function normalizeTeamCode(value: string): string {
-  return value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+  return value
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 6);
 }
 
 /**
@@ -621,7 +624,7 @@ export interface MeetDetail {
 export interface ScoringRules {
   /** Points by place, best first: [6, 4, 3, 2, 1] for a dual meet. */
   individual: number[];
-  /** Relays usually score differently, and fewer of them place: [8, 4]. */
+  /** Relays usually score differently, and fewer of them place: [8, 4, 2]. */
   relay: number[];
   /** Dual meets score the girls' and boys' halves as separate contests. */
   separateByGender: boolean;
@@ -630,7 +633,7 @@ export interface ScoringRules {
 /** 6-4-3-2-1 individual, 8-4 relay, girls and boys scored apart. */
 export const DUAL_MEET_SCORING: ScoringRules = {
   individual: [6, 4, 3, 2, 1],
-  relay: [8, 4],
+  relay: [8, 4, 2],
   separateByGender: true,
 };
 
@@ -665,9 +668,12 @@ export function displayName(s: Athlete, order: NameOrder = "last"): string {
   return first ? `${s.lastName}, ${first}` : s.lastName;
 }
 
-export function eventName(e: Pick<MeetEvent, "name" | "gender" | "stroke" | "distance">): string {
+export function eventName(
+  e: Pick<MeetEvent, "name" | "gender" | "stroke" | "distance">,
+): string {
   if (e.name) return e.name;
-  const prefix = e.gender === "Open" ? "" : e.gender === "M" ? "Boys " : "Girls ";
+  const prefix =
+    e.gender === "Open" ? "" : e.gender === "M" ? "Boys " : "Girls ";
   // Diving carries a placeholder distance, so don't write it out.
   if (isDiving(e)) return `${prefix}Diving`;
   return `${prefix}${e.distance} ${e.stroke}`;
@@ -688,7 +694,10 @@ export function raceKey(event: Pick<MeetEvent, "distance" | "stroke">): string {
 }
 
 /** Whether an athlete is eligible for an event, given its gender restriction. */
-export function isEligible(athlete: Athlete, event: Pick<MeetEvent, "gender">): boolean {
+export function isEligible(
+  athlete: Athlete,
+  event: Pick<MeetEvent, "gender">,
+): boolean {
   return event.gender === "Open" || event.gender === athlete.gender;
 }
 

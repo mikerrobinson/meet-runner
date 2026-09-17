@@ -42,7 +42,12 @@ import type {
   Watch,
 } from "~/types/meet";
 import { athleteRow, type AthleteRow } from "./athletes.server";
-import { enrollmentFrom, teamRow, type EnrollmentRow, type TeamRow } from "./teams.server";
+import {
+  enrollmentFrom,
+  teamRow,
+  type EnrollmentRow,
+  type TeamRow,
+} from "./teams.server";
 
 /* ------------------------------------------------------------------- rows */
 
@@ -101,10 +106,13 @@ function meetFrom(row: MeetRow, teamIds: string[]): Meet {
     laneCount: isLaneCount(row.lane_count) ? row.lane_count : 6,
     // Absent on every meet made before the setting existed, which is a meet
     // whose timers each carried their own phone.
-    timersPerLane: isTimersPerLane(row.timers_per_lane) ? row.timers_per_lane : 1,
+    timersPerLane: isTimersPerLane(row.timers_per_lane)
+      ? row.timers_per_lane
+      : 2,
     leadGender: row.lead_gender === "M" ? "M" : "F",
     includeDiving: row.include_diving === 1,
-    entryVisibility: row.entry_visibility === "own-team" ? "own-team" : "everyone",
+    entryVisibility:
+      row.entry_visibility === "own-team" ? "own-team" : "everyone",
     athletesMayEnter: row.athletes_may_enter === 1,
     limits,
     laneAssignments: parseJsonColumn<LaneAssignments>(row.lane_assignments, {}),
@@ -172,8 +180,7 @@ function watchFrom(row: WatchRow): Watch {
     seedId: row.seed_id,
     timerId: row.timer_id,
     userId: row.user_id ?? undefined,
-    role:
-      row.role === "admin" || row.role === "coach" ? row.role : "timer",
+    role: row.role === "admin" || row.role === "coach" ? row.role : "timer",
     timeMs: row.time_ms ?? undefined,
     recordedAt: row.recorded_at,
     startedAt: row.started_at ?? undefined,
@@ -207,15 +214,24 @@ function resultFrom(row: ResultRow): Result {
 
 /* ------------------------------------------------------------------ reads */
 
-export async function getMeet(db: D1Database, id: string): Promise<Meet | null> {
+export async function getMeet(
+  db: D1Database,
+  id: string,
+): Promise<Meet | null> {
   await ensureSchema(db);
-  const row = await db.prepare("SELECT * FROM meets WHERE id = ?").bind(id).first<MeetRow>();
+  const row = await db
+    .prepare("SELECT * FROM meets WHERE id = ?")
+    .bind(id)
+    .first<MeetRow>();
   if (!row) return null;
   const { results } = await db
     .prepare("SELECT team_id FROM meet_teams WHERE meet_id = ?")
     .bind(id)
     .all<{ team_id: string }>();
-  return meetFrom(row, results.map((r) => r.team_id));
+  return meetFrom(
+    row,
+    results.map((r) => r.team_id),
+  );
 }
 
 export interface MeetSummary {
@@ -255,28 +271,50 @@ export async function listMeets(
   const holes = ids.map(() => "?").join(", ");
 
   const [links, events, entries, watches, teams] = await Promise.all([
-    db.prepare(`SELECT meet_id, team_id FROM meet_teams WHERE meet_id IN (${holes})`)
-      .bind(...ids).all<{ meet_id: string; team_id: string }>(),
-    db.prepare(`SELECT meet_id, COUNT(*) AS n FROM events WHERE meet_id IN (${holes}) GROUP BY meet_id`)
-      .bind(...ids).all<{ meet_id: string; n: number }>(),
-    db.prepare(`SELECT meet_id, COUNT(*) AS n FROM entries WHERE meet_id IN (${holes}) GROUP BY meet_id`)
-      .bind(...ids).all<{ meet_id: string; n: number }>(),
-    db.prepare(
-      `SELECT meet_id, COUNT(DISTINCT seed_id) AS n
+    db
+      .prepare(
+        `SELECT meet_id, team_id FROM meet_teams WHERE meet_id IN (${holes})`,
+      )
+      .bind(...ids)
+      .all<{ meet_id: string; team_id: string }>(),
+    db
+      .prepare(
+        `SELECT meet_id, COUNT(*) AS n FROM events WHERE meet_id IN (${holes}) GROUP BY meet_id`,
+      )
+      .bind(...ids)
+      .all<{ meet_id: string; n: number }>(),
+    db
+      .prepare(
+        `SELECT meet_id, COUNT(*) AS n FROM entries WHERE meet_id IN (${holes}) GROUP BY meet_id`,
+      )
+      .bind(...ids)
+      .all<{ meet_id: string; n: number }>(),
+    db
+      .prepare(
+        `SELECT meet_id, COUNT(DISTINCT seed_id) AS n
        FROM watches WHERE meet_id IN (${holes}) AND time_ms IS NOT NULL
        GROUP BY meet_id`,
-    ).bind(...ids).all<{ meet_id: string; n: number }>(),
-    db.prepare(
-      `SELECT * FROM teams WHERE id IN (
+      )
+      .bind(...ids)
+      .all<{ meet_id: string; n: number }>(),
+    db
+      .prepare(
+        `SELECT * FROM teams WHERE id IN (
          SELECT team_id FROM meet_teams WHERE meet_id IN (${holes}))`,
-    ).bind(...ids).all<TeamRow>(),
+      )
+      .bind(...ids)
+      .all<TeamRow>(),
   ]);
 
-  const teamById = new Map(teams.results.map((t) => [t.id, teamRow(t)] as const));
+  const teamById = new Map(
+    teams.results.map((t) => [t.id, teamRow(t)] as const),
+  );
   const teamsOf = new Map<string, string[]>();
   for (const link of links.results) {
-    (teamsOf.get(link.meet_id) ?? teamsOf.set(link.meet_id, []).get(link.meet_id)!)
-      .push(link.team_id);
+    (
+      teamsOf.get(link.meet_id) ??
+      teamsOf.set(link.meet_id, []).get(link.meet_id)!
+    ).push(link.team_id);
   }
   const count = (rows: { meet_id: string; n: number }[]) =>
     new Map(rows.map((r) => [r.meet_id, r.n] as const));
@@ -288,7 +326,9 @@ export async function listMeets(
     const teamIds = teamsOf.get(row.id) ?? [];
     return {
       meet: meetFrom(row, teamIds),
-      teams: teamIds.map((id) => teamById.get(id)).filter((t): t is Team => !!t),
+      teams: teamIds
+        .map((id) => teamById.get(id))
+        .filter((t): t is Team => !!t),
       eventCount: eventsBy.get(row.id) ?? 0,
       entryCount: entriesBy.get(row.id) ?? 0,
       timedLanes: watchesBy.get(row.id) ?? 0,
@@ -309,19 +349,41 @@ export async function meetDetail(
 ): Promise<MeetDetail | null> {
   await ensureSchema(db);
 
-  const meetRowP = db.prepare("SELECT * FROM meets WHERE id = ?").bind(meetId).first<MeetRow>();
+  const meetRowP = db
+    .prepare("SELECT * FROM meets WHERE id = ?")
+    .bind(meetId)
+    .first<MeetRow>();
   const [meetRow, links, events, entries, seeds, watches, results] =
     await Promise.all([
       meetRowP,
-      db.prepare("SELECT team_id FROM meet_teams WHERE meet_id = ?").bind(meetId).all<{ team_id: string }>(),
-      db.prepare("SELECT * FROM events WHERE meet_id = ? ORDER BY position").bind(meetId).all<EventRow>(),
+      db
+        .prepare("SELECT team_id FROM meet_teams WHERE meet_id = ?")
+        .bind(meetId)
+        .all<{ team_id: string }>(),
+      db
+        .prepare("SELECT * FROM events WHERE meet_id = ? ORDER BY position")
+        .bind(meetId)
+        .all<EventRow>(),
       // Ordered by when each entry was made: first entered swims the middle
       // lane until the app has a real seed time to rank by.
-      db.prepare("SELECT event_id, athlete_id FROM entries WHERE meet_id = ? ORDER BY created_at")
-        .bind(meetId).all<{ event_id: string; athlete_id: string }>(),
-      db.prepare("SELECT * FROM seeds WHERE meet_id = ?").bind(meetId).all<SeedRow>(),
-      db.prepare("SELECT * FROM watches WHERE meet_id = ?").bind(meetId).all<WatchRow>(),
-      db.prepare("SELECT * FROM results WHERE meet_id = ?").bind(meetId).all<ResultRow>(),
+      db
+        .prepare(
+          "SELECT event_id, athlete_id FROM entries WHERE meet_id = ? ORDER BY created_at",
+        )
+        .bind(meetId)
+        .all<{ event_id: string; athlete_id: string }>(),
+      db
+        .prepare("SELECT * FROM seeds WHERE meet_id = ?")
+        .bind(meetId)
+        .all<SeedRow>(),
+      db
+        .prepare("SELECT * FROM watches WHERE meet_id = ?")
+        .bind(meetId)
+        .all<WatchRow>(),
+      db
+        .prepare("SELECT * FROM results WHERE meet_id = ?")
+        .bind(meetId)
+        .all<ResultRow>(),
     ]);
   if (!meetRow) return null;
 
@@ -336,7 +398,8 @@ export async function meetDetail(
   // Everyone these rows actually name, plus everyone on a racing team's
   // roster — a swimmer nobody has entered yet still has to be pickable.
   const wanted = new Set<string>();
-  for (const list of Object.values(entryMap)) for (const id of list) wanted.add(id);
+  for (const list of Object.values(entryMap))
+    for (const id of list) wanted.add(id);
   // Skipping the lanes nobody has named yet, whose `athlete_id` is empty —
   // there is no such person to fetch.
   for (const seed of seeds.results) {
@@ -346,21 +409,26 @@ export async function meetDetail(
   const holes = teamIds.map(() => "?").join(", ");
   const [teams, rosters] = await Promise.all([
     teamIds.length
-      ? db.prepare(`SELECT * FROM teams WHERE id IN (${holes})`)
-          .bind(...teamIds).all<TeamRow>()
+      ? db
+          .prepare(`SELECT * FROM teams WHERE id IN (${holes})`)
+          .bind(...teamIds)
+          .all<TeamRow>()
       : Promise.resolve({ results: [] as TeamRow[] }),
     // The rosters of the teams actually racing, for the season this meet falls
     // in. A swimmer nobody has entered yet still needs a row on the grid.
     teamIds.length
-      ? db.prepare(
-          `SELECT e.* FROM enrollments e
+      ? db
+          .prepare(
+            `SELECT e.* FROM enrollments e
            WHERE e.team_id IN (${holes})
              AND e.season_id IN (
                SELECT s.id FROM seasons s
                WHERE s.team_id = e.team_id
                  AND (s.start_date IS NULL OR s.start_date <= ?)
                  AND (s.end_date IS NULL OR s.end_date >= ?))`,
-        ).bind(...teamIds, meet.date, meet.date).all<EnrollmentRow>()
+          )
+          .bind(...teamIds, meet.date, meet.date)
+          .all<EnrollmentRow>()
       : Promise.resolve({ results: [] as EnrollmentRow[] }),
   ]);
   for (const row of rosters.results) wanted.add(row.athlete_id);
@@ -379,13 +447,18 @@ export async function meetDetail(
 }
 
 /** People by id, in batches D1 will accept. */
-async function athletesByIds(db: D1Database, ids: string[]): Promise<Athlete[]> {
+async function athletesByIds(
+  db: D1Database,
+  ids: string[],
+): Promise<Athlete[]> {
   if (ids.length === 0) return [];
   const out: Athlete[] = [];
   for (let start = 0; start < ids.length; start += 80) {
     const slice = ids.slice(start, start + 80);
     const { results } = await db
-      .prepare(`SELECT * FROM athletes WHERE id IN (${slice.map(() => "?").join(", ")})`)
+      .prepare(
+        `SELECT * FROM athletes WHERE id IN (${slice.map(() => "?").join(", ")})`,
+      )
       .bind(...slice)
       .all<AthleteRow>();
     out.push(...results.map(athleteRow));
@@ -425,8 +498,9 @@ export async function createMeet(
   const teamIds = [...new Set(input.teamIds.filter(Boolean))];
 
   await db.batch([
-    db.prepare(
-      `INSERT INTO meets (id, name, date, type, course, location, host_team_id,
+    db
+      .prepare(
+        `INSERT INTO meets (id, name, date, type, course, location, host_team_id,
                           created_by, lane_count, timers_per_lane,
                           lead_gender, include_diving,
                           entry_visibility, athletes_may_enter,
@@ -434,31 +508,35 @@ export async function createMeet(
                           lane_assignments, scoring,
                           created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(
-      id,
-      input.name,
-      input.date,
-      input.type,
-      input.course,
-      input.location ?? null,
-      teamIds.includes(input.hostTeamId ?? "") ? input.hostTeamId! : null,
-      input.createdBy ?? null,
-      input.laneCount ?? 6,
-      input.timersPerLane ?? 1,
-      input.leadGender ?? "F",
-      input.includeDiving ? 1 : 0,
-      input.entryVisibility ?? "everyone",
-      input.athletesMayEnter ? 1 : 0,
-      input.limits?.maxIndividual ?? null,
-      input.limits?.maxRelays ?? null,
-      input.limits?.maxTotal ?? null,
-      input.limits?.maxPerTeamPerEvent ?? null,
-      JSON.stringify(input.laneAssignments ?? {}),
-      JSON.stringify(input.scoring ?? DUAL_MEET_SCORING),
-      now,
-    ),
+      )
+      .bind(
+        id,
+        input.name,
+        input.date,
+        input.type,
+        input.course,
+        input.location ?? null,
+        teamIds.includes(input.hostTeamId ?? "") ? input.hostTeamId! : null,
+        input.createdBy ?? null,
+        input.laneCount ?? 6,
+        input.timersPerLane ?? 1,
+        input.leadGender ?? "F",
+        input.includeDiving ? 1 : 0,
+        input.entryVisibility ?? "everyone",
+        input.athletesMayEnter ? 1 : 0,
+        input.limits?.maxIndividual ?? null,
+        input.limits?.maxRelays ?? null,
+        input.limits?.maxTotal ?? null,
+        input.limits?.maxPerTeamPerEvent ?? null,
+        JSON.stringify(input.laneAssignments ?? {}),
+        JSON.stringify(input.scoring ?? DUAL_MEET_SCORING),
+        now,
+      ),
     ...teamIds.map((teamId) =>
-      db.prepare("INSERT OR IGNORE INTO meet_teams (meet_id, team_id) VALUES (?, ?)")
+      db
+        .prepare(
+          "INSERT OR IGNORE INTO meet_teams (meet_id, team_id) VALUES (?, ?)",
+        )
         .bind(id, teamId),
     ),
   ]);
@@ -486,14 +564,17 @@ export async function updateMeet(
   if (patch.type !== undefined) set("type", patch.type);
   if (patch.course !== undefined) set("course", patch.course);
   if (patch.location !== undefined) set("location", patch.location || null);
-  if (patch.hostTeamId !== undefined) set("host_team_id", patch.hostTeamId || null);
+  if (patch.hostTeamId !== undefined)
+    set("host_team_id", patch.hostTeamId || null);
   if (patch.laneCount !== undefined) set("lane_count", patch.laneCount);
   if (patch.timersPerLane !== undefined) {
     set("timers_per_lane", patch.timersPerLane);
   }
   if (patch.leadGender !== undefined) set("lead_gender", patch.leadGender);
-  if (patch.includeDiving !== undefined) set("include_diving", patch.includeDiving ? 1 : 0);
-  if (patch.entryVisibility !== undefined) set("entry_visibility", patch.entryVisibility);
+  if (patch.includeDiving !== undefined)
+    set("include_diving", patch.includeDiving ? 1 : 0);
+  if (patch.entryVisibility !== undefined)
+    set("entry_visibility", patch.entryVisibility);
   if (patch.athletesMayEnter !== undefined) {
     set("athletes_may_enter", patch.athletesMayEnter ? 1 : 0);
   }
@@ -506,10 +587,12 @@ export async function updateMeet(
   if (patch.laneAssignments !== undefined) {
     set("lane_assignments", JSON.stringify(patch.laneAssignments));
   }
-  if (patch.scoring !== undefined) set("scoring", JSON.stringify(patch.scoring));
+  if (patch.scoring !== undefined)
+    set("scoring", JSON.stringify(patch.scoring));
 
   if (sets.length > 0) {
-    await db.prepare(`UPDATE meets SET ${sets.join(", ")} WHERE id = ?`)
+    await db
+      .prepare(`UPDATE meets SET ${sets.join(", ")} WHERE id = ?`)
       .bind(...binds, meetId)
       .run();
   }
@@ -519,7 +602,10 @@ export async function updateMeet(
     await db.batch([
       db.prepare("DELETE FROM meet_teams WHERE meet_id = ?").bind(meetId),
       ...teamIds.map((teamId) =>
-        db.prepare("INSERT OR IGNORE INTO meet_teams (meet_id, team_id) VALUES (?, ?)")
+        db
+          .prepare(
+            "INSERT OR IGNORE INTO meet_teams (meet_id, team_id) VALUES (?, ?)",
+          )
           .bind(meetId, teamId),
       ),
     ]);
@@ -532,11 +618,16 @@ export async function updateMeet(
  * A real delete, in one batch. There is no tombstone to keep: nothing else
  * holds a copy that could put the row back.
  */
-export async function deleteMeet(db: D1Database, meetId: string): Promise<void> {
+export async function deleteMeet(
+  db: D1Database,
+  meetId: string,
+): Promise<void> {
   await ensureSchema(db);
   await db.batch(
     ["results", "watches", "seeds", "entries", "events", "meet_teams"]
-      .map((table) => db.prepare(`DELETE FROM ${table} WHERE meet_id = ?`).bind(meetId))
+      .map((table) =>
+        db.prepare(`DELETE FROM ${table} WHERE meet_id = ?`).bind(meetId),
+      )
       .concat(db.prepare("DELETE FROM meets WHERE id = ?").bind(meetId)),
   );
 }
@@ -546,11 +637,18 @@ export async function deleteMeet(db: D1Database, meetId: string): Promise<void> 
 export async function addEvent(
   db: D1Database,
   meetId: string,
-  event: { distance: number; stroke: Stroke; gender: MeetEvent["gender"]; name?: string },
+  event: {
+    distance: number;
+    stroke: Stroke;
+    gender: MeetEvent["gender"];
+    name?: string;
+  },
 ): Promise<MeetEvent> {
   await ensureSchema(db);
   const last = await db
-    .prepare("SELECT COALESCE(MAX(position), -1) AS p FROM events WHERE meet_id = ?")
+    .prepare(
+      "SELECT COALESCE(MAX(position), -1) AS p FROM events WHERE meet_id = ?",
+    )
     .bind(meetId)
     .first<{ p: number }>();
   const id = generateId();
@@ -559,7 +657,15 @@ export async function addEvent(
       `INSERT INTO events (id, meet_id, position, distance, stroke, gender, name)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
-    .bind(id, meetId, (last?.p ?? -1) + 1, event.distance, event.stroke, event.gender, event.name ?? null)
+    .bind(
+      id,
+      meetId,
+      (last?.p ?? -1) + 1,
+      event.distance,
+      event.stroke,
+      event.gender,
+      event.name ?? null,
+    )
     .run();
   return { id, meetId, position: (last?.p ?? -1) + 1, ...event };
 }
@@ -574,18 +680,20 @@ export async function addEventsToMeet(
   if (events.length === 0) return;
   await db.batch(
     events.map((event, position) =>
-      db.prepare(
-        `INSERT INTO events (id, meet_id, position, distance, stroke, gender, name)
+      db
+        .prepare(
+          `INSERT INTO events (id, meet_id, position, distance, stroke, gender, name)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(
-        event.id,
-        meetId,
-        position,
-        event.distance,
-        event.stroke,
-        event.gender,
-        event.name ?? null,
-      ),
+        )
+        .bind(
+          event.id,
+          meetId,
+          position,
+          event.distance,
+          event.stroke,
+          event.gender,
+          event.name ?? null,
+        ),
     ),
   );
 }
@@ -597,7 +705,10 @@ export async function addEventsToMeet(
  * through them — a subselect rather than two round trips, and one that cannot
  * miss a row the way a list of ids fetched a moment earlier can.
  */
-export async function removeEvent(db: D1Database, eventId: string): Promise<void> {
+export async function removeEvent(
+  db: D1Database,
+  eventId: string,
+): Promise<void> {
   await ensureSchema(db);
   // Nothing hanging off these seeds is deleted, and nothing needs to be:
   // `reseedEvent` refuses once the event has a watch or a result against it,
@@ -618,7 +729,9 @@ export async function setEventOrder(
   if (order.length === 0) return;
   await db.batch(
     order.map((eventId, index) =>
-      db.prepare("UPDATE events SET position = ? WHERE id = ?").bind(index, eventId),
+      db
+        .prepare("UPDATE events SET position = ? WHERE id = ?")
+        .bind(index, eventId),
     ),
   );
 }
@@ -736,7 +849,9 @@ export async function setSeed(
     .run();
 
   await db
-    .prepare("INSERT OR IGNORE INTO entries (meet_id, event_id, athlete_id) VALUES (?, ?, ?)")
+    .prepare(
+      "INSERT OR IGNORE INTO entries (meet_id, event_id, athlete_id) VALUES (?, ?, ?)",
+    )
     .bind(meetId, place.eventId, place.athleteId)
     .run();
 
@@ -838,7 +953,10 @@ export async function addHeat(
 }
 
 /** Take somebody out of a lane. Their watches go with the swim. */
-export async function removeSeed(db: D1Database, seedId: string): Promise<void> {
+export async function removeSeed(
+  db: D1Database,
+  seedId: string,
+): Promise<void> {
   await ensureSchema(db);
   await db.batch([
     db.prepare("DELETE FROM watches WHERE seed_id = ?").bind(seedId),
@@ -912,10 +1030,7 @@ export async function deleteWatch(
  * so a watch arriving late, or one discarded afterwards, cannot move a result
  * that has already been accepted.
  */
-export async function putResult(
-  db: D1Database,
-  result: Result,
-): Promise<void> {
+export async function putResult(db: D1Database, result: Result): Promise<void> {
   await ensureSchema(db);
   await db
     .prepare(
@@ -942,7 +1057,10 @@ export async function putResult(
 }
 
 /** Take a sign-off back. The watches underneath it are untouched. */
-export async function deleteResult(db: D1Database, seedId: string): Promise<void> {
+export async function deleteResult(
+  db: D1Database,
+  seedId: string,
+): Promise<void> {
   await ensureSchema(db);
   await db.prepare("DELETE FROM results WHERE seed_id = ?").bind(seedId).run();
 }

@@ -247,6 +247,10 @@ export default function Timer({ params }: Route.ComponentProps) {
     // Three times written down for heat 1 are not heat 2's times, for the
     // same reason the clock above isn't heat 2's clock.
     setSheet([]);
+    // Same route, new params — the browser has no page load to reset scroll
+    // on, so a heat scrolled down to reach Submit would otherwise open the
+    // next one already scrolled.
+    window.scrollTo(0, 0);
   }, [eventNo, heatNo, lane]);
 
   /* ----------------------------------------------------------------- state */

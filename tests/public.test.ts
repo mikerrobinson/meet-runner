@@ -58,7 +58,13 @@ const home: Team = { id: "t1", name: "Cactus Shadows", code: "CHAP" };
 const away: Team = { id: "t2", name: "Horizon", code: "HRZN" };
 
 const athletes: Athlete[] = [
-  { id: "a1", firstName: "Avery", lastName: "Nguyen", gender: "F", birthDate: "2009-03-14" },
+  {
+    id: "a1",
+    firstName: "Avery",
+    lastName: "Nguyen",
+    gender: "F",
+    birthDate: "2009-03-14",
+  },
   { id: "a2", firstName: "Marcus", lastName: "Hill", gender: "M" },
   { id: "a9", firstName: "Dana", lastName: "Reyes", gender: "F" },
 ];
@@ -133,7 +139,11 @@ const detail: MeetDetail = {
     entries: 3,
     times: 3,
   });
-  eq(summary.teams.map((t) => t.code), ["CHAP", "HRZN"], "both teams are named");
+  eq(
+    summary.teams.map((t) => t.code),
+    ["CHAP", "HRZN"],
+    "both teams are named",
+  );
   eq(summary.hostTeamId, home.id, "and the host is known");
   eq(summary.entries, 3, "three entries");
   eq(summary.times, 3, "three lanes with something recorded");
@@ -161,9 +171,17 @@ const detail: MeetDetail = {
     [1, 2, null],
     "a disqualified swim keeps its line and loses its place",
   );
-  eq(race.placings[0].team?.code, "HRZN", "each swim is credited to the right team");
+  eq(
+    race.placings[0].team?.code,
+    "HRZN",
+    "each swim is credited to the right team",
+  );
   eq(race.placings[1].team?.code, "CHAP", "on both sides of the meet");
-  eq(race.official, false, "one swim signed off doesn't make the event official");
+  eq(
+    race.official,
+    false,
+    "one swim signed off doesn't make the event official",
+  );
   eq(
     race.placings.map((p) => p.final),
     [false, false, true],
@@ -203,7 +221,11 @@ const detail: MeetDetail = {
   const swims = athleteSwims("a1", [detail, faster]);
   eq(swims.length, 2, "both of Avery's swims");
   eq(swims[0].date, "2027-01-10", "newest first");
-  eq(swims.map((s) => s.best), [true, false], "the faster one is the best");
+  eq(
+    swims.map((s) => s.best),
+    [true, false],
+    "the faster one is the best",
+  );
   eq(swims[0].timeMs, 25_800, "and it's the one that actually was faster");
   eq(swims[0].place, 1, "with the place it earned in that event");
 
@@ -219,7 +241,11 @@ const detail: MeetDetail = {
     "a best per course, since a yard time and a metre time aren't comparable",
   );
 
-  eq(athleteSwims("nobody", [detail]), [], "someone who never swam has no history");
+  eq(
+    athleteSwims("nobody", [detail]),
+    [],
+    "someone who never swam has no history",
+  );
 }
 
 done();
