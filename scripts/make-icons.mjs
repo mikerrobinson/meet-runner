@@ -122,6 +122,38 @@ function render(size, { spread = 1 } = {}) {
   return encodePng(size, size, rgba);
 }
 
+/**
+ * ICO container around PNG-encoded frames — supported everywhere an .ico is,
+ * since Vista. Browsers fetch `/favicon.ico` directly for the tab icon
+ * regardless of what `<link rel="icon">` points to, so this has to carry the
+ * same wave mark as the PNGs or the tab shows a stale/default icon even when
+ * the rest of the icons are right.
+ */
+function encodeIco(pngsBySize) {
+  const count = pngsBySize.length;
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0); // reserved
+  header.writeUInt16LE(1, 2); // type: icon
+  header.writeUInt16LE(count, 4);
+
+  const entries = Buffer.alloc(16 * count);
+  let offset = 6 + 16 * count;
+  pngsBySize.forEach(({ size, png }, i) => {
+    const e = i * 16;
+    entries[e] = size >= 256 ? 0 : size; // width
+    entries[e + 1] = size >= 256 ? 0 : size; // height
+    entries[e + 2] = 0; // palette
+    entries[e + 3] = 0; // reserved
+    entries.writeUInt16LE(1, e + 4); // planes
+    entries.writeUInt16LE(32, e + 6); // bits per pixel
+    entries.writeUInt32LE(png.length, e + 8);
+    entries.writeUInt32LE(offset, e + 12);
+    offset += png.length;
+  });
+
+  return Buffer.concat([header, entries, ...pngsBySize.map((p) => p.png)]);
+}
+
 const out = process.argv[2];
 const targets = [
   ["icon-180.png", 180, {}],
@@ -136,3 +168,9 @@ for (const [name, size, opts] of targets) {
   writeFileSync(`${out}/${name}`, png);
   console.log(`${name}  ${size}x${size}  ${png.length} bytes`);
 }
+
+const favicon = encodeIco(
+  [16, 32, 48].map((size) => ({ size, png: render(size) })),
+);
+writeFileSync(`${out}/favicon.ico`, favicon);
+console.log(`favicon.ico  16/32/48  ${favicon.length} bytes`);

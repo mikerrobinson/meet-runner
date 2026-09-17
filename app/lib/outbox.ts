@@ -32,10 +32,24 @@ export interface Queued {
   queuedAt: number;
   /** How many times sending has failed for a reason worth retrying. */
   tries: number;
+  /** Set once the server has accepted the write — see `settled` below. */
+  settledAt?: number;
 }
 
 export interface OutboxState {
   pending: Queued[];
+  /**
+   * Writes the server has already accepted but that loader data hasn't
+   * caught up to yet.
+   *
+   * A write leaves `pending` the moment its POST succeeds, which is well
+   * before the revalidation that follows fetches a loader read reflecting
+   * it — on real network latency that gap is wide enough to see. Keeping the
+   * write here too means the optimistic overlay still applies it until a
+   * revalidation actually lands, instead of the screen flashing back to the
+   * pre-write state for the moment in between.
+   */
+  settled: Queued[];
   /** Set when a write was refused for good. Cleared by the next success. */
   error: string | null;
   sending: boolean;
@@ -61,7 +75,12 @@ function write(queue: Queued[]): void {
 
 /* --------------------------------------------------------------- the queue */
 
-let state: OutboxState = { pending: read(), error: null, sending: false };
+let state: OutboxState = {
+  pending: read(),
+  settled: [],
+  error: null,
+  sending: false,
+};
 const listeners = new Set<(state: OutboxState) => void>();
 
 function publish(next: Partial<OutboxState>): void {
@@ -204,7 +223,11 @@ export async function flush(): Promise<void> {
       }
 
       if (status !== 0 && status < 400) {
-        publish({ pending: state.pending.slice(1), error: null });
+        publish({
+          pending: state.pending.slice(1),
+          settled: [...state.settled, { ...head, settledAt: Date.now() }],
+          error: null,
+        });
         continue;
       }
 
@@ -252,4 +275,15 @@ export function startOutbox(): () => void {
 
 export function dismissError(): void {
   publish({ error: null });
+}
+
+/**
+ * Drop settled writes now accounted for by a revalidation that started after
+ * `since`. Anything that settled *during* that revalidation's flight stays
+ * behind for the next one — its effect wasn't in the loader read that just
+ * landed.
+ */
+export function clearSettledBefore(since: number): void {
+  const settled = state.settled.filter((q) => (q.settledAt ?? 0) > since);
+  if (settled.length !== state.settled.length) publish({ settled });
 }

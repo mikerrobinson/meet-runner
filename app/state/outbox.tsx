@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useRevalidator } from "react-router";
 import {
+  clearSettledBefore,
   dismissError,
   enqueue,
   snapshot,
@@ -59,6 +60,24 @@ export function OutboxProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [empty]);
 
+  // A write leaves the queue as soon as its POST succeeds, but loader data —
+  // what the optimistic overlay falls back to once a write is gone from the
+  // queue — doesn't catch up until whichever revalidation follows actually
+  // resolves. `settled` bridges that gap (see outbox.ts); this is what closes
+  // it, dropping settled writes once a revalidation that started after they
+  // landed has come back.
+  const revalidating = revalidator.state !== "idle";
+  const wasRevalidating = useRef(revalidating);
+  const revalidatingSince = useRef(Date.now());
+  useEffect(() => {
+    if (revalidating && !wasRevalidating.current) {
+      revalidatingSince.current = Date.now();
+    } else if (!revalidating && wasRevalidating.current) {
+      clearSettledBefore(revalidatingSince.current);
+    }
+    wasRevalidating.current = revalidating;
+  }, [revalidating]);
+
   const value = useMemo<OutboxContext>(
     () => ({
       ...state,
@@ -79,9 +98,14 @@ export function useOutbox(): OutboxContext {
   return value;
 }
 
-/** Just the queue, for the pending overlay. */
+/**
+ * What the optimistic overlay should apply: writes still queued, plus writes
+ * the server has already accepted but loader data hasn't caught up to yet.
+ * See `settled` on `OutboxState` for why the second half exists.
+ */
 export function usePending() {
-  return useOutbox().pending;
+  const { pending, settled } = useOutbox();
+  return useMemo(() => [...settled, ...pending], [pending, settled]);
 }
 
 /** Convenience for screens that only write. */
