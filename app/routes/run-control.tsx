@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useFetcher } from "react-router";
 import { Button, Card, EmptyState, SectionTitle, TextInput } from "~/components/ui";
 import { LaneAssignSheet } from "~/components/LaneAssignSheet";
@@ -277,6 +277,34 @@ function HeatCard({
   const closed = heatClosed(detail, event.id, heat);
 
   /**
+   * Where the keyboard goes next, without every `LaneRow` needing to know
+   * about its neighbors.
+   *
+   * The fast path through a heat is down one column and then the other —
+   * every swimmer, then every time — so the desk never has to reach for the
+   * mouse to move between lanes. Kept as a plain ref rather than state: which
+   * DOM node sits in which slot never needs to trigger a render of its own.
+   */
+  const fields = useRef(
+    new Map<number, { name: HTMLButtonElement | null; time: HTMLInputElement | null }>(),
+  );
+  const registerField = (
+    laneNumber: number,
+    kind: "name" | "time",
+    el: HTMLButtonElement | HTMLInputElement | null,
+  ) => {
+    const entry = fields.current.get(laneNumber) ?? { name: null, time: null };
+    if (kind === "name") entry.name = el as HTMLButtonElement | null;
+    else entry.time = el as HTMLInputElement | null;
+    fields.current.set(laneNumber, entry);
+  };
+  const focusField = (laneNumber: number, kind: "name" | "time") => {
+    if (laneNumber < 1 || laneNumber > detail.meet.laneCount) return;
+    const entry = fields.current.get(laneNumber);
+    (kind === "name" ? entry?.name : entry?.time)?.focus();
+  };
+
+  /**
    * Keep each lane's status honest, without anybody having to press
    * anything.
    *
@@ -443,6 +471,8 @@ function HeatCard({
                 now={now}
                 closed={closed}
                 onAssign={onAssign}
+                registerField={registerField}
+                focusField={focusField}
               />
               ),
             )}
@@ -530,6 +560,8 @@ function LaneRow({
   now,
   closed,
   onAssign,
+  registerField,
+  focusField,
 }: {
   detail: MeetDetail;
   event: MeetEvent;
@@ -543,6 +575,12 @@ function LaneRow({
    *  may change until "Fix Results" reopens it. */
   closed: boolean;
   onAssign: (lane: number) => void;
+  registerField: (
+    lane: number,
+    kind: "name" | "time",
+    el: HTMLButtonElement | HTMLInputElement | null,
+  ) => void;
+  focusField: (lane: number, kind: "name" | "time") => void;
 }) {
   /**
    * What's in the box while somebody is typing in it.
@@ -687,6 +725,40 @@ function LaneRow({
     });
   };
 
+  /**
+   * The keyboard's own map of the row: right off the name onto the time,
+   * left back, up and down onto the same field one lane over. Everything
+   * else on the row — a DQ, a discarded watch — stays mouse-and-thumb
+   * territory, so Tab never has to step over it to get to the next time.
+   */
+  const onNameKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      focusField(lane, "time");
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      focusField(lane + 1, "name");
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      focusField(lane - 1, "name");
+    }
+  };
+
+  const onTimeKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") commitTime();
+    else if (e.key === "Escape") setDraft(null);
+    else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      focusField(lane, "name");
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      focusField(lane + 1, "time");
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      focusField(lane - 1, "time");
+    }
+  };
+
   return (
     <tr
       className={`border-t border-slate-100 dark:border-slate-800 ${
@@ -698,6 +770,13 @@ function LaneRow({
       <td className="py-2 pr-2">
         <button
           type="button"
+          ref={(el) => registerField(lane, "name", el)}
+          // A lane already named is one Tab past, not one Tab through — the
+          // fast path down a heat is time, time, time, and a name nobody
+          // needs to change shouldn't cost a stop on the way there. Still
+          // reachable: the arrow keys and a click both go straight to it.
+          tabIndex={athlete ? -1 : 0}
+          onKeyDown={onNameKeyDown}
           onClick={() => onAssign(lane)}
           className="text-left"
         >
@@ -783,6 +862,7 @@ function LaneRow({
                 aria-label={`Discard the ${formatTime(w.timeMs!)} watch`}
                 title="Discard this watch"
                 disabled={closed}
+                tabIndex={-1}
                 onClick={() =>
                   seed &&
                   !closed &&
@@ -816,14 +896,12 @@ function LaneRow({
           or some in, green is the timing table done. */}
       <td className="py-2 pr-2">
         <TextInput
+          ref={(el) => registerField(lane, "time", el)}
           value={shownTime}
           onChange={(event) => setDraft(event.target.value)}
           onFocus={(event) => event.target.select()}
           onBlur={commitTime}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") commitTime();
-            if (event.key === "Escape") setDraft(null);
-          }}
+          onKeyDown={onTimeKeyDown}
           inputMode="numeric"
           placeholder={progress === "none" ? "" : "0000"}
           aria-label={`Time for lane ${lane}`}
@@ -852,6 +930,7 @@ function LaneRow({
                 key={status}
                 type="button"
                 disabled={idle || closed}
+                tabIndex={-1}
                 title={
                   closed
                     ? "This heat is complete — Fix Results to change it."
@@ -878,6 +957,7 @@ function LaneRow({
           <button
             type="button"
             disabled={idle || closed}
+            tabIndex={-1}
             title={
               closed
                 ? "This heat is complete — Fix Results to change it."

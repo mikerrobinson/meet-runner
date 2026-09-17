@@ -131,10 +131,15 @@ const CONTROL_CLASS = `${CONTROL_SHAPE} ${CONTROL_SKIN}`;
 export function TextInput({
   tone,
   className = "",
+  ref,
   ...rest
-}: React.InputHTMLAttributes<HTMLInputElement> & { tone?: string }) {
+}: React.InputHTMLAttributes<HTMLInputElement> & {
+  tone?: string;
+  ref?: React.Ref<HTMLInputElement>;
+}) {
   return (
     <input
+      ref={ref}
       className={`${CONTROL_SHAPE} ${tone ?? CONTROL_SKIN} ${className}`}
       {...rest}
     />

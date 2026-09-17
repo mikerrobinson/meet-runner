@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Sheet, TextInput } from "./ui";
 import { seedsForEvent, swimTime } from "~/lib/timing";
 import {
@@ -51,8 +51,24 @@ export function LaneAssignSheet({
   onClose: () => void;
 }) {
   const [search, setSearch] = useState("");
+  const listRef = useRef<HTMLUListElement>(null);
 
   const event = detail.events.find((e) => e.id === eventId);
+
+  const teamById = useMemo(
+    () => new Map(detail.teams.map((t) => [t.id, t] as const)),
+    [detail.teams],
+  );
+
+  /** Whichever team the meet's lane split says this lane belongs to, if any. */
+  const laneTeamId = useMemo(() => {
+    for (const [teamId, lanes] of Object.entries(
+      detail.meet.laneAssignments ?? {},
+    )) {
+      if (lanes.includes(lane)) return teamId;
+    }
+    return undefined;
+  }, [detail.meet.laneAssignments, lane]);
 
   const candidates = useMemo<Candidate[]>(() => {
     // Where everybody in this event already sits, so the picker can say
@@ -86,9 +102,53 @@ export function LaneAssignSheet({
         const aFree = a.seatedAt ? 1 : 0;
         const bFree = b.seatedAt ? 1 : 0;
         if (aFree !== bFree) return aFree - bFree;
+
+        // Then whoever swims for the team this lane belongs to — at a dual
+        // meet the lane already says which side of the pool you're looking
+        // at, so that team's roster is who you're almost always reaching for.
+        if (laneTeamId) {
+          const aSame = enrollments.get(a.athlete.id)?.teamId === laneTeamId ? 0 : 1;
+          const bSame = enrollments.get(b.athlete.id)?.teamId === laneTeamId ? 0 : 1;
+          if (aSame !== bSame) return aSame - bSame;
+        }
+
         return byAthlete(nameOrder)(a.athlete, b.athlete);
       });
-  }, [roster, nameOrder, detail, eventId, event, search]);
+  }, [roster, nameOrder, detail, eventId, event, search, enrollments, laneTeamId]);
+
+  /**
+   * Up and down walk the visible list of candidates; the search box feeds
+   * into the same list rather than owning a separate arrow behavior of its
+   * own. Enter needs nothing extra — a focused `<button>` already answers it.
+   */
+  const moveFocus = (delta: number) => {
+    const buttons = listRef.current
+      ? Array.from(
+          listRef.current.querySelectorAll<HTMLButtonElement>(
+            "button:not(:disabled)",
+          ),
+        )
+      : [];
+    if (buttons.length === 0) return;
+    const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const next =
+      at === -1
+        ? delta > 0
+          ? 0
+          : buttons.length - 1
+        : Math.min(Math.max(at + delta, 0), buttons.length - 1);
+    buttons[next]?.focus();
+  };
+
+  const onListArrow = (e: KeyboardEvent) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveFocus(1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveFocus(-1);
+    }
+  };
 
   return (
     <Sheet open title={`Lane ${lane} · who's swimming?`} onClose={onClose}>
@@ -101,6 +161,7 @@ export function LaneAssignSheet({
       <TextInput
         value={search}
         onChange={(e) => setSearch(e.target.value)}
+        onKeyDown={onListArrow}
         placeholder="Search swimmers"
         autoFocus
       />
@@ -110,7 +171,10 @@ export function LaneAssignSheet({
           No eligible swimmers match that.
         </p>
       ) : (
-        <ul className="mt-2 max-h-[45vh] divide-y divide-slate-200 overflow-y-auto overscroll-contain dark:divide-slate-800">
+        <ul
+          ref={listRef}
+          className="mt-2 max-h-[45vh] divide-y divide-slate-200 overflow-y-auto overscroll-contain dark:divide-slate-800"
+        >
           {candidates.map(({ athlete, seatedAt, swum }) => (
             <li key={athlete.id}>
               <button
@@ -120,6 +184,7 @@ export function LaneAssignSheet({
                   onAssign(athlete.id);
                   onClose();
                 }}
+                onKeyDown={onListArrow}
                 className="flex min-h-14 w-full touch-manipulation items-center justify-between gap-3 px-1 py-2 text-left disabled:opacity-40"
               >
                 <span className="min-w-0">
@@ -128,6 +193,8 @@ export function LaneAssignSheet({
                   </span>
                   <span className="block text-xs text-slate-500 dark:text-slate-400">
                     {athlete.gender}
+                    {teamById.get(enrollments.get(athlete.id)?.teamId ?? "") &&
+                      ` · ${teamById.get(enrollments.get(athlete.id)!.teamId)!.name}`}
                     {enrollments.get(athlete.id)?.year &&
                       ` · ${enrollments.get(athlete.id)?.year}`}
                     {enrollments.get(athlete.id)?.squad &&
