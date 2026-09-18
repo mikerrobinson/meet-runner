@@ -5,8 +5,10 @@ import { AthleteSheet } from "~/components/AthleteSheet";
 import { Button, EmptyState, TextInput } from "~/components/ui";
 import { enrollmentIndex } from "~/lib/roster";
 import { whyNotEnter } from "~/lib/events";
+import { requireDb, type SyncEnv } from "~/lib/api.server";
+import { meetDetail } from "~/lib/meets.server";
 import { useMeet } from "./meet-layout";
-import { useLiveData } from "~/hooks/use-live-data";
+import { useMeetLive } from "~/hooks/use-meet-live";
 import { usePending, useSend } from "~/state/outbox";
 import { applyPending } from "~/lib/pending";
 import { useViewPrefs } from "~/state/view-prefs";
@@ -15,6 +17,7 @@ import {
   displayName,
   raceKey,
   shortStroke,
+  withLiveTables,
   type Gender,
   type MeetEvent,
   type Stroke,
@@ -23,6 +26,28 @@ import {
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Entries · Swim Starts" }];
+}
+
+/**
+ * This screen's own whole-meet read.
+ *
+ * Explicitly out of scope for the routing rewrite (migration-plan.md §2) —
+ * same URL, same grid, same everything, except that `meet-layout`'s loader
+ * no longer hands this down for free (see its doc comment), so it's read
+ * here instead of changing anything about the screen itself.
+ *
+ * The four live tables — entries included, now that `declareEntry` makes
+ * them genuinely DO-owned — come from the meet's Durable Object rather than
+ * D1, same reasoning as admin/splits/results (migration-plan.md §5).
+ */
+export async function loader({ params, context }: Route.LoaderArgs) {
+  const env = context.cloudflare.env;
+  const db = requireDb(env as SyncEnv);
+  const detail = await meetDetail(db, params.meetId);
+  if (!detail) return { detail: null };
+
+  const live = await env.MEET_DO.getByName(params.meetId).getSnapshot(params.meetId);
+  return { detail: withLiveTables(detail, live) };
 }
 
 /**
@@ -82,22 +107,23 @@ function eventFor(race: Race, athlete: Athlete): MeetEvent | undefined {
   return own ?? race.open;
 }
 
-export default function Registration() {
-  const { detail: loaded, access } = useMeet();
+export default function Registration({ loaderData }: Route.ComponentProps) {
+  const loaded = loaderData.detail!;
+  const { access } = useMeet();
+  // Two coaches enter their own swimmers on this grid at the same time, and
+  // they write different rows — so each should see the other's ticks appear
+  // rather than find out at seeding. The meet's live connection now, rather
+  // than a poll — entries are DO-owned like the other three live tables.
+  const live = useMeetLive(loaded.meet.id, loaded);
   const pending = usePending();
   const send = useSend();
   // What the server has acknowledged, plus what this device has said since.
   const detail = useMemo(
-    () => applyPending(loaded, pending),
-    [loaded, pending],
+    () => applyPending(withLiveTables(loaded, live.snapshot), pending),
+    [loaded, live.snapshot, pending],
   );
   const { meet, events: meetEvents, entries, athletes } = detail;
   const { nameOrder } = useViewPrefs();
-
-  // Two coaches enter their own swimmers on this grid at the same time, and
-  // they write different rows — so each should see the other's ticks appear
-  // rather than find out at seeding.
-  useLiveData();
 
   const [params] = useSearchParams();
   const [search, setSearch] = useState("");

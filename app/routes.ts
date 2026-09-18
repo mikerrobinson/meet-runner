@@ -57,11 +57,41 @@ export default [
     // whoever the server says may edit. Setup used to be its own screen —
     // it's now the editable half of the meet's own page, because "set it up"
     // and "look at it" were never different places.
+    //
+    // The layout's own loader is metadata + access only (see meet-layout.tsx)
+    // — every child below reads or subscribes to whatever it actually needs,
+    // rather than all of it arriving once at the top. See migration-plan.md
+    // §3.3-3.4.
     route("meets/:meetId", "routes/meet-layout.tsx", [
       index("routes/meet-info.tsx"),
+      // Public, read-only: one event's declared entries, seeds and current
+      // results. New in this rewrite — see migration-plan.md §3.3. Ordered
+      // after the literal children below; React Router ranks a static
+      // segment over a dynamic one at the same depth regardless of
+      // declaration order, but the ordering still reads truer this way.
+      route(":eventId", "routes/event-detail.tsx"),
       route("entries", "routes/entries.tsx"),
-      route("results", "routes/results.tsx"),
-      route("run", "routes/run.tsx"),
+      route("results", "routes/results.tsx", [
+        index("routes/results-index.tsx"),
+        // by-event / by-swimmer / team-scores, as a path segment rather than
+        // `?view=`. `by-swimmer` isn't built yet — see results-view.tsx.
+        route(":view", "routes/results-view.tsx"),
+      ]),
+      route("admin", "routes/admin.tsx", [
+        index("routes/admin-index.tsx"),
+        // The heat desk: one heat's lane matrix, addressed the same way the
+        // timer already addresses a lane — event position, then heat number,
+        // both 1-based, neither a row id. This is the main routing rewrite
+        // for admin (migration-plan.md §3.3): what used to be every heat of
+        // the open event stacked is now one heat, navigated heat-to-heat.
+        route(":event/:heat", "routes/admin-heat.tsx"),
+      ]),
+      route("splits", "routes/splits.tsx", [
+        index("routes/splits-index.tsx"),
+        // Same addressing as admin's heat desk, replacing the
+        // loadProgress/saveProgress local-storage position.
+        route(":event/:heat", "routes/splits-heat.tsx"),
+      ]),
     ]),
   ]),
 
@@ -75,6 +105,10 @@ export default [
   // never touch the same row — and one endpoint, because what arrives is the
   // outbox's own `Write` rather than a shape invented for the URL.
   route("api/meets/:meetId/writes", "routes/api.meet.writes.ts"),
+
+  // The meet's live connection — see api.meet.live.ts. Not wired to any
+  // screen yet; that lands in steps 3 and 5 of migration-plan.md.
+  route("api/meets/:meetId/live", "routes/api.meet.live.ts"),
 
   // Timers. A meet-scoped grant, not an account.
   // One lane, one timer. The phone posts here and the browser brings whatever

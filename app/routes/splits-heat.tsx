@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router";
-import type { Route } from "./+types/run";
+import { Link, useNavigate } from "react-router";
+import type { Route } from "./+types/splits-heat";
 import type { SwimTime } from "~/lib/timing";
-import type { Progress } from "~/types/meet";
+import { requireDb, type SyncEnv } from "~/lib/api.server";
+import { meetDetail } from "~/lib/meets.server";
 import { LaneAssignSheet } from "~/components/LaneAssignSheet";
 import { LaneTile } from "~/components/LaneTile";
 import {
@@ -10,16 +11,11 @@ import {
   Button,
   EmptyState,
   Field,
-  Segmented,
   Sheet,
   TextInput,
 } from "~/components/ui";
 import { useElapsed, useWakeLock } from "~/hooks/use-stopwatch";
-import { useLiveData } from "~/hooks/use-live-data";
-import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
-import { mayEditMeet } from "~/lib/access";
-import { meetAccess } from "~/lib/access.server";
-import { addHeat } from "~/lib/meets.server";
+import { useMeetLive } from "~/hooks/use-meet-live";
 import {
   fromStopwatch,
   heatsOf,
@@ -27,16 +23,13 @@ import {
   swimTime,
   watchesOn,
 } from "~/lib/timing";
-import { loadProgress, saveProgress } from "~/lib/storage";
 
 import { formatClock, formatTime, parseTime } from "~/lib/time";
 import { enrollmentIndex } from "~/lib/roster";
-import { mayDecide } from "~/lib/access";
 import { applyPending } from "~/lib/pending";
 import { generateId } from "~/lib/id";
 import { usePending, useSend } from "~/state/outbox";
 import { useMeet } from "./meet-layout";
-import { RunControl } from "./run-control";
 import { useViewPrefs } from "~/state/view-prefs";
 import {
   byAthlete,
@@ -45,16 +38,16 @@ import {
   findAthlete,
   isDiving,
   orderedLanes,
+  withLiveTables,
   type MeetDetail,
   type MeetEvent,
   type NameOrder,
-  type Seed,
   type Athlete,
   type Watch,
 } from "~/types/meet";
 
 export function meta({}: Route.MetaArgs) {
-  return [{ title: "Run Meet · Swim Starts" }];
+  return [{ title: "Splits · Swim Starts" }];
 }
 
 /** How an official time was arrived at, for the lane sheet. */
@@ -66,53 +59,47 @@ const METHOD_LABEL: Record<string, string> = {
 };
 
 /**
- * Running a meet, from whichever seat you're in.
- *
- * Three people are working the same water at once and they need different
- * screens: an administrator signing off times at a table, a coach with a
- * multi-lane stopwatch on the deck, and a timer with one lane and one button
- * (that one lives at `/timer`, behind a QR code, with no account at all).
- *
- * The default follows the role, because the common case is that you want the
- * screen your job needs. An administrator can still switch — they often hold a
- * watch too — but a coach is never shown a sign-off desk they can't use.
+ * This screen's own read: meet setup from D1, the four live tables from the
+ * meet's Durable Object — see admin.tsx's loader doc comment; the same
+ * reasoning applies here.
  */
-/**
- * One more heat for an event, on request.
- *
- * The only seeding decision left for a person to make: entering a swimmer
- * seats them automatically, so this exists for the heats nobody's entry
- * creates on its own — an exhibition swim, a late addition before the
- * lineup's finished, room held for somebody not on the roster yet.
- *
- * Not a queued write: it's one deliberate tap at a desk with signal, and the
- * new heat number comes back from the server rather than being guessed.
- */
-export async function action({ params, request, context }: Route.ActionArgs) {
-  const env = context.cloudflare.env as SyncEnv;
-  const db = requireDb(env);
-  const user = await currentUser(request, env);
-  const access = await meetAccess(db, params.meetId, user);
-  if (!mayEditMeet(access)) {
-    throw new Response("Whoever is running this meet adds a heat.", {
-      status: 403,
-    });
-  }
+export async function loader({ params, context }: Route.LoaderArgs) {
+  const env = context.cloudflare.env;
+  const db = requireDb(env as SyncEnv);
+  const detail = await meetDetail(db, params.meetId);
+  if (!detail) return { detail: null };
 
-  const { eventId } = (await request.json()) as { eventId: string };
-  const heat = await addHeat(db, params.meetId, eventId);
-  return { ok: true, heat };
+  const live = await env.MEET_DO.getByName(params.meetId).getSnapshot(params.meetId);
+  return { detail: withLiveTables(detail, live) };
 }
 
-export default function RunMeet() {
-  const { detail: loaded, access } = useMeet();
+/**
+ * The multi-lane stopwatch a coach runs the deck from — one heat,
+ * addressed as `/meets/:meetId/splits/:event/:heat` the same way the timer
+ * already addresses a lane, replacing the `loadProgress`/`saveProgress`
+ * local-storage position (migration-plan.md §3.3). Same screen, same
+ * writes, same one-heat-at-a-time shape it always had — only where "which
+ * heat" lives has moved.
+ *
+ * Kept live by `useMeetLive` instead of the polling `useLiveData` this
+ * screen used to call — the loader's read seeds it, the DO's broadcasts keep
+ * it current, and this device's own pending writes are folded on top the
+ * same way they always were (migration-plan.md §3.4/§5).
+ */
+export default function SplitsHeat({ loaderData, params }: Route.ComponentProps) {
+  const live = useMeetLive(loaderData.detail?.meet.id, loaderData.detail ?? undefined);
+  const { access } = useMeet();
   const pending = usePending();
   const send = useSend();
+  // The parent (meet-layout.tsx) already renders its own "no such meet" state
+  // instead of this Outlet when the meet doesn't exist, same guarantee every
+  // other leaf under it trusts.
+  const loaded = loaderData.detail!;
   const detail = useMemo(
-    () => applyPending(loaded, pending),
-    [loaded, pending],
+    () => applyPending(withLiveTables(loaded, live.snapshot), pending),
+    [loaded, live.snapshot, pending],
   );
-  const { meetId } = useParams();
+  const navigate = useNavigate();
   const { laneLayout: layout, timerId, nameOrder } = useViewPrefs();
 
   /**
@@ -137,10 +124,9 @@ export default function RunMeet() {
    */
   const myRole = access.admin ? "admin" : access.userId ? "coach" : "timer";
 
-  // Both halves of this screen are watching other people work: the desk for
-  // times arriving from the phones, the deck for a lane reseated at the desk.
-  // One call covers both, since the control view renders inside this one.
-  useLiveData();
+  // Watching other people work: the desk for a lane reseated there, another
+  // coach's stopwatch for a time this device hasn't taken yet — now the
+  // meet's live connection (`live`, above) rather than a poll.
   const meet = detail.meet;
   const roster = detail.athletes;
 
@@ -161,26 +147,16 @@ export default function RunMeet() {
     /** Lanes that already had a time when this run started. */
     alreadyTimed: number[];
   } | null>(null);
-  const [view, setView] = useState<"control" | "stopwatch" | null>(null);
-  const showing = view ?? (access.admin ? "control" : "stopwatch");
 
   const [editingLane, setEditingLane] = useState<number | null>(null);
   const [assigningLane, setAssigningLane] = useState<number | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
 
-  // Where this device is in the running order. Device state, read back from
-  // storage once the meet is known — an administrator signing off event 4
-  // while the deck swims event 6 is the normal case, not a conflict.
-  const [progress, setProgressState] = useState<Progress>({
-    eventIndex: 0,
-    heatIndex: 0,
-  });
-  useEffect(() => {
-    if (meetId) setProgressState(loadProgress(meetId));
-  }, [meetId]);
-
+  // Where the URL puts this device in the running order. An administrator
+  // signing off event 4 while the deck swims event 6 is the normal case, not
+  // a conflict — each tab's own address says where it is.
   const eventIndex = Math.min(
-    progress.eventIndex,
+    Math.max(0, (Number(params.event) || 1) - 1),
     Math.max(0, detail.events.length - 1),
   );
   const event = detail.events[eventIndex];
@@ -188,7 +164,8 @@ export default function RunMeet() {
     () => (event ? heatsOf(detail, event.id) : []),
     [detail, event],
   );
-  const heatIndex = Math.min(progress.heatIndex, Math.max(0, heats.length - 1));
+  const heatNo = Number(params.heat) || 1;
+  const heatIndex = Math.max(0, heats.indexOf(heatNo));
   const heat: number | undefined = heats[heatIndex];
 
   /** The swims in the heat on screen. A lane with nobody in it isn't one. */
@@ -277,21 +254,37 @@ export default function RunMeet() {
     if (!heatComplete) setConfirmReset(false);
   }, [heatComplete]);
 
-  const goToHeat = (nextEvent: number, nextHeat: number) => {
-    if (!meetId) return;
-    const next = { eventIndex: nextEvent, heatIndex: nextHeat };
-    setProgressState(next);
-    saveProgress(meetId, next);
+  /**
+   * Move to a different heat, by event and heat index (0-based) rather than
+   * event position and heat number — the shape the arrows below already
+   * think in. Clamped and resolved to a heat *number* only at the last
+   * moment, since that's what the URL wants.
+   */
+  const goToHeat = (nextEventIndex: number, nextHeatIndex: number) => {
+    const clampedEventIndex = Math.min(
+      Math.max(nextEventIndex, 0),
+      Math.max(0, detail.events.length - 1),
+    );
+    const nextEvent = detail.events[clampedEventIndex];
+    if (!nextEvent) return;
+    const nextHeats = heatsOf(detail, nextEvent.id);
+    const clampedHeatIndex = Math.min(
+      Math.max(nextHeatIndex, 0),
+      Math.max(0, nextHeats.length - 1),
+    );
+    const targetHeat = nextHeats[clampedHeatIndex] ?? 1;
+
     // Never carry a running clock across a heat change.
     setClock(null);
     setEditingLane(null);
     setAssigningLane(null);
+    navigate(`/meets/${meet.id}/splits/${nextEvent.position + 1}/${targetHeat}`);
   };
 
   const nextHeat = () => {
     if (heatIndex + 1 < heats.length) {
       goToHeat(eventIndex, heatIndex + 1);
-    } else if (meet && eventIndex + 1 < detail.events.length) {
+    } else if (eventIndex + 1 < detail.events.length) {
       goToHeat(eventIndex + 1, 0);
     }
   };
@@ -301,45 +294,17 @@ export default function RunMeet() {
     else if (eventIndex > 0) goToHeat(eventIndex - 1, 0);
   };
 
-  // The switcher only exists for people who have a real choice: an
-  // administrator who also holds a watch. Showing it to a coach would offer a
-  // screen whose every button the server refuses.
-  const switcher = mayDecide(access) ? (
-    <div className="mb-3">
-      <Segmented
-        value={showing}
-        onChange={(next) => setView(next as "control" | "stopwatch")}
-        options={[
-          { value: "control", label: "Control" },
-          { value: "stopwatch", label: "Stopwatch" },
-        ]}
-      />
-    </div>
-  ) : null;
-
-  if (showing === "control") {
-    return (
-      <div>
-        {switcher}
-        <RunControl />
-      </div>
-    );
-  }
-
   if (!event) {
     return (
-      <>
-        {switcher}
-        <EmptyState title="No events yet">
-          <Link
-            to={`/meets/${meet.id}`}
-            className="font-semibold text-blue-600 underline"
-          >
-            Add events under Info
-          </Link>{" "}
-          before running the meet.
-        </EmptyState>
-      </>
+      <EmptyState title="No events yet">
+        <Link
+          to={`/meets/${meet.id}`}
+          className="font-semibold text-blue-600 underline"
+        >
+          Add events under Info
+        </Link>{" "}
+        before running the meet.
+      </EmptyState>
     );
   }
 
@@ -348,7 +313,6 @@ export default function RunMeet() {
 
   return (
     <div className="space-y-3">
-      {switcher}
       {/* Event navigation */}
       <div className="flex items-center gap-2">
         <Button
@@ -750,7 +714,7 @@ function LaneSheet({
         <div className="space-y-3">
           <Field
             label="Time"
-            hint={'Just digits \u2014 "3045" is 30.45, "11127" is 1:11.27.'}
+            hint={'Just digits — "3045" is 30.45, "11127" is 1:11.27.'}
           >
             <TextInput
               value={value}

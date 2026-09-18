@@ -4,7 +4,6 @@ import {
   errorResponse,
   json,
   requireDb,
-  type SyncEnv,
 } from "~/lib/api.server";
 import {
   appBaseOf,
@@ -13,19 +12,10 @@ import {
   grantFor,
   grantToken,
 } from "~/lib/grants.server";
-import {
-  deleteWatch,
-  ensureLane,
-  meetDetail,
-  putWatch,
-  seedAt,
-  setExhibition,
-  setSeed,
-} from "~/lib/meets.server";
+import { meetDetail } from "~/lib/meets.server";
 import { slotTimerId } from "~/lib/timing";
-import { TIMERS_PER_LANE } from "~/types/meet";
+import { TIMERS_PER_LANE, type Seed } from "~/types/meet";
 import { putAthlete } from "~/lib/athletes.server";
-import { enrolVisitor } from "~/lib/teams.server";
 import { generateId } from "~/lib/id";
 import {
   TIMER_ACTIONS,
@@ -66,9 +56,15 @@ import {
  * The addressing is the meet's own numbering — event 7, heat 1, lane 3, as the
  * screen says it — rather than row ids. That keeps a cookie path short, and it
  * is the only vocabulary a person behind a lane ever sees.
+ *
+ * **The cookie mechanism above is unchanged; what's behind it isn't.** Seats,
+ * exhibition flags and watches now go to the meet's Durable Object instead of
+ * straight to D1 — same idea as `api.meet.writes.ts`, so an admin screen
+ * connected to that DO sees a submitted time land immediately rather than on
+ * its next poll. See migration-plan.md §3.4.
  */
 export async function action({ params, request, context }: Route.ActionArgs) {
-  const env = context.cloudflare.env as SyncEnv;
+  const env = context.cloudflare.env;
   try {
     if (request.method !== "POST") throw new SyncError("Use POST", 405);
 
@@ -117,6 +113,11 @@ export async function action({ params, request, context }: Route.ActionArgs) {
      * Read once, after establishing there is something to do — a phone with an
      * empty pocket shouldn't cost a meet read, and on a deck this endpoint is
      * hit by six phones a heat.
+     *
+     * Still a plain D1 read: events, teams and lane count are meet setup,
+     * decided before race day, and the DO doesn't own them. Only the seed's
+     * own state — who's in it, its watches — has moved to the meet's DO; see
+     * the module doc above.
      */
     const detail = await meetDetail(db, grant.meetId);
     if (!detail) throw new SyncError("That meet is no longer on the server", 404);
@@ -135,9 +136,13 @@ export async function action({ params, request, context }: Route.ActionArgs) {
       throw new SyncError(`There is no lane ${lane}`, 400);
     }
 
+    const stub = env.MEET_DO.getByName(grant.meetId);
+
     // The swim this lane is, if anybody has said who is in it. A `seat`
-    // message below may be about to create one.
-    let seed = await seedAt(db, event.id, heatNo, lane);
+    // message below may be about to create one; if none of this request's
+    // messages do, `stub.ensureLane` (below) resolves this the same way a
+    // pre-fetch would have, since it's idempotent on an existing lane.
+    let seed: Seed | null = null;
 
     let applied = 0;
 
@@ -154,29 +159,44 @@ export async function action({ params, request, context }: Route.ActionArgs) {
         // stable from this moment on.
         if (!athleteId && parsed.name) {
           const { firstName, lastName } = splitTypedName(parsed.name);
-          athleteId = generateId();
-          await putAthlete(db, {
-            id: athleteId,
-            firstName,
-            lastName,
-            gender: "F",
-            // No birth date, ever, from this route. A timer is never asked
-            // for one, and a blank field on a deck gets guessed at.
-          });
-
           // The team the timer tapped, by its place in this meet's own list —
           // a timer may say "that's a Horizon swimmer", not which team
           // document to write into.
           const team = detail.teams[parsed.team];
-          if (team) await enrolVisitor(db, grant.meetId, team.id, athleteId);
+          if (team) {
+            // Athletes and enrollments are global, not DO-owned — the deck-
+            // entry exception (migration-plan.md §3.1). This goes straight to
+            // D1 and comes back through the DO purely to update its roster
+            // cache and broadcast the new name to everyone connected.
+            const athlete = await stub.addWalkupAthlete({
+              meetId: grant.meetId,
+              teamId: team.id,
+              firstName,
+              lastName,
+            });
+            athleteId = athlete.id;
+          } else {
+            // No team to enrol into — still mint the person, unenrolled,
+            // same as before.
+            const athlete = await putAthlete(db, {
+              firstName,
+              lastName,
+              gender: "F",
+              // No birth date, ever, from this route. A timer is never asked
+              // for one, and a blank field on a deck gets guessed at.
+            });
+            athleteId = athlete.id;
+          }
         }
 
         if (athleteId) {
-          seed = await setSeed(db, grant.meetId, {
+          seed = await stub.seat({
+            meetId: grant.meetId,
             eventId: event.id,
             heat: heatNo,
             lane,
             athleteId,
+            seedId: generateId(),
           });
           applied += 1;
         }
@@ -192,13 +212,9 @@ export async function action({ params, request, context }: Route.ActionArgs) {
         // has named — flagging a swim before anybody's said who's in it is
         // not a mistake to refuse.
         if (!seed) {
-          seed = await ensureLane(db, grant.meetId, {
-            eventId: event.id,
-            heat: heatNo,
-            lane,
-          });
+          seed = await stub.ensureLane({ meetId: grant.meetId, eventId: event.id, heat: heatNo, lane });
         }
-        await setExhibition(db, seed.id, parsed.exhibition);
+        await stub.setExhibition({ meetId: grant.meetId, seedId: seed.id, exhibition: parsed.exhibition });
         applied += 1;
       }
     }
@@ -221,17 +237,13 @@ export async function action({ params, request, context }: Route.ActionArgs) {
        * afterwards when the swim itself cannot be re-run.
        *
        * So the swim is created with nobody in it and the watch hangs off that.
-       * `setSeed` keeps this row's id when a name finally arrives — from the
+       * `seat` keeps this row's id when a name finally arrives — from the
        * blocks a heat later, or from the desk assigning the lane — so the time
        * is already attached to the swim it belongs to and there is nothing to
        * reconcile by hand.
        */
       if (!seed) {
-        seed = await ensureLane(db, grant.meetId, {
-          eventId: event.id,
-          heat: heatNo,
-          lane,
-        });
+        seed = await stub.ensureLane({ meetId: grant.meetId, eventId: event.id, heat: heatNo, lane });
       }
 
       /**
@@ -287,11 +299,12 @@ export async function action({ params, request, context }: Route.ActionArgs) {
         if (slot > columns || (submit && timeMs === undefined)) {
           // Only a sheet retires a watch. A start says nothing about the
           // columns it didn't mention.
-          if (submit) await deleteWatch(db, seed.id, id);
+          if (submit) await stub.dropWatch({ meetId: grant.meetId, seedId: seed.id, timerId: id });
           continue;
         }
 
-        await putWatch(db, grant.meetId, {
+        await stub.recordWatch({
+          meetId: grant.meetId,
           seedId: seed.id,
           timerId: id,
           // A grant is a lane and a stopwatch, nothing else — there is no

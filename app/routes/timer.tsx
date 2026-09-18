@@ -30,13 +30,7 @@ import {
   queueState,
 } from "~/lib/timer-queue";
 import type { LaneRef } from "~/lib/timer-messages";
-
-/**
- * How often this phone asks what changed. Short, because the thing it's
- * watching for — a name corrected behind the blocks — matters in the minute
- * before a race and not at all afterwards.
- */
-const SNAPSHOT_POLL_MS = 10000;
+import { useMeetChanges } from "~/hooks/use-meet-changes";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Timing · Swim Starts" }];
@@ -198,20 +192,27 @@ export default function Timer({ params }: Route.ComponentProps) {
    * never appeared. On a deck that means timing the wrong person with no way
    * to find out.
    *
+   * Used to be a blind 10s poll; now it's the meet's own live connection
+   * (migration-plan.md §3.4) — this phone doesn't keep the DO's snapshot
+   * itself the way `useMeetLive` does for admin/splits, it just re-reads its
+   * own purpose-built `fetchSnapshot` whenever the connection says something
+   * happened, which is a much closer match for "a name corrected behind the
+   * blocks" than a fixed interval ever was.
+   *
    * Only while the phone is being looked at: a pocketed screen has nobody
-   * reading it, and its timers get throttled to uselessness anyway.
+   * reading it, and its timers get throttled to uselessness anyway. Coming
+   * back to the tab refreshes immediately rather than waiting for the next
+   * change, in case something happened while it was out of sight.
    */
+  useMeetChanges(meetId, () => {
+    if (document.visibilityState === "visible") void load();
+  });
   useEffect(() => {
     const refresh = () => {
-      if (document.visibilityState !== "visible") return;
-      void load();
+      if (document.visibilityState === "visible") void load();
     };
-    const timer = setInterval(refresh, SNAPSHOT_POLL_MS);
     document.addEventListener("visibilitychange", refresh);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", refresh);
-    };
+    return () => document.removeEventListener("visibilitychange", refresh);
   }, [load]);
 
   /* ------------------------------------------------------------- stopwatch */

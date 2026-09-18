@@ -1,15 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { useFetcher } from "react-router";
+import { useFetcher, useNavigate } from "react-router";
+import type { Route } from "./+types/admin-heat";
 import { Button, Card, EmptyState, SectionTitle, TextInput } from "~/components/ui";
 import { LaneAssignSheet } from "~/components/LaneAssignSheet";
 import { formatClock, formatTime, parseTime } from "~/lib/time";
 import { enrollmentIndex } from "~/lib/roster";
 import { generateId } from "~/lib/id";
 import {
-  eventClosed,
   fromStopwatch,
   heatClosed,
-  heatProgress,
   heatsOf,
   laneProgress,
   laneTime,
@@ -20,11 +19,10 @@ import {
   swimTime,
   watchesOn,
 } from "~/lib/timing";
-import { applyPending } from "~/lib/pending";
-import { usePending, useSend } from "~/state/outbox";
+import { useSend } from "~/state/outbox";
 import type { Write } from "~/lib/outbox";
 import type { LaneProgress, LaneTime } from "~/lib/timing";
-import { useMeet } from "./meet-layout";
+import { useAdmin } from "./admin";
 import { useViewPrefs } from "~/state/view-prefs";
 import {
   displayName,
@@ -32,135 +30,154 @@ import {
   findAthlete,
   type MeetDetail,
   type MeetEvent,
-  type Seed,
   type ResultStatus,
   type WatchRole,
 } from "~/types/meet";
 
+export function meta({}: Route.MetaArgs) {
+  return [{ title: "Admin · Swim Starts" }];
+}
+
 /**
- * The desk the meet is run from.
+ * One heat's desk — `/meets/:meetId/admin/:event/:heat`.
  *
- * Not a stopwatch — the coaches and timers have those. This is the screen
- * somebody sits behind with the running order in front of them, watching times
- * arrive from three phones on a lane and deciding what stands. Nothing here is
- * a race against the clock, so it's dense and readable rather than big and
- * thumb-shaped: an administrator is at a table with a tablet, not on the
- * blocks with a phone.
+ * Addressed the same way the timer already addresses a lane: the event's
+ * place in the running order and the heat number, both 1-based, neither a
+ * row id. This used to be every heat of the open event stacked and
+ * scrolled; now it's one heat, with heat-to-heat navigation the same shape
+ * `splits.tsx` already used — migration-plan.md §3.3's "main routing
+ * rewrite" for admin.
  *
- * Everything it shows is derived. The watches are what the timers sent, the
- * proposed time is what those work out to, and "official" means every lane
- * that swam has been signed off — so nothing on this screen can disagree with
- * anything else in the meet.
+ * Everything shown is still derived: the watches are what the timers sent,
+ * the proposed time is what those work out to, and "official" means every
+ * lane that swam has been signed off.
  */
-export function RunControl() {
-  const { detail: loaded, access } = useMeet();
-  const pending = usePending();
+export default function AdminHeat({ params }: Route.ComponentProps) {
+  // Already live-merged and pending-overlaid by the shell — see admin.tsx.
+  const { detail, access } = useAdmin();
   const send = useSend();
-  const detail = useMemo(() => applyPending(loaded, pending), [loaded, pending]);
-  const meet = detail.meet;
   const { nameOrder } = useViewPrefs();
-  const addHeat = useFetcher();
+  const navigate = useNavigate();
+  const addHeat = useFetcher<{ ok: boolean; heat: number }>();
 
-  // Only while a thumb is actually down somewhere in the meet.
-  const now = useTicker(
-    detail.watches.some(
-      (w) => w.timeMs === undefined && w.startedAt !== undefined,
-    ),
-  );
-
-  const [openEvent, setOpenEvent] = useState<string | null>(
-    detail.events[0]?.id ?? null,
-  );
   const [assigning, setAssigning] = useState<{ heat: number; lane: number } | null>(
     null,
   );
-
   const roster = detail.athletes;
 
-  const event = detail.events.find((e) => e.id === openEvent) ?? detail.events[0];
-  // A heat is the distinct heats across an event's seeds, so one with nothing
-  // in it cannot arise — and "no heats yet" means "nothing seeded yet".
+  const eventNo = Number(params.event);
+  const heatNo = Number(params.heat);
+  const event = detail.events.find((e) => e.position === eventNo - 1);
   const heats = useMemo(
     () => (event ? heatsOf(detail, event.id) : []),
     [detail, event],
   );
 
-  if (detail.events.length === 0) {
-    return (
-      <EmptyState title="No events yet">
-        Set the running order under Info before running the meet.
-      </EmptyState>
-    );
+  // A heat just added lands here automatically rather than leaving the desk
+  // to find it on the rail.
+  const addedHeat = addHeat.data?.ok ? addHeat.data.heat : null;
+  useEffect(() => {
+    if (addedHeat != null && event) {
+      navigate(`/meets/${detail.meet.id}/admin/${event.position + 1}/${addedHeat}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addedHeat]);
+
+  const goTo = (eventPos: number, heat: number) =>
+    navigate(`/meets/${detail.meet.id}/admin/${eventPos}/${heat}`);
+
+  const heatIndex = heats.indexOf(heatNo);
+
+  const prevHeat = () => {
+    if (!event) return;
+    if (heatIndex > 0) return goTo(eventNo, heats[heatIndex - 1]);
+    const prevEvent = detail.events[event.position - 1];
+    if (!prevEvent) return;
+    const prevHeats = heatsOf(detail, prevEvent.id);
+    goTo(prevEvent.position + 1, prevHeats[prevHeats.length - 1] ?? 1);
+  };
+
+  const nextHeat = () => {
+    if (!event) return;
+    if (heatIndex + 1 < heats.length) return goTo(eventNo, heats[heatIndex + 1]);
+    const nextEvent = detail.events[event.position + 1];
+    if (!nextEvent) return;
+    const nextHeats = heatsOf(detail, nextEvent.id);
+    goTo(nextEvent.position + 1, nextHeats[0] ?? 1);
+  };
+
+  const hasPrev =
+    !!event && (heatIndex > 0 || event.position > 0);
+  const hasNext =
+    !!event && (heatIndex + 1 < heats.length || event.position + 1 < detail.events.length);
+
+  if (!event) {
+    return <EmptyState title="No such event">Pick one from the list.</EmptyState>;
   }
 
   return (
     <>
-      {/* Two panels side by side once there's room: the running order stays
-          put on the left while the heat you're working fills the rest. On a
-          phone they stack, because a rail and a table can't share 390px. */}
-      <div className="lg:grid lg:grid-cols-[minmax(15rem,28%)_minmax(0,1fr)] lg:gap-4">
-        <EventRail detail={detail} openEvent={event?.id} onOpen={setOpenEvent} />
-
-        <div className="mt-4 min-w-0 space-y-4 lg:mt-0">
-          {!event ? null : (
-            <>
-              {/* Heats fill themselves as swimmers are entered — this is only
-                  for the ones nobody's entry creates on its own: an
-                  exhibition swim, room held before the lineup's settled. */}
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-sm text-slate-500">
-                  {(detail.entries[event.id] ?? []).length} entered
-                  {heats.length === 0 ? ", no heats yet" : ""}
-                </p>
-                <Button
-                  size="sm"
-                  onClick={() =>
-                    addHeat.submit(
-                      { eventId: event.id },
-                      {
-                        method: "post",
-                        action: `/meets/${meet.id}/run`,
-                        encType: "application/json",
-                      },
-                    )
-                  }
-                >
-                  {addHeat.state === "submitting" ? "Adding…" : "+ Add heat"}
-                </Button>
-              </div>
-
-              {heats.map((heat) => (
-                <HeatCard
-                  key={heat}
-                  detail={detail}
-                  event={event}
-                  heat={heat}
-                  nameOrder={nameOrder}
-                  send={send}
-                  me={access.userId}
-                  now={now}
-                  onAssign={(lane) => setAssigning({ heat, lane })}
-                />
-              ))}
-            </>
-          )}
+      <div className="flex items-center justify-between gap-2">
+        <Button size="sm" onClick={prevHeat} disabled={!hasPrev}>
+          ‹ Heat
+        </Button>
+        <p className="text-sm text-slate-500">
+          {(detail.entries[event.id] ?? []).length} entered
+          {heats.length === 0 ? ", no heats yet" : ""}
+        </p>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            onClick={() =>
+              addHeat.submit(
+                { eventId: event.id },
+                {
+                  method: "post",
+                  action: `/meets/${detail.meet.id}/admin`,
+                  encType: "application/json",
+                },
+              )
+            }
+          >
+            {addHeat.state === "submitting" ? "Adding…" : "+ Add heat"}
+          </Button>
+          <Button size="sm" onClick={nextHeat} disabled={!hasNext}>
+            Heat ›
+          </Button>
         </div>
       </div>
+
+      {heatNo > 0 && heats.includes(heatNo) ? (
+        <HeatCard
+          detail={detail}
+          event={event}
+          heat={heatNo}
+          nameOrder={nameOrder}
+          send={send}
+          me={access.userId}
+          onAssign={(lane) => setAssigning({ heat: heatNo, lane })}
+        />
+      ) : (
+        <EmptyState title="No such heat">
+          {heats.length > 0
+            ? "Pick a heat with the arrows above."
+            : "Nobody is in this event yet — add a heat, or wait for entries to seat one."}
+        </EmptyState>
+      )}
 
       {assigning && (
         <LaneAssignSheet
           detail={detail}
-          eventId={event?.id ?? ""}
+          eventId={event.id}
           heat={assigning.heat}
           lane={assigning.lane}
           roster={roster}
           enrollments={enrollmentIndex(detail.enrollments)}
           nameOrder={nameOrder}
           onAssign={(athleteId) => {
-            if (!event) return;
             send({
               kind: "seed",
-              meetId: meet.id,
+              meetId: detail.meet.id,
               eventId: event.id,
               heat: assigning.heat,
               lane: assigning.lane,
@@ -179,78 +196,6 @@ export function RunControl() {
   );
 }
 
-/**
- * The running order, down the side.
- *
- * A list rather than a wrapping block of buttons. Twenty-four events laid out
- * as chips reflow into a wall of different-width targets that's genuinely hard
- * to read down — and reading down is the whole job, because the question an
- * administrator asks over and over is "what's left?".
- */
-function EventRail({
-  detail,
-  openEvent,
-  onOpen,
-}: {
-  detail: MeetDetail;
-  openEvent: string | undefined;
-  onOpen: (id: string) => void;
-}) {
-  const done = detail.events.filter((e) => eventClosed(detail, e.id)).length;
-
-  return (
-    <Card className="lg:sticky lg:top-4 lg:max-h-[calc(100vh-var(--app-chrome-top)-var(--app-chrome-bottom)-2rem)] lg:overflow-y-auto">
-      <SectionTitle>
-        {done} of {detail.events.length} official
-      </SectionTitle>
-
-      <ol className="-mx-2">
-        {detail.events.map((event, index) => {
-          const official = eventClosed(detail, event.id);
-          const open = event.id === openEvent;
-          const entered = (detail.entries[event.id] ?? []).length;
-          return (
-            <li key={event.id}>
-              <button
-                type="button"
-                onClick={() => onOpen(event.id)}
-                aria-current={open ? "true" : undefined}
-                className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm transition-colors ${
-                  open
-                    ? "bg-blue-600 text-white"
-                    : "hover:bg-slate-100 dark:hover:bg-slate-800"
-                }`}
-              >
-                <span
-                  className={`w-5 shrink-0 text-right tabular-nums ${
-                    open ? "text-white/70" : "text-slate-400"
-                  }`}
-                >
-                  {index + 1}
-                </span>
-                <span className="min-w-0 flex-1 truncate font-medium">
-                  {eventName(event)}
-                </span>
-                <span
-                  className={`shrink-0 text-xs tabular-nums ${
-                    open
-                      ? "text-white/80"
-                      : official
-                        ? "font-semibold text-emerald-600 dark:text-emerald-400"
-                        : "text-slate-500"
-                  }`}
-                >
-                  {official ? "✓" : entered > 0 ? entered : "—"}
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ol>
-    </Card>
-  );
-}
-
 function HeatCard({
   detail,
   event,
@@ -258,7 +203,6 @@ function HeatCard({
   nameOrder,
   send,
   me,
-  now,
   onAssign,
 }: {
   detail: MeetDetail;
@@ -268,13 +212,19 @@ function HeatCard({
   send: (write: Write) => void;
   /** Whoever is at the desk — the watch they type is filed under them. */
   me: string | null;
-  /** A one-second beat, for drawing stopwatches that are still running. */
-  now: number;
   onAssign: (lane: number) => void;
 }) {
   const seeds = seedsForHeat(detail, event.id, heat);
-  const progress = heatProgress(detail, event.id, heat);
   const closed = heatClosed(detail, event.id, heat);
+
+  // Only while a thumb is actually down somewhere in this heat.
+  const now = useTicker(
+    seeds.some((s) =>
+      watchesOn(detail, s.id).some(
+        (w) => w.timeMs === undefined && w.startedAt !== undefined,
+      ),
+    ),
+  );
 
   /**
    * Where the keyboard goes next, without every `LaneRow` needing to know
@@ -485,12 +435,7 @@ function HeatCard({
 
 /**
  * Re-render on a one-second beat, and only while a stopwatch is actually
- * running somewhere in this meet.
- *
- * One interval for the whole screen rather than one per lane, and none at all
- * for the ninety per cent of a meet when nothing is in the water — a desk
- * tablet shouldn't re-render a twenty-four event programme every second to
- * animate nothing.
+ * running somewhere in this heat.
  */
 function useTicker(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
@@ -505,13 +450,6 @@ function useTicker(active: boolean): number {
 
 const STATUSES: ResultStatus[] = ["OK", "DQ", "NS"];
 
-/**
- * Where a lane's time came from, in the fewest words that still answer it.
- *
- * The desk's job is deciding what stands, and it cannot do that from a number
- * alone: three timers' median and one coach's stopwatch look identical until
- * something says which it is.
- */
 /**
  * How the time box reads at a glance, before anybody reads the number.
  *
@@ -703,7 +641,7 @@ function LaneRow({
       seedId: seed.id,
       status,
       // A no-show or a disqualification needn't have a time behind it.
-      timeMs: status === "OK" ? (accepted?.timeMs ?? 0) : (accepted?.timeMs ?? 0),
+      timeMs: accepted?.timeMs ?? 0,
     });
   };
 
@@ -807,13 +745,13 @@ function LaneRow({
           )}
 
           {/* A stopwatch that is still going.
-              
+
               The desk can see the race it is watching, so the number itself is
               not the point — what it answers is which lanes are actually being
               timed, and, once a heat is long over, which timer is still
               holding a clock they forgot to stop. That one is invisible
               otherwise: the lane simply never completes and nobody knows why.
-              
+
               Counted from the server's clock, which is why the phone's start
               was translated onto it on the way in. */}
           {running.map((a) => (
@@ -827,7 +765,7 @@ function LaneRow({
             </span>
           ))}
           {/* Each watch with a way to drop it.
-              
+
               This is the desk's real power over a time, and it replaced a
               number typed onto the call that silently outranked everything.
               Throwing out the reading you don't believe says which one you
@@ -885,12 +823,12 @@ function LaneRow({
       </td>
 
       {/* Always a box, never a label that turns into one.
-          
+
           The desk's job on every row is the same — read the time, change it if
           it's wrong — and an Edit button made the second of those a different
           mode to enter. A box that already holds the number is one tap
           shorter and reads the same whether or not you're about to touch it.
-          
+
           Its colour is the lane's timing, which the number alone can't say:
           blank-and-grey is nobody covering this lane, amber is watches running
           or some in, green is the timing table done. */}

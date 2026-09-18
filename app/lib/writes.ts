@@ -13,7 +13,7 @@
  * contract, not a detail of how the queue happens to work.
  */
 
-import type { ResultStatus, WatchRole } from "~/types/meet";
+import type { Athlete, ResultStatus, WatchRole } from "~/types/meet";
 
 /** One thing somebody did. */
 export type Write =
@@ -83,4 +83,20 @@ export type Write =
        */
       auto?: boolean;
     }
-  | { kind: "unresult"; meetId: string; seedId: string }
+  | { kind: "unresult"; meetId: string; seedId: string };
+
+/**
+ * A name added behind the blocks (`MeetDurableObject.addWalkupAthlete`) —
+ * not a `Write`, since declaring one is a D1 write on global tables
+ * (athletes, enrollments), not a change to anything the meet's DO owns. It
+ * still needs to reach every connected client the moment it happens, the
+ * same way a `Write` does, so it travels the same broadcast channel.
+ */
+export interface WalkupBroadcast {
+  kind: "walkup";
+  meetId: string;
+  athlete: Athlete;
+}
+
+/** Everything that can arrive over a meet's live connection. */
+export type MeetBroadcast = Write | WalkupBroadcast;

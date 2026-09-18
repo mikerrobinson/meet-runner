@@ -3,35 +3,43 @@ import type { Route } from "./+types/meet-layout";
 import { EmptyState } from "~/components/ui";
 import { currentUser, requireDb, type SyncEnv } from "~/lib/api.server";
 import { meetAccess, type MeetAccess } from "~/lib/access.server";
-import { meetDetail } from "~/lib/meets.server";
-import type { MeetDetail } from "~/types/meet";
+import { getMeet } from "~/lib/meets.server";
+import type { Meet } from "~/types/meet";
 
 /**
- * Everything under `/meets/:meetId`, loaded once.
+ * Everything under `/meets/:meetId`: the meet's own metadata, and what you
+ * may do to it. Nothing more.
  *
- * The meet and what you may do to it come back together, from the same
- * request. Children read them with `useMeet()` rather than fetching again —
- * nested loaders run in parallel, so one read here beats five below, and more
- * importantly there is only one answer in play. The screens used to render
- * from a copy on the device while a separate request decided permissions from
- * the copy on the server; when those disagreed you lost the editing controls
- * on your own meet.
+ * This used to also load the whole `MeetDetail` — every event, entry, seed,
+ * watch and result — for every screen under a meet, whether or not that
+ * screen touched any of it. That's the anti-pattern migration-plan.md §3.3
+ * calls out independent of polling: a meet's programme rarely changes and is
+ * cheap to read once here, but the live tables are exactly what shouldn't be
+ * fetched this way on every navigation. Each child route now reads or
+ * subscribes to only what it actually needs — a plain `meetDetail` read where
+ * that's still the simplest thing (entries, results, meet-info), the meet's
+ * Durable Object where it's the live, multi-writer state (admin, splits,
+ * timer).
+ *
+ * The meet and the access decision still come back together, from the same
+ * request — that pairing is what stops a screen from rendering "you may edit
+ * this" while the server would refuse the write, and vice versa.
  */
 export async function loader({ params, request, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env as SyncEnv;
   const db = requireDb(env);
   const user = await currentUser(request, env);
 
-  const [detail, access] = await Promise.all([
-    meetDetail(db, params.meetId),
+  const [meet, access] = await Promise.all([
+    getMeet(db, params.meetId),
     meetAccess(db, params.meetId, user),
   ]);
 
-  return { detail, access };
+  return { meet, access };
 }
 
 export interface MeetContext {
-  detail: MeetDetail;
+  meet: Meet;
   access: MeetAccess;
 }
 
@@ -42,15 +50,18 @@ export interface MeetContext {
  * It throws rather than returning null: the layout has already established the
  * meet exists, so a child reaching here without one is a routing bug, not a
  * state to render around.
+ *
+ * Doesn't carry the meet's events/entries/seeds/watches/results any more —
+ * see the loader's doc comment. A child that needs those reads them itself.
  */
 export function useMeet(): MeetContext {
   const data = useRouteLoaderData<typeof loader>("routes/meet-layout");
-  if (!data?.detail) throw new Error("useMeet used outside a meet route");
-  return { detail: data.detail, access: data.access };
+  if (!data?.meet) throw new Error("useMeet used outside a meet route");
+  return { meet: data.meet, access: data.access };
 }
 
 export default function MeetLayout({ loaderData }: Route.ComponentProps) {
-  if (!loaderData.detail) {
+  if (!loaderData.meet) {
     return (
       <EmptyState title="No such meet">
         It may have been deleted.{" "}

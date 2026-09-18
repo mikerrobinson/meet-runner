@@ -130,19 +130,6 @@ export function orderedLanes(laneCount: number, layout: LaneLayout): number[] {
   return layout === "list-desc" ? lanes.reverse() : lanes;
 }
 
-/**
- * Where a device has got to in the running order.
- *
- * Device state, kept in `storage.ts` alongside the lane layout. Three people
- * work one meet from three different places in the programme — an
- * administrator signing off event 4 while the deck swims 6 — so there is no
- * single answer to store.
- */
-export interface Progress {
-  eventIndex: number;
-  heatIndex: number;
-}
-
 /* ------------------------------------------------------------ people, teams */
 
 /**
@@ -457,13 +444,6 @@ export interface MeetEvent {
   name?: string;
 }
 
-/** One swimmer registered in one race. */
-export interface Entry {
-  meetId: string;
-  eventId: string;
-  athleteId: string;
-}
-
 /**
  * One planned swim: somebody, in a lane, in a heat of an event.
  *
@@ -629,6 +609,38 @@ export interface MeetDetail {
    * year and squad come from — as of this meet, not as of today.
    */
   enrollments: Enrollment[];
+}
+
+/**
+ * The Meet Durable Object's live state: the four race-day tables it owns,
+ * plus enough athletes to render names against them. Everything else in a
+ * `MeetDetail` — the meet, events, teams, enrollments — is setup data,
+ * decided before race day and read straight from D1 rather than pushed by
+ * the DO. See migration-plan.md §3.1/§3.2.
+ */
+export type MeetSnapshot = Pick<
+  MeetDetail,
+  "entries" | "seeds" | "watches" | "results" | "athletes"
+>;
+
+/**
+ * Fold the Durable Object's live tables over a `MeetDetail` read from D1 —
+ * what every workspace wired to the DO (migration-plan.md §5) does with its
+ * loader's D1 read and the live snapshot `useMeetLive` hands back.
+ *
+ * `entries` is included now that `declareEntry` (`MeetDurableObject`) is the
+ * only place an entry is ever written — D1's `entries` table is just the
+ * last checkpoint's copy, no more current than seeds/watches/results are.
+ */
+export function withLiveTables(detail: MeetDetail, live: MeetSnapshot): MeetDetail {
+  return {
+    ...detail,
+    entries: live.entries,
+    seeds: live.seeds,
+    watches: live.watches,
+    results: live.results,
+    athletes: live.athletes,
+  };
 }
 
 /** How places turn into points. Nothing computes these yet. */

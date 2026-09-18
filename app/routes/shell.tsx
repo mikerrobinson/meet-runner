@@ -29,9 +29,9 @@ const TOP_TABS: Tab[] = [
 ];
 
 /**
- * Inside a meet the bar becomes that meet's modes, with a way back out. Run is
- * the screen used under pressure, so it stays on the bottom bar within thumb
- * reach rather than moving to a tab across the top.
+ * Inside a meet the bar becomes that meet's modes, with a way back out. Admin
+ * and Splits are the screens used under pressure, so they stay on the bottom
+ * bar within thumb reach rather than moving to a tab across the top.
  */
 function meetTabs(meetId: string): Tab[] {
   const base = `/meets/${meetId}`;
@@ -39,7 +39,8 @@ function meetTabs(meetId: string): Tab[] {
     { to: "/meets", label: "Meets", icon: "‹" },
     { to: base, label: "Info", icon: "📄" },
     { to: `${base}/entries`, label: "Entries", icon: "📋" },
-    { to: `${base}/run`, label: "Run", icon: "⏱️" },
+    { to: `${base}/admin`, label: "Admin", icon: "🖥️" },
+    { to: `${base}/splits`, label: "Splits", icon: "⏱️" },
     { to: `${base}/results`, label: "Results", icon: "🏅" },
   ];
 }
@@ -206,7 +207,7 @@ export default function Shell() {
   const params = useParams();
   const session = useSession();
   const meetData = useRouteLoaderData<typeof meetLoader>("routes/meet-layout");
-  const openMeet = meetData?.detail?.meet ?? null;
+  const openMeet = meetData?.meet ?? null;
   const team =
     session.teams.find((t) => t.teamId === session.openTeamId) ?? null;
 
@@ -240,12 +241,14 @@ export default function Shell() {
         : null;
 
   const onRegistration = location.pathname.endsWith("/entries");
-  // Two screens want the whole window rather than a reading column: the
-  // entries grid, whose event columns spread sideways, and the run screens,
-  // where an administrator works from a landscape tablet with the running
-  // order beside the heat.
-  const fullWidth = onRegistration || location.pathname.endsWith("/run");
-  const onRun = location.pathname.endsWith("/run");
+  const onAdmin = location.pathname.endsWith("/admin");
+  const onSplits = location.pathname.endsWith("/splits");
+  // Three screens want the whole window rather than a reading column: the
+  // entries grid, whose event columns spread sideways, the admin desk, where
+  // an administrator works from a landscape tablet with the running order
+  // beside the heat, and the splits stopwatch, which wants every pixel for
+  // its lane grid.
+  const fullWidth = onRegistration || onAdmin || onSplits;
   const onResults = location.pathname.endsWith("/results");
   const rawGender = new URLSearchParams(location.search).get("g");
   const genderParam =
@@ -260,7 +263,7 @@ export default function Shell() {
       label="Filter roster by gender"
       options={genderOptions(location.pathname, genderParam)}
     />
-  ) : onRun && openMeet ? (
+  ) : onSplits && openMeet ? (
     <HeaderToggles
       label="Stopwatch button layout"
       options={layoutOptions(openMeet.laneCount, laneLayout, setLaneLayout)}

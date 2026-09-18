@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Form, redirect, useFetcher } from "react-router";
+import { Form, redirect, useFetcher, useLoaderData } from "react-router";
 import type { Route } from "./+types/meet-info";
 import {
   Banner,
@@ -34,6 +34,7 @@ import {
   addEventsToMeet,
   deleteMeet,
   getMeet,
+  meetDetail,
   removeEvent,
   setEventOrder,
   updateMeet,
@@ -70,22 +71,33 @@ import {
  * Loaded here rather than fetched by the cards that show them. Each used to
  * hold its own list behind a `useEffect`, which cost two round trips after the
  * page had already rendered and left two more copies of "loading / working /
- * that didn't work" to keep honest. The meet itself still comes from
- * `meet-layout`, which is the one read every screen under a meet shares.
+ * that didn't work" to keep honest.
+ *
+ * The full `MeetDetail` is read here too, now that `meet-layout`'s own loader
+ * is metadata + access only (see its doc comment) — this screen is exactly
+ * the "still simplest as a plain D1 read" case: the programme, the entry
+ * count, the export buttons, none of it live or high-frequency.
  */
 export async function loader({ params, request, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env as SyncEnv;
   const db = requireDb(env);
   const user = await currentUser(request, env);
 
-  const [admins, grant] = await Promise.all([
+  const [detail, admins, grant] = await Promise.all([
+    meetDetail(db, params.meetId),
     meetAdmins(db, params.meetId),
     // Whether a sheet is live and when it dies — never the token itself.
     // That is handed over exactly once, by the action that mints it.
     user ? activeGrant(db, params.meetId) : null,
   ]);
 
-  return { admins, grant };
+  return { detail, admins, grant };
+}
+
+/** This screen's own `meetDetail` read — see the loader's doc comment. Not
+ *  `useMeet()`, which only carries the meet's metadata now. */
+function useDetail() {
+  return useLoaderData<typeof loader>().detail!;
 }
 
 /**
@@ -324,7 +336,8 @@ export async function action({ params, request, context }: Route.ActionArgs) {
 
 export default function MeetInfo({ loaderData }: Route.ComponentProps) {
   const { admins, grant } = loaderData;
-  const { detail, access } = useMeet();
+  const detail = loaderData.detail!;
+  const { access } = useMeet();
   const { meet, events, entries, seeds } = detail;
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -471,7 +484,8 @@ export default function MeetInfo({ loaderData }: Route.ComponentProps) {
  * without the whole screen going into a loading state.
  */
 function MeetTeamsCard() {
-  const { detail, access } = useMeet();
+  const detail = useDetail();
+  const { access } = useMeet();
   const fetcher = useFetcher();
 
   return (
@@ -503,7 +517,7 @@ function MeetTeamsCard() {
  * remembers what was agreed on deck.
  */
 function SeedingScoringEditor() {
-  const { detail } = useMeet();
+  const detail = useDetail();
   const { meet, teams } = detail;
   const fetcher = useFetcher();
 
@@ -577,7 +591,7 @@ function SeedingScoringEditor() {
 }
 
 function DetailsEditor() {
-  const { detail } = useMeet();
+  const detail = useDetail();
   const { meet } = detail;
   const fetcher = useFetcher();
 
@@ -666,7 +680,7 @@ function DetailsEditor() {
  * the calls underneath it. Editing adds the controls in place.
  */
 function EventList({ editing }: { editing: boolean }) {
-  const { detail } = useMeet();
+  const detail = useDetail();
   const { events, entries } = detail;
   const fetcher = useFetcher();
 

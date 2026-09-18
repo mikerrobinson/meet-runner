@@ -208,52 +208,19 @@ const SCHEMA = [
   `CREATE INDEX IF NOT EXISTS results_by_event ON results (event_id)`,
 ];
 
-/**
- * Columns added to a table that already exists somewhere.
- *
- * `CREATE TABLE IF NOT EXISTS` is the whole of the schema above, which is
- * exactly right for a new database and does nothing at all for the one
- * already holding a season's meets. So a column added later is stated twice:
- * in the table, for a database being created now, and here, for one that
- * isn't. SQLite has no `ADD COLUMN IF NOT EXISTS`, so the second run of one
- * of these fails with "duplicate column name" — which is the success case,
- * and the only error swallowed below.
- *
- * Deliberately not a migration framework. There is no version table and no
- * ordering to get wrong: each statement is idempotent on its own, and a list
- * of them is as much machinery as adding a column to a handful of rows is
- * worth.
- */
-const MIGRATIONS = [
-  `ALTER TABLE meets ADD COLUMN timers_per_lane INTEGER NOT NULL DEFAULT 1`,
-  `ALTER TABLE meets ADD COLUMN lane_assignments TEXT`,
-  `ALTER TABLE meets ADD COLUMN scoring TEXT`,
-  `ALTER TABLE entries ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0`,
-  `ALTER TABLE seeds ADD COLUMN exhibition INTEGER NOT NULL DEFAULT 0`,
-];
-
 let ready = false;
 
 /**
  * Create anything missing, once per worker instance.
  *
  * Cheap enough to call from any loader — after the first call it's a boolean
- * check — and it means a fresh database or a new deployment needs no separate
- * migration step to start working.
+ * check — and it means a fresh database needs no separate migration step to
+ * start working.
  */
 
 export async function ensureSchema(db: D1Database): Promise<void> {
   if (ready) return;
   for (const statement of SCHEMA) await db.prepare(statement).run();
-  for (const statement of MIGRATIONS) {
-    try {
-      await db.prepare(statement).run();
-    } catch (error) {
-      // Already applied — which is what this looks like every time but the
-      // first. Anything else is a real failure and belongs in the logs.
-      if (!/duplicate column name/i.test(String(error))) throw error;
-    }
-  }
   ready = true;
 }
 

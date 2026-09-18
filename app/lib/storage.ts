@@ -7,12 +7,7 @@
 
 import { A_YEAR, readCookie, writeCookie } from "./cookies";
 import { local } from "./local";
-import {
-  LANE_LAYOUTS,
-  type LaneLayout,
-  type NameOrder,
-  type Progress,
-} from "~/types/meet";
+import { LANE_LAYOUTS, type LaneLayout, type NameOrder } from "~/types/meet";
 
 const LANE_LAYOUT_KEY = "swim-starts:lane-layout";
 const TIMER_ID_KEY = "swim-starts:timer-id";
@@ -26,7 +21,6 @@ const TIMER_ID_KEY = "swim-starts:timer-id";
  * borrowed phone is often enough to matter.
  */
 const TIMER_ID_COOKIE = "mr_timer_id";
-const PROGRESS_PREFIX = "swim-starts:progress:";
 
 /**
  * How the stopwatch arranges its lane buttons. A property of whoever is
@@ -100,32 +94,3 @@ export function loadTimerId(): string {
  * changes the one the desk reads.
  */
 let session: string | null = null;
-
-/**
- * Where this device has got to in a meet's running order.
- *
- * It used to live in the meet document, excluded from sync by hand and then
- * patched back in on every pull — a field inside the document that was not
- * part of it. It is device state and always was: three people work one meet
- * from three places in the programme, and an administrator signing off event
- * 4 while the deck swims event 6 is the normal case rather than a conflict.
- *
- * Keyed by meet, because "where I am" means nothing without one. A stale key
- * for last season's meet costs a few bytes and answers correctly if that meet
- * is ever opened again.
- */
-export function loadProgress(meetId: string): Progress {
-  try {
-    const stored = JSON.parse(local.get(PROGRESS_PREFIX + meetId) ?? "");
-    return {
-      eventIndex: Number(stored?.eventIndex) || 0,
-      heatIndex: Number(stored?.heatIndex) || 0,
-    };
-  } catch {
-    return { eventIndex: 0, heatIndex: 0 };
-  }
-}
-
-export function saveProgress(meetId: string, progress: Progress): void {
-  local.set(PROGRESS_PREFIX + meetId, JSON.stringify(progress));
-}

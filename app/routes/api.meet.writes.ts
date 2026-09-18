@@ -6,31 +6,8 @@ import {
   json,
   readJson,
   requireDb,
-  type SyncEnv,
 } from "~/lib/api.server";
-import {
-  mayDecide,
-  mayEnter,
-  mayRecordTime,
-  meetAccess,
-} from "~/lib/access.server";
-import {
-  addEntry,
-  deleteResult,
-  deleteWatch,
-  meetDetail,
-  putResult,
-  putWatch,
-  removeEntry,
-  removeSeed,
-  replaceSeeds,
-  setExhibition,
-  setSeed,
-} from "~/lib/meets.server";
-import { whyNotEnter } from "~/lib/events";
-import { reseedEvent } from "~/lib/heats";
-import { eventTouched } from "~/lib/timing";
-import { enrollmentIndex } from "~/lib/roster";
+import { mayDecide, mayRecordTime, meetAccess } from "~/lib/access.server";
 import type { Write } from "~/lib/writes";
 
 /**
@@ -49,6 +26,12 @@ import type { Write } from "~/lib/writes";
  * a dual meet at the same moment without either writing over the other, and it
  * is why the queue can retry a single write without replaying a batch.
  *
+ * **Every kind now goes to the meet's Durable Object, not D1** —
+ * migration-plan.md §3.1's rule of thumb: the DO is written to immediately
+ * for anything meet-scoped, and seeds/watches/results/entries are exactly
+ * that. The DO serializes every write itself and broadcasts it, which is
+ * what lets a connected admin/coach screen see it land without polling.
+ *
  * **Who may do what is asked once, and then per kind.** `meetAccess` is one
  * read for the whole request; the rule that follows differs because the moves
  * genuinely differ — entering a swimmer is a coach's business for their own
@@ -56,7 +39,7 @@ import type { Write } from "~/lib/writes";
  * the administrator's alone.
  */
 export async function action({ params, request, context }: Route.ActionArgs) {
-  const env = context.cloudflare.env as SyncEnv;
+  const env = context.cloudflare.env;
   try {
     if (request.method !== "POST") throw new SyncError("Use POST", 405);
 
@@ -64,86 +47,29 @@ export async function action({ params, request, context }: Route.ActionArgs) {
     const user = await currentUser(request, env);
     const access = await meetAccess(db, params.meetId, user);
     const write = await readJson<Write>(request);
+    const stub = env.MEET_DO.getByName(params.meetId);
 
     switch (write.kind) {
       /**
        * Entering and scratching.
        *
-       * The meet's own entry limits are enforced here rather than only greyed
-       * out on the grid — a screen that hasn't heard about a change yet is
-       * exactly when one gets exceeded.
+       * `mayEnter`, the meet's own entry limits, and the auto-reseed that
+       * follows are all decided inside the DO now (`declareEntry`) — entries
+       * are DO-owned like the other three live tables, so the check reads
+       * this device's own most current state rather than a D1 snapshot that
+       * could be stale between checkpoints. See that method's doc comment.
        */
       case "entry": {
-        const detail = await meetDetail(db, params.meetId);
-        if (!detail) throw new SyncError("No such meet", 404);
-
-        const teamsOf = (id: string) =>
-          detail.enrollments.filter((e) => e.athleteId === id).map((e) => e.teamId);
-
-        if (
-          !mayEnter(access, write.athleteId, {
-            athletesMayEnter: detail.meet.athletesMayEnter,
-            teamsOf,
-          })
-        ) {
-          throw new SyncError("That swimmer isn't yours to enter.", 403);
-        }
-
-        if (write.entering) {
-          const refusal = whyNotEnter(
-            { events: detail.events, entries: detail.entries, limits: detail.meet.limits },
-            write.athleteId,
-            write.eventId,
-          );
-          if (refusal) throw new SyncError(refusal, 400);
-
-          await addEntry(db, {
+        const result = await stub.declareEntry(
+          {
             meetId: params.meetId,
             eventId: write.eventId,
             athleteId: write.athleteId,
-          });
-        } else {
-          await removeEntry(db, write.eventId, write.athleteId);
-        }
-
-        /**
-         * Reseed the whole event, automatically.
-         *
-         * Dual, tri and inter-squad meets don't get a "seed this event"
-         * button — entering or scratching a swimmer reseeds the event right
-         * then, over the *whole* current entry list, so a team that enters
-         * late still reaches for its own lanes rather than whatever another
-         * team's overflow left behind. First entered stands in for fastest
-         * until the app has a real seed time to rank by.
-         *
-         * Skipped once the event is touched — the same rule reseeding always
-         * followed, since nothing here should move a swim that's already
-         * been timed.
-         */
-        if (!eventTouched(detail, write.eventId)) {
-          const before = detail.entries[write.eventId] ?? [];
-          const entrants = write.entering
-            ? before.includes(write.athleteId)
-              ? before
-              : [...before, write.athleteId]
-            : before.filter((id) => id !== write.athleteId);
-
-          const teamOf = (id: string) =>
-            enrollmentIndex(detail.enrollments).get(id)?.teamId;
-          const seeds = reseedEvent(
-            detail,
-            params.meetId,
-            write.eventId,
-            entrants,
-            teamOf,
-            detail.meet.laneAssignments,
-            detail.meet.laneCount,
-          );
-          // Only null when the event turned out to be touched, which the
-          // guard above already ruled out.
-          if (seeds) await replaceSeeds(db, params.meetId, write.eventId, seeds);
-        }
-
+            entering: write.entering,
+          },
+          access,
+        );
+        if (!result.ok) throw new SyncError(result.error, result.status);
         return json({ ok: true });
       }
 
@@ -163,7 +89,7 @@ export async function action({ params, request, context }: Route.ActionArgs) {
           throw new SyncError("Only the teams racing can seed a lane.", 403);
         }
         if (write.kind === "unseed") {
-          await removeSeed(db, write.seedId);
+          await stub.unseat({ meetId: params.meetId, seedId: write.seedId });
           return json({ ok: true });
         }
         if (!Number.isInteger(write.heat) || write.heat < 1) {
@@ -177,11 +103,13 @@ export async function action({ params, request, context }: Route.ActionArgs) {
         // A seeding write means to put somebody somewhere, so a blank here is
         // a bug on the way in rather than a lane to be emptied.
         if (!write.athleteId) throw new SyncError("Which swimmer?", 400);
-        const seed = await setSeed(db, params.meetId, {
+        const seed = await stub.seat({
+          meetId: params.meetId,
           eventId: write.eventId,
           heat: write.heat,
           lane: write.lane,
           athleteId: write.athleteId,
+          seedId: write.seedId,
         });
         return json({ seed });
       }
@@ -200,7 +128,11 @@ export async function action({ params, request, context }: Route.ActionArgs) {
             403,
           );
         }
-        await setExhibition(db, write.seedId, write.exhibition);
+        await stub.setExhibition({
+          meetId: params.meetId,
+          seedId: write.seedId,
+          exhibition: write.exhibition,
+        });
         return json({ ok: true });
       }
 
@@ -237,7 +169,7 @@ export async function action({ params, request, context }: Route.ActionArgs) {
               403,
             );
           }
-          await deleteWatch(db, write.seedId, whose);
+          await stub.dropWatch({ meetId: params.meetId, seedId: write.seedId, timerId: whose });
           return json({ ok: true });
         }
 
@@ -250,7 +182,8 @@ export async function action({ params, request, context }: Route.ActionArgs) {
           throw new SyncError("That isn't a time.", 400);
         }
 
-        await putWatch(db, params.meetId, {
+        await stub.recordWatch({
+          meetId: params.meetId,
           seedId: write.seedId,
           timerId: submitter,
           userId: user?.id,
@@ -282,33 +215,31 @@ export async function action({ params, request, context }: Route.ActionArgs) {
           throw new SyncError("Whoever is running this meet decides a lane.", 403);
         }
         if (write.kind === "unresult") {
-          await deleteResult(db, write.seedId);
+          await stub.undecideResult({ meetId: params.meetId, seedId: write.seedId });
           return json({ ok: true });
         }
 
-        const detail = await meetDetail(db, params.meetId);
-        const seed = detail?.seeds.find((s) => s.id === write.seedId);
-        if (!seed) throw new SyncError("That swim is no longer in the meet", 404);
-
         const timeMs = Number(write.timeMs);
-        await putResult(db, {
-          seedId: seed.id,
-          meetId: params.meetId,
-          // Copied from the seed rather than the request: an administrator
-          // says what the time was, not whose it was or which event.
-          eventId: seed.eventId,
-          athleteId: seed.athleteId,
-          status:
-            write.status === "DQ" || write.status === "NS" ? write.status : "OK",
-          // A no-show or a disqualification with nothing on the clock is zero,
-          // which is how every screen already reads "no time".
-          timeMs: Number.isFinite(timeMs) && timeMs > 0 ? Math.round(timeMs) : 0,
-          // The app's own sentinel rather than nobody's id, so a later
-          // discrepancy can tell its own earlier call apart from a person's
-          // and take only its own back.
-          decidedBy: write.auto ? "auto" : user?.id,
-          decidedAt: Date.now(),
-        });
+        try {
+          await stub.decideResult(
+            {
+              meetId: params.meetId,
+              seedId: write.seedId,
+              status:
+                write.status === "DQ" || write.status === "NS" ? write.status : "OK",
+              // A no-show or a disqualification with nothing on the clock is
+              // zero, which is how every screen already reads "no time".
+              timeMs: Number.isFinite(timeMs) && timeMs > 0 ? Math.round(timeMs) : 0,
+              auto: write.auto,
+            },
+            // The app's own sentinel rather than nobody's id when `auto`, so a
+            // later discrepancy can tell its own earlier call apart from a
+            // person's and take only its own back — decided inside the DO.
+            user?.id,
+          );
+        } catch {
+          throw new SyncError("That swim is no longer in the meet", 404);
+        }
         return json({ ok: true });
       }
 

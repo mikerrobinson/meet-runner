@@ -1,5 +1,7 @@
 import { createRequestHandler } from "react-router";
 
+export { MeetDurableObject } from "~/lib/meet-do.server";
+
 declare module "react-router" {
   export interface AppLoadContext {
     cloudflare: {
