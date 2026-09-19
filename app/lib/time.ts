@@ -16,17 +16,25 @@ export function formatTime(ms: number): string {
   return `${seconds}.${hh}`;
 }
 
-/** Same as `formatTime` but always shows m:ss so the running clock never reflows. */
-export function formatClock(ms: number): string {
+/**
+ * Same as `formatTime` but always shows m:ss so the running clock never
+ * reflows.
+ *
+ * `hundredths: false` drops the `.hh` — for a clock that's still counting up,
+ * where a hundredths digit that only refreshes once a second would just
+ * jitter rather than read as precision. Once the watch stops, pass `true` (the
+ * default) so the number that lands matches what `formatTime` would show.
+ */
+export function formatClock(ms: number, opts?: { hundredths?: boolean }): string {
   if (!Number.isFinite(ms) || ms < 0) ms = 0;
   const totalHundredths = Math.floor(ms / 10);
   const hundredths = totalHundredths % 100;
   const totalSeconds = Math.floor(totalHundredths / 100);
   const seconds = totalSeconds % 60;
   const minutes = Math.floor(totalSeconds / 60);
-  return `${minutes}:${String(seconds).padStart(2, "0")}.${String(
-    hundredths,
-  ).padStart(2, "0")}`;
+  const mmss = `${minutes}:${String(seconds).padStart(2, "0")}`;
+  if (opts?.hundredths === false) return mmss;
+  return `${mmss}.${String(hundredths).padStart(2, "0")}`;
 }
 
 function toMs(minutes: number, seconds: number, frac?: string): number {

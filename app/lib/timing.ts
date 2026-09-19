@@ -272,13 +272,32 @@ export function laneProgress(
   return timers.every((w) => w.timeMs !== undefined) ? "complete" : "waiting";
 }
 
-/** Stopwatches still running on a swim: started, no time sent yet. */
+/** Stopwatches still running on a swim: started, not stopped, no time sent yet. */
 export function runningWatches(
   rows: Pick<TimingRows, "watches">,
   seedId: string,
 ): Watch[] {
   return watchesOn(rows, seedId).filter(
-    (w) => w.timeMs === undefined && w.startedAt !== undefined,
+    (w) =>
+      w.timeMs === undefined &&
+      w.startedAt !== undefined &&
+      w.stoppedAt === undefined,
+  );
+}
+
+/**
+ * Stopwatches a thumb has already stopped but not yet submitted.
+ *
+ * A distinct state from "running": the desk should stop counting these up
+ * and stop letting anyone sign the lane off OK, but it isn't a time yet
+ * either — that only exists once the submit lands and gives it a `timeMs`.
+ */
+export function stoppedWatches(
+  rows: Pick<TimingRows, "watches">,
+  seedId: string,
+): Watch[] {
+  return watchesOn(rows, seedId).filter(
+    (w) => w.timeMs === undefined && w.stoppedAt !== undefined,
   );
 }
 

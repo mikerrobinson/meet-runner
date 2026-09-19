@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "swim-starts",
-  "compatibility_date": "2025-04-04",
+  "compatibility_date": "2026-09-18",
   "main": "./workers/app.ts",
   "assets": {
     "binding": "ASSETS",
@@ -28,6 +28,12 @@
   // See migration-plan.md §3.1-3.2.
   "durable_objects": {
     "bindings": [{ "name": "MEET_DO", "class_name": "MeetDurableObject" }],
+  },
+  "exports": {
+    "MeetDurableObject": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["MeetDurableObject"] }],
   // Optional shared secret. Set it with

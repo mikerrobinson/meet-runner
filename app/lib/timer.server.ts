@@ -15,7 +15,7 @@
 import { meetDetail } from "./meets.server";
 import { fromDevice } from "./timing";
 import type { Grant } from "./grants.server";
-import type { MeetEvent, Seed, Watch } from "~/types/meet";
+import { withLiveTables, type MeetEvent, type MeetSnapshot, type Seed, type Watch } from "~/types/meet";
 
 /** A team as a timer needs it: something to tap, and an id to send back. */
 export interface TimerTeam {
@@ -73,10 +73,17 @@ export async function timerSnapshot(
   db: D1Database,
   grant: Grant,
   timerId: string,
+  live: MeetSnapshot,
   now = Date.now(),
 ): Promise<TimerSnapshot | null> {
-  const detail = await meetDetail(db, grant.meetId);
-  if (!detail) return null;
+  const loaded = await meetDetail(db, grant.meetId);
+  if (!loaded) return null;
+  // The DO is the source of truth for entries/seeds/watches/results the
+  // moment anything has touched the meet — a plain D1 read here would show
+  // whatever the last checkpoint happened to catch, up to
+  // `CHECKPOINT_INTERVAL_MS` stale, which is exactly what left a timer phone
+  // staring at "the coach hasn't set the heats" right after seeding ran.
+  const detail = withLiveTables(loaded, live);
 
   // Short labels to group the picker under, from the teams actually racing.
   const label = new Map(

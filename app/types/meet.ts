@@ -631,15 +631,24 @@ export type MeetSnapshot = Pick<
  * `entries` is included now that `declareEntry` (`MeetDurableObject`) is the
  * only place an entry is ever written — D1's `entries` table is just the
  * last checkpoint's copy, no more current than seeds/watches/results are.
+ *
+ * `athletes` is a union, not a replacement: `live.athletes` only covers
+ * people the DO's live tables currently name (entries/seeds/walk-ins), while
+ * `detail.athletes` carries the full team rosters from D1 — screens like the
+ * registration grid need roster swimmers who haven't been entered yet. Live
+ * copies win on id collisions since they can include a just-added walk-in
+ * before D1's own read would.
  */
 export function withLiveTables(detail: MeetDetail, live: MeetSnapshot): MeetDetail {
+  const athletes = new Map(detail.athletes.map((a) => [a.id, a]));
+  for (const athlete of live.athletes) athletes.set(athlete.id, athlete);
   return {
     ...detail,
     entries: live.entries,
     seeds: live.seeds,
     watches: live.watches,
     results: live.results,
-    athletes: live.athletes,
+    athletes: [...athletes.values()],
   };
 }
 

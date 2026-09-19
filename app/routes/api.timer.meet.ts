@@ -23,9 +23,9 @@ import { timerSnapshot } from "~/lib/timer.server";
  * timer has nothing to sign in *with* — the answer is to scan the code again.
  */
 export async function loader({ request, context }: Route.LoaderArgs) {
-  const env = context.cloudflare.env as SyncEnv;
+  const env = context.cloudflare.env;
   try {
-    const db = requireDb(env);
+    const db = requireDb(env as SyncEnv);
     // Two different answers, because they need two different things done
     // about them: somebody who opened `/timer` directly has never scanned
     // anything, and telling them their link expired sends them looking for a
@@ -45,7 +45,8 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     // A browser with no device cookie gets a throwaway id, and so an empty
     // `mine`. That is the honest answer — a phone the server has never seen
     // has taken no times — and this is a read, so nothing is filed under it.
-    const snapshot = await timerSnapshot(db, grant, deviceId(request));
+    const live = await env.MEET_DO.getByName(grant.meetId).getSnapshot(grant.meetId);
+    const snapshot = await timerSnapshot(db, grant, deviceId(request), live);
     if (!snapshot) throw new SyncError("That meet is no longer on the server", 404);
 
     return json(snapshot);

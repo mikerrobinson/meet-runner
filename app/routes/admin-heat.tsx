@@ -16,6 +16,7 @@ import {
   resultFor,
   runningWatches,
   seedsForHeat,
+  stoppedWatches,
   swimTime,
   watchesOn,
 } from "~/lib/timing";
@@ -217,14 +218,10 @@ function HeatCard({
   const seeds = seedsForHeat(detail, event.id, heat);
   const closed = heatClosed(detail, event.id, heat);
 
-  // Only while a thumb is actually down somewhere in this heat.
-  const now = useTicker(
-    seeds.some((s) =>
-      watchesOn(detail, s.id).some(
-        (w) => w.timeMs === undefined && w.startedAt !== undefined,
-      ),
-    ),
-  );
+  // Only while a thumb is actually down somewhere in this heat — a watch
+  // that's been stopped and is just waiting on its submit doesn't need
+  // ticking, it needs to sit still.
+  const now = useTicker(seeds.some((s) => runningWatches(detail, s.id).length > 0));
 
   /**
    * Where the keyboard goes next, without every `LaneRow` needing to know
@@ -537,6 +534,7 @@ function LaneRow({
   const watches = seed ? watchesOn(detail, seed.id) : [];
   const timed = watches.filter((w) => w.timeMs !== undefined);
   const running = seed ? runningWatches(detail, seed.id) : [];
+  const stopped = seed ? stoppedWatches(detail, seed.id) : [];
   const result = seed ? resultFor(detail, seed.id) : undefined;
   const accepted = seed ? swimTime(detail, seed.id) : null;
   const derived = laneTime(watches);
@@ -740,7 +738,7 @@ function LaneRow({
           if you can see what it chose between. */}
       <td className="py-2 pr-2">
         <span className="flex flex-wrap items-center gap-1">
-          {timed.length === 0 && running.length === 0 && (
+          {timed.length === 0 && running.length === 0 && stopped.length === 0 && (
             <span className="text-xs text-slate-400">—</span>
           )}
 
@@ -753,7 +751,10 @@ function LaneRow({
               otherwise: the lane simply never completes and nobody knows why.
 
               Counted from the server's clock, which is why the phone's start
-              was translated onto it on the way in. */}
+              was translated onto it on the way in. Seconds only, no
+              hundredths — a digit that only refreshes once a second doesn't
+              read as precision, it reads as a typo, so it's dropped while
+              this is still counting up. */}
           {running.map((a) => (
             <span
               key={`running-${a.timerId}`}
@@ -761,7 +762,23 @@ function LaneRow({
               className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 font-mono text-xs tabular-nums text-amber-900 dark:bg-amber-950 dark:text-amber-200"
             >
               <span aria-hidden className="text-[0.6rem]">▶</span>
-              {formatClock(Math.max(0, now - a.startedAt!))}
+              {formatClock(Math.max(0, now - a.startedAt!), { hundredths: false })}
+            </span>
+          ))}
+          {/* A stopwatch that's been stopped but hasn't submitted yet.
+              Frozen, not ticking — its `stoppedAt` already says the elapsed
+              time, to full precision, and nothing about it will change until
+              the submit lands and gives it a real `timeMs`. Distinct from a
+              counted watch below so the desk can see this isn't a time yet
+              (and can't sign the lane off OK on the strength of it). */}
+          {stopped.map((a) => (
+            <span
+              key={`stopped-${a.timerId}`}
+              title={`Timer ${a.timerId} stopped their watch — waiting for it to submit`}
+              className="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs tabular-nums text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+            >
+              <span aria-hidden className="text-[0.6rem]">■</span>
+              {formatClock(Math.max(0, a.stoppedAt! - (a.startedAt ?? a.stoppedAt!)))}
             </span>
           ))}
           {/* Each watch with a way to drop it.
@@ -863,18 +880,24 @@ function LaneRow({
           {STATUSES.map((status) => {
             const current = result?.status ?? "OK";
             const chosen = signedOff && current === status;
+            // OK asserts a real time was recorded — a DQ or an NS doesn't
+            // need one, so only OK is gated on a watch (or a typed time)
+            // actually landing first.
+            const needsTime = status === "OK" && !accepted;
             return (
               <button
                 key={status}
                 type="button"
-                disabled={idle || closed}
+                disabled={idle || closed || needsTime}
                 tabIndex={-1}
                 title={
                   closed
                     ? "This heat is complete — Fix Results to change it."
-                    : signedOff
-                      ? `Signed off as ${status}`
-                      : `Sign this lane off as ${status}`
+                    : needsTime
+                      ? "No time recorded yet — wait for a watch to submit."
+                      : signedOff
+                        ? `Signed off as ${status}`
+                        : `Sign this lane off as ${status}`
                 }
                 onClick={() => signOff(status)}
                 className={`rounded px-1.5 py-0.5 text-xs font-semibold ${
@@ -883,7 +906,7 @@ function LaneRow({
                       ? "bg-slate-700 text-white dark:bg-slate-200 dark:text-slate-900"
                       : "bg-red-600 text-white"
                     : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
-                } ${idle || closed ? "opacity-40" : ""}`}
+                } ${idle || closed || needsTime ? "opacity-40" : ""}`}
               >
                 {status}
               </button>

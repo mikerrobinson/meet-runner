@@ -735,10 +735,17 @@ export default function Timer({ params }: Route.ComponentProps) {
                   onClick={() => {
                     const at = Date.now();
                     setStopped({ ms: at - (startedAt ?? at), at });
-                    // Queued, not sent: the thumb has more to do and the race
-                    // isn't over for everyone. It goes up with the submit.
-                    if (where && meetId) enqueueStop(meetId, where, at);
-                    refreshQueue();
+                    // Sent straight away, like the start: the desk should see
+                    // this lane has stopped (and stop counting it as running)
+                    // well before this thumb gets around to submitting a
+                    // final sheet — the fetch is fire-and-forget, so it
+                    // doesn't hold up whatever this thumb does next.
+                    if (where && meetId) {
+                      enqueueStop(meetId, where, at);
+                      void flushQueue(meetId).then(refreshQueue);
+                    } else {
+                      refreshQueue();
+                    }
                   }}
                 >
                   STOP
