@@ -31,14 +31,13 @@ export function meta({}: Route.MetaArgs) {
 /**
  * This screen's own whole-meet read.
  *
- * Explicitly out of scope for the routing rewrite (migration-plan.md §2) —
- * same URL, same grid, same everything, except that `meet-layout`'s loader
- * no longer hands this down for free (see its doc comment), so it's read
- * here instead of changing anything about the screen itself.
+ * Same URL, same grid, same everything as before the meet's live tables
+ * moved into a Durable Object — `meet-layout`'s loader doesn't hand this down
+ * for free (see its doc comment), so it's read here instead.
  *
  * The four live tables — entries included, now that `declareEntry` makes
  * them genuinely DO-owned — come from the meet's Durable Object rather than
- * D1, same reasoning as admin/splits/results (migration-plan.md §5).
+ * D1, same reasoning as admin/splits/results.
  */
 export async function loader({ params, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env;

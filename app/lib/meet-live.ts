@@ -1,6 +1,6 @@
 /**
  * The meet's live connection: one WebSocket per meet per tab, fed by the
- * Meet Durable Object's broadcasts (see `api.meet.live.ts` / §3.2-3.4).
+ * Meet Durable Object's broadcasts (see `api.meet.live.ts`).
  *
  * Shaped like `outbox.ts` on purpose — a module-level map of state, a
  * `subscribe`, a `snapshot` — rather than a React context, so a screen that
@@ -12,8 +12,8 @@
  * say): the first subscriber opens the socket, the last one closing drops it.
  *
  * Every incoming message is folded over the cached snapshot with `applyWrite`
- * — the same reducer the outbox uses for its own optimistic overlay, per
- * migration-plan.md §3.4's "one reducer, two callers."
+ * — the same reducer the outbox uses for its own optimistic overlay. One
+ * reducer, two callers.
  */
 
 import { apiUrl } from "./http";

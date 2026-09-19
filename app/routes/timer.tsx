@@ -192,12 +192,12 @@ export default function Timer({ params }: Route.ComponentProps) {
    * never appeared. On a deck that means timing the wrong person with no way
    * to find out.
    *
-   * Used to be a blind 10s poll; now it's the meet's own live connection
-   * (migration-plan.md §3.4) — this phone doesn't keep the DO's snapshot
-   * itself the way `useMeetLive` does for admin/splits, it just re-reads its
-   * own purpose-built `fetchSnapshot` whenever the connection says something
-   * happened, which is a much closer match for "a name corrected behind the
-   * blocks" than a fixed interval ever was.
+   * Used to be a blind 10s poll; now it's the meet's own live connection —
+   * this phone doesn't keep the DO's snapshot itself the way `useMeetLive`
+   * does for admin/splits, it just re-reads its own purpose-built
+   * `fetchSnapshot` whenever the connection says something happened, which
+   * is a much closer match for "a name corrected behind the blocks" than a
+   * fixed interval ever was.
    *
    * Only while the phone is being looked at: a pocketed screen has nobody
    * reading it, and its timers get throttled to uselessness anyway. Coming

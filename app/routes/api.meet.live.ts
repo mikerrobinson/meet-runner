@@ -10,15 +10,12 @@ import type { MeetRole } from "~/lib/meet-do.server";
  *
  *   GET /api/meets/:meetId/live   (Upgrade: websocket)
  *
- * Auth happens here, once, before the upgrade ever reaches the DO — see
- * migration-plan.md §3.2. The DO trusts `role`/`userId` on the forwarded
- * request rather than parsing a cookie or a grant token itself, the same
- * separation `access.server.ts`/`grants.server.ts` already keep for every
- * other route.
+ * Auth happens here, once, before the upgrade ever reaches the DO. The DO
+ * trusts `role`/`userId` on the forwarded request rather than parsing a
+ * cookie or a grant token itself, the same separation
+ * `access.server.ts`/`grants.server.ts` already keep for every other route.
  *
- * Not wired to any screen yet — that's step 3 (the client data layer) and
- * step 5 (per-workspace wiring). This exists now so the DO's WebSocket path
- * is exercisable end to end.
+ * `useMeetLive` (`app/lib/meet-live.ts`) is the client side of this.
  */
 export async function loader({ params, request, context }: Route.LoaderArgs) {
   if (request.headers.get("Upgrade") !== "websocket") {

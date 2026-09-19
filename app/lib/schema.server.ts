@@ -1,24 +1,30 @@
 /**
  * The database, as tables.
  *
- * One table per thing, columns for its fields, foreign keys by id. There is no
- * object store, no scope column, no per-row `updated_at` deciding who wins a
- * merge, and no tombstones — the server is the source of truth, a row is
- * written by whoever owns it, and a delete is a DELETE.
+ * One table per thing, columns for its fields, foreign keys by id. There is
+ * no object store, no scope column, no per-row `updated_at` deciding who
+ * wins a merge, and no tombstones — a row is written by whoever owns it, and
+ * a delete is a DELETE.
+ *
+ * These shapes are mirrored exactly by the meet's Durable Object
+ * (`meet-do.server.ts`), which is where `entries`, `seeds`, `watches` and
+ * `results` actually live for the duration of a meet — D1 holds the
+ * checkpointed copy. Everything else here (teams, seasons, athletes,
+ * enrollments, meets, events) is D1-only.
  *
  * Two shapes are worth knowing before reading the rest.
  *
- * **`meet_id` is denormalised onto events, entries and heats.** It is derivable
- * by joining, and it's here anyway because every screen under a meet asks
- * "everything for this meet" and D1 answers that fastest as a handful of
- * indexed single-table reads.
+ * **`meet_id` is denormalised onto events, entries, seeds, watches and
+ * results.** It is derivable by joining, and it's here anyway because every
+ * screen under a meet asks "everything for this meet" and that answers
+ * fastest as a handful of indexed single-table reads.
  *
  * **Rows several people write at once are keyed so they can't collide.** A
- * seat is `(heat, lane)`, a watch is `(heat, lane, timer_id)`, a call is
- * `(heat, lane)`. Six timers seating their own lane write six different
- * rows; three timers on one lane write three different rows. Concurrency is a
- * property of the keys rather than something the app has to reconcile
- * afterwards.
+ * seed is `(event_id, heat, lane)`, a watch is `(seed_id, timer_id)`, a
+ * result is `(seed_id)`. Six timers seating their own lane write six
+ * different rows; three timers on one lane write three different rows.
+ * Concurrency is a property of the keys rather than something the app has to
+ * reconcile afterwards.
  *
  * The account tables — users, identities, sessions, invites — are defined in
  * `auth.server.ts`; meet grants in `grants.server.ts`, and who runs what in

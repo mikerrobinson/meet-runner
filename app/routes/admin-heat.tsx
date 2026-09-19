@@ -46,8 +46,7 @@ export function meta({}: Route.MetaArgs) {
  * place in the running order and the heat number, both 1-based, neither a
  * row id. This used to be every heat of the open event stacked and
  * scrolled; now it's one heat, with heat-to-heat navigation the same shape
- * `splits.tsx` already used — migration-plan.md §3.3's "main routing
- * rewrite" for admin.
+ * `splits.tsx` uses.
  *
  * Everything shown is still derived: the watches are what the timers sent,
  * the proposed time is what those work out to, and "official" means every

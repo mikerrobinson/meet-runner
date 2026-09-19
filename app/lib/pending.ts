@@ -1,10 +1,9 @@
 /**
- * What the screen shows while the outbox is still catching up — and, once a
- * meet's live connection exists (migration-plan.md §3.3-3.4), what folds a
- * DO broadcast over a cached snapshot too. Both are "apply one change to
- * data that hasn't heard about it yet" — the only difference is whether the
- * change is this device's own unacknowledged write or somebody else's,
- * already-accepted one arriving over the wire. `applyWrite` is that one
+ * What the screen shows while the outbox is still catching up — and what
+ * folds a DO broadcast over a cached snapshot too. Both are "apply one
+ * change to data that hasn't heard about it yet" — the only difference is
+ * whether the change is this device's own unacknowledged write or somebody
+ * else's, already-accepted one arriving over the wire. `applyWrite` is that one
  * operation; `applyPending` is just it, reduced over a queue.
  *
  * Loader data (or a cached `MeetSnapshot`) is what the server has last said.

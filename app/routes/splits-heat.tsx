@@ -77,14 +77,14 @@ export async function loader({ params, context }: Route.LoaderArgs) {
  * The multi-lane stopwatch a coach runs the deck from — one heat,
  * addressed as `/meets/:meetId/splits/:event/:heat` the same way the timer
  * already addresses a lane, replacing the `loadProgress`/`saveProgress`
- * local-storage position (migration-plan.md §3.3). Same screen, same
+ * local-storage position it used to track this with. Same screen, same
  * writes, same one-heat-at-a-time shape it always had — only where "which
  * heat" lives has moved.
  *
- * Kept live by `useMeetLive` instead of the polling `useLiveData` this
- * screen used to call — the loader's read seeds it, the DO's broadcasts keep
- * it current, and this device's own pending writes are folded on top the
- * same way they always were (migration-plan.md §3.4/§5).
+ * Kept live by `useMeetLive` instead of the polling this screen used to do
+ * — the loader's read seeds it, the DO's broadcasts keep it current, and
+ * this device's own pending writes are folded on top the same way they
+ * always were.
  */
 export default function SplitsHeat({ loaderData, params }: Route.ComponentProps) {
   const live = useMeetLive(loaderData.detail?.meet.id, loaderData.detail ?? undefined);

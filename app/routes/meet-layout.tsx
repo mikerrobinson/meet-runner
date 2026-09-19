@@ -12,9 +12,8 @@ import type { Meet } from "~/types/meet";
  *
  * This used to also load the whole `MeetDetail` — every event, entry, seed,
  * watch and result — for every screen under a meet, whether or not that
- * screen touched any of it. That's the anti-pattern migration-plan.md §3.3
- * calls out independent of polling: a meet's programme rarely changes and is
- * cheap to read once here, but the live tables are exactly what shouldn't be
+ * screen touched any of it: a meet's programme rarely changes and is cheap
+ * to read once here, but the live tables are exactly what shouldn't be
  * fetched this way on every navigation. Each child route now reads or
  * subscribes to only what it actually needs — a plain `meetDetail` read where
  * that's still the simplest thing (entries, results, meet-info), the meet's

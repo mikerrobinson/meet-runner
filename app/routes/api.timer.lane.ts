@@ -58,10 +58,10 @@ import {
  * is the only vocabulary a person behind a lane ever sees.
  *
  * **The cookie mechanism above is unchanged; what's behind it isn't.** Seats,
- * exhibition flags and watches now go to the meet's Durable Object instead of
+ * exhibition flags and watches go to the meet's Durable Object instead of
  * straight to D1 — same idea as `api.meet.writes.ts`, so an admin screen
  * connected to that DO sees a submitted time land immediately rather than on
- * its next poll. See migration-plan.md §3.4.
+ * its next poll.
  */
 export async function action({ params, request, context }: Route.ActionArgs) {
   const env = context.cloudflare.env;
@@ -165,9 +165,9 @@ export async function action({ params, request, context }: Route.ActionArgs) {
           const team = detail.teams[parsed.team];
           if (team) {
             // Athletes and enrollments are global, not DO-owned — the deck-
-            // entry exception (migration-plan.md §3.1). This goes straight to
-            // D1 and comes back through the DO purely to update its roster
-            // cache and broadcast the new name to everyone connected.
+            // entry exception. This goes straight to D1 and comes back
+            // through the DO purely to update its roster cache and
+            // broadcast the new name to everyone connected.
             const athlete = await stub.addWalkupAthlete({
               meetId: grant.meetId,
               teamId: team.id,

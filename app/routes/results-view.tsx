@@ -23,13 +23,13 @@ export function meta({}: Route.MetaArgs) {
 }
 
 /**
- * One results view, addressed by path segment rather than `?view=` —
- * migration-plan.md §3.3. `by-event` and `team-scores` are what this screen
- * already did (as `results.tsx`, under `?view=` and `?view=scores`); moved
- * here verbatim except for how the view is chosen. `by-swimmer` is the third
- * view route-design.md/gemini-design.md call for and isn't built — this is a
- * routing rewrite, not new functionality, so it renders a plain "not built
- * yet" rather than fabricating a view nobody asked this pass to design.
+ * One results view, addressed by path segment rather than `?view=`.
+ * `by-event` and `team-scores` are what this screen already did (as
+ * `results.tsx`, under `?view=` and `?view=scores`); moved here verbatim
+ * except for how the view is chosen. `by-swimmer` is a third view
+ * `route-design.md`/`gemini-design.md` call for and isn't built yet, so it
+ * renders a plain "not built yet" rather than fabricating one nobody has
+ * designed.
  */
 export async function loader({ params, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env;

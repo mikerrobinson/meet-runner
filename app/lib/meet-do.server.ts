@@ -4,7 +4,7 @@
  * Owns the live, multi-writer, race-day state (`seeds`, `watches`, `results`,
  * `entries`) for exactly the duration of the meet: hydrated from D1 the first
  * time anything touches the meet, dumped back to D1 on a periodic checkpoint
- * and at meet end. See migration-plan.md §3.1-3.2.
+ * and at meet end.
  *
  * Table shapes mirror `schema.server.ts` exactly, `meet_id` column included,
  * so hydration and the dump back are plain row copies rather than a reshape.
@@ -196,14 +196,13 @@ export type MeetRole = "admin" | "coach" | "timer" | "spectator";
 
 /** How often the DO mirrors its live tables back to D1 while a meet is
  *  connected — insurance, not the primary durability mechanism (DO SQLite
- *  storage already is one). See migration-plan.md §3.1 "Sync timing". */
+ *  storage already is one). */
 const CHECKPOINT_INTERVAL_MS = 5 * 60 * 1000;
 
 export class MeetDurableObject extends DurableObject<Env> {
   /** Lost on eviction, rebuilt from D1 by `loadRoster` on the next request —
-   *  exactly the "small in-memory/local roster cache" migration-plan.md §3.2
-   *  describes for rendering names against seeds without hitting D1 on every
-   *  read. Not the source of truth for anything. */
+   *  a small in-memory cache for rendering names against seeds without
+   *  hitting D1 on every read. Not the source of truth for anything. */
   private roster = new Map<string, Athlete>();
   private hydrated = false;
   private rosterLoaded = false;
@@ -222,8 +221,8 @@ export class MeetDurableObject extends DurableObject<Env> {
    * Pull this meet's live tables in from D1, once ever per DO lifetime.
    *
    * Not run from the constructor's `blockConcurrencyWhile` — that's for
-   * schema setup only, never for I/O (migration-plan.md §3.2) — so instead
-   * every RPC method calls this first and a single in-flight promise is
+   * schema setup only, never for I/O — so instead every RPC method calls
+   * this first and a single in-flight promise is
    * shared by whichever requests arrive while it's still running. Without
    * that, two RPC calls landing before hydration finishes would each see
    * "not hydrated yet" and hydrate twice: D1 reads aren't storage operations,
@@ -383,8 +382,9 @@ export class MeetDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** The explicit end-of-meet dump. Not wired to any UI yet — that's a later
-   *  step — but the RPC surface migration-plan.md §3.2/§5 calls for exists. */
+  /** The explicit end-of-meet dump. Not wired to any UI yet — nothing calls
+   *  this to mark a meet finished — but the RPC method exists for when
+   *  something does. */
   async finalizeMeet(meetId: string): Promise<void> {
     await this.ensureHydrated(meetId);
     await this.dumpToD1(meetId);
@@ -436,12 +436,12 @@ export class MeetDurableObject extends DurableObject<Env> {
 
   /* --------------------------------------------------------- write methods */
   //
-  // One per `Write` kind, named to match migration-plan.md §3.2's list
-  // rather than the union's own kind names (`seat` not `seed`, and so on) —
-  // the RPC surface a caller reads, not the wire format it happens to share.
-  // Each ends by broadcasting the very `Write` it just applied, so a
-  // generalised `applyPending` (step 3) can fold a broadcast over a cached
-  // snapshot exactly the way it folds a pending write over loader data today.
+  // One per `Write` kind, named for the action rather than the union's own
+  // kind names (`seat` not `seed`, and so on) — the RPC surface a caller
+  // reads, not the wire format it happens to share. Each ends by
+  // broadcasting the very `Write` it just applied, so `applyPending` can
+  // fold a broadcast over a cached snapshot exactly the way it folds a
+  // pending write over loader data.
 
   async seat(input: WriteOf<"seed">): Promise<Seed> {
     await this.ensureHydrated(input.meetId);
@@ -801,10 +801,10 @@ export class MeetDurableObject extends DurableObject<Env> {
 
   /**
    * A name added behind the blocks. Athletes and enrollments are global —
-   * §3.1's "deck-entry exception" — so this writes straight to D1, same as
-   * any other roster edit, then updates the roster cache and broadcasts so
-   * every connected client can render the name immediately rather than
-   * waiting for their next full snapshot.
+   * the deck-entry exception — so this writes straight to D1, same as any
+   * other roster edit, then updates the roster cache and broadcasts so every
+   * connected client can render the name immediately rather than waiting
+   * for their next full snapshot.
    */
   async addWalkupAthlete(input: {
     meetId: string;
@@ -835,8 +835,7 @@ export class MeetDurableObject extends DurableObject<Env> {
   /**
    * The live connection. Only reached via `api.meet.live.ts`, which resolves
    * `role`/`userId` from the session/grant *before* forwarding the upgrade —
-   * this method trusts them rather than parsing a cookie itself, per
-   * migration-plan.md §3.2.
+   * this method trusts them rather than parsing a cookie itself.
    */
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -853,8 +852,8 @@ export class MeetDurableObject extends DurableObject<Env> {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    // Tagged by role so a future spectator-payload filter (§6, open) can
-    // target `getWebSockets("spectator")` without redesigning the transport.
+    // Tagged by role so a future spectator-payload filter can target
+    // `getWebSockets("spectator")` without redesigning the transport.
     this.ctx.acceptWebSocket(server, [role]);
     server.serializeAttachment({
       role,
@@ -888,8 +887,8 @@ export class MeetDurableObject extends DurableObject<Env> {
   /**
    * Every connected socket, whatever role it's tagged with. Spectators get
    * the same message as everyone else for now — narrowing that payload is
-   * migration-plan.md §6's open decision, not a blocker for the broadcast
-   * mechanism itself.
+   * an open product decision, not a blocker for the broadcast mechanism
+   * itself.
    */
   private broadcast(message: MeetBroadcast): void {
     const payload = JSON.stringify(message);

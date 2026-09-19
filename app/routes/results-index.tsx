@@ -11,8 +11,7 @@ export function meta({}: Route.MetaArgs) {
  * The results selector — `/meets/:meetId/results`.
  *
  * No detail to load: this screen is nothing but a way into one of the views
- * below, each its own address now rather than a `?view=` on this one
- * (migration-plan.md §3.3).
+ * below, each its own address rather than a `?view=` on this one.
  */
 export default function ResultsIndex() {
   const { meet } = useMeet();

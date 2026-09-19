@@ -16,9 +16,8 @@ export function meta({ data }: Route.MetaArgs) {
 
 /**
  * One event, public and read-only — declared entries, heat seeds, and
- * current results. New in this rewrite (migration-plan.md §3.3); doesn't
- * replace `entries.tsx`'s whole-meet grid, which keeps its own URL and
- * scope (§2 non-goals).
+ * current results. Doesn't replace `entries.tsx`'s whole-meet grid, which
+ * keeps its own URL and scope.
  *
  * Same whole-meet read as `entries.tsx` for the same reason: nothing here is
  * secret at the row level, so the visibility rule is applied at render time

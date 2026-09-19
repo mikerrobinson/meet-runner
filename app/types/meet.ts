@@ -616,7 +616,7 @@ export interface MeetDetail {
  * plus enough athletes to render names against them. Everything else in a
  * `MeetDetail` — the meet, events, teams, enrollments — is setup data,
  * decided before race day and read straight from D1 rather than pushed by
- * the DO. See migration-plan.md §3.1/§3.2.
+ * the DO.
  */
 export type MeetSnapshot = Pick<
   MeetDetail,
@@ -625,8 +625,8 @@ export type MeetSnapshot = Pick<
 
 /**
  * Fold the Durable Object's live tables over a `MeetDetail` read from D1 —
- * what every workspace wired to the DO (migration-plan.md §5) does with its
- * loader's D1 read and the live snapshot `useMeetLive` hands back.
+ * what every workspace wired to the DO does with its loader's D1 read and
+ * the live snapshot `useMeetLive` hands back.
  *
  * `entries` is included now that `declareEntry` (`MeetDurableObject`) is the
  * only place an entry is ever written — D1's `entries` table is just the

@@ -20,10 +20,10 @@ export function meta({}: Route.MetaArgs) {
 /**
  * The desk's own read: meet setup from D1 (events, teams, lane count — rarely
  * changes, cheap to read once here), the four live tables from the meet's
- * Durable Object rather than D1 (migration-plan.md §5's admin wiring). The
- * DO is the source of truth for those the moment anything has touched the
- * meet, and a plain D1 read here would show whatever the last checkpoint
- * happened to catch — up to `CHECKPOINT_INTERVAL_MS` stale.
+ * Durable Object rather than D1. The DO is the source of truth for those the
+ * moment anything has touched the meet, and a plain D1 read here would show
+ * whatever the last checkpoint happened to catch — up to
+ * `CHECKPOINT_INTERVAL_MS` stale.
  */
 export async function loader({ params, request, context }: Route.LoaderArgs) {
   const env = context.cloudflare.env;
@@ -88,15 +88,15 @@ export function useAdmin(): AdminContext {
  * Split out of what used to be `run-control.tsx`, and split again here: the
  * event rail lives at this level so it survives moving between heats, and
  * the heat desk itself (`admin-heat.tsx`) is addressed by event and heat in
- * the URL — migration-plan.md §3.3's "main routing rewrite" for admin. What
- * used to be every heat of the open event stacked and scrolled is now one
- * heat, navigated heat-to-heat, the same shape `splits.tsx` already used.
+ * the URL. What used to be every heat of the open event stacked and
+ * scrolled is now one heat, navigated heat-to-heat, the same shape
+ * `splits.tsx` uses.
  *
- * Kept live by `useMeetLive` (migration-plan.md §3.4): the loader's read
- * seeds it, the DO's broadcasts keep it current, and this device's own
- * not-yet-acknowledged writes are folded on top the same way the outbox
- * always has been — one `applyPending` overlay, now over a snapshot the WS
- * keeps fresh instead of one a poll used to.
+ * Kept live by `useMeetLive`: the loader's read seeds it, the DO's
+ * broadcasts keep it current, and this device's own not-yet-acknowledged
+ * writes are folded on top the same way the outbox always has been — one
+ * `applyPending` overlay, now over a snapshot the WS keeps fresh instead of
+ * one a poll used to.
  */
 export default function AdminShell({ loaderData }: Route.ComponentProps) {
   const live = useMeetLive(loaderData.detail?.meet.id, loaderData.detail ?? undefined);

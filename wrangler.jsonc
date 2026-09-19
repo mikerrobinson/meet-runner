@@ -6,12 +6,6 @@
   "assets": {
     "binding": "ASSETS",
   },
-  // "routes": [
-  //   {
-  //     "pattern": "swimstarts.com/*",
-  //     "zone_name": "swimstarts.com",
-  //   },
-  // ],
   // Server-side backup of meets. `wrangler dev` spins up a local copy
   // automatically; before deploying, run `npx wrangler d1 create swim-starts`
   // and paste the returned id below. The app works fully offline without it —

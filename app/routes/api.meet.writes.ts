@@ -22,15 +22,15 @@ import type { Write } from "~/lib/writes";
  * methods. The queue already knows what a change *is*; this speaks the same
  * union back, so there is nothing in between to keep in step.
  *
- * One row per call. That is what lets two coaches fill in their own halves of
- * a dual meet at the same moment without either writing over the other, and it
- * is why the queue can retry a single write without replaying a batch.
+ * One row per write. That is what lets two coaches fill in their own halves
+ * of a dual meet at the same moment without either writing over the other,
+ * and it is why the queue can retry a single write without replaying a batch.
  *
- * **Every kind now goes to the meet's Durable Object, not D1** —
- * migration-plan.md §3.1's rule of thumb: the DO is written to immediately
- * for anything meet-scoped, and seeds/watches/results/entries are exactly
- * that. The DO serializes every write itself and broadcasts it, which is
- * what lets a connected admin/coach screen see it land without polling.
+ * **Every kind goes to the meet's Durable Object, not D1** — the DO is
+ * written to immediately for anything meet-scoped, and
+ * seeds/watches/results/entries are exactly that. The DO serializes every
+ * write itself and broadcasts it, which is what lets a connected admin/coach
+ * screen see it land without polling.
  *
  * **Who may do what is asked once, and then per kind.** `meetAccess` is one
  * read for the whole request; the rule that follows differs because the moves
